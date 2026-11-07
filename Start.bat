@@ -1978,11 +1978,16 @@ def _rmr_install_area_doomsday():
         if getattr(cls, '_rmr_area_doomsday_installed', False):
             return
         original = cls.DoAttackConfirmations
-        def confirm(self, targetID, effect, *args, **kwargs):
+        def confirm(self, targetID, *args, **kwargs):
+            # Drone Engage calls this with only targetID. Forward the exact
+            # arguments it supplied so the original confirmation still runs.
+            effect = kwargs.get('effect')
+            if args:
+                effect = args[0]
             if targetID is None and getattr(effect, 'effectID', None) == 2071:
                 _rmr_log('Area doomsday confirmation accepted without a target.')
                 return 1
-            return original(self, targetID, effect, *args, **kwargs)
+            return original(self, targetID, *args, **kwargs)
         cls.DoAttackConfirmations = confirm
         cls._rmr_area_doomsday_installed = True
         _rmr_log('Area doomsday client activation enabled.')
