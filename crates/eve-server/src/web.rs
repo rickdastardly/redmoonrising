@@ -110,8 +110,17 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
                 "/api/alliances" => Some(alliances(server).await),
                 "/api/corporations" => Some(corporations(server).await),
                 "/api/systems" => Some(systems(server).await),
-                "/api/kills" => Some(kills(server).await),
+                "/api/kills" => {
+                    let query = target.split_once('?').map_or("", |(_, q)| q);
+                    let page = query.split('&').find_map(|kv| kv.strip_prefix("page=")).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0).clamp(0, 10_000);
+                    Some(kills(server, page).await)
+                }
                 "/api/killboard" => Some(killboard(server).await),
+                "/api/kill" => {
+                    let query = target.split_once('?').map_or("", |(_, q)| q);
+                    let id = query.split('&').find_map(|kv| kv.strip_prefix("id=")).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+                    Some(kill_detail(server, id).await)
+                }
                 "/api/market" => Some(Ok(server.world.lock().bot_panels.market.clone())),
                 "/api/relations" => Some(Ok(server.world.lock().bot_panels.relations.clone())),
                 "/api/followed" => Some(Ok(server.world.lock().bot_panels.followed.clone())),
@@ -392,6 +401,7 @@ fn pilots(server: &Server, q: &str) -> Json {
 /// one), bots' unseen fights included.
 async fn killboard(server: &Server) -> Answer {
     let since = crate::bulkdata::filetime_now() - 24 * 3_600 * 10_000_000;
+    let week = crate::bulkdata::filetime_now() - 7 * 24 * 3_600 * 10_000_000;
     let sql = r#"WITH recent AS (SELECT * FROM "killLog" WHERE "killTime" > $1),
                       k AS (SELECT COALESCE(NULLIF(p."allianceID", 0), p."corporationID") AS side, count(*)::int AS n
                               FROM "killLogParticipants" p JOIN recent r ON r."killID" = p."killID" WHERE p."finalBlow" = 1 GROUP BY 1),
@@ -405,7 +415,11 @@ async fn killboard(server: &Server) -> Answer {
                    LEFT JOIN alliances a ON a."allianceID" = s.side LEFT JOIN "corporation" c ON c."corporationID" = s.side
                   ORDER BY kills DESC, losses DESC LIMIT 30"#;
     let sides = rows(&server.db.query(sql, &[&since]).await?);
-    let total: i64 = server.db.query_one(r#"SELECT count(*) FROM "killLog" WHERE "killTime" > $1"#, &[&since]).await?.get(0);
+    let counts = server.db.query_one(r#"SELECT count(*) AS total,
+         count(*) FILTER (WHERE "killTime" > $1) AS day,
+         count(*) FILTER (WHERE "killTime" > $2) AS week,
+         count(*) FILTER (WHERE "isPodKill" = 1) AS pods FROM "killLog""#, &[&since, &week]).await?;
+    let total: i64 = counts.get("total");
     let ships = rows(
         &server
             .db
@@ -416,21 +430,83 @@ async fn killboard(server: &Server) -> Answer {
             )
             .await?,
     );
-    Ok(json!({ "total": total, "sides": sides, "ships": ships }))
+    let pilots = rows(&server.db.query(
+        r#"SELECT p."ownerID" AS id, COALESCE(c."characterName", 'Unknown pilot') AS name,
+                  COALESCE(co."tickerName", '') AS corporation, count(*)::int AS kills
+             FROM "killLogParticipants" p
+             JOIN "killLog" k ON k."killID" = p."killID"
+             LEFT JOIN "character_" c ON c."characterID" = p."ownerID"
+             LEFT JOIN "corporation" co ON co."corporationID" = c."corporationID"
+            WHERE p."finalBlow" = 1
+            GROUP BY p."ownerID", c."characterName", co."tickerName"
+    ORDER BY kills DESC, name LIMIT 25"#, &[]).await?);
+    Ok(json!({ "total": total, "day": counts.get::<_, i64>("day"), "week": counts.get::<_, i64>("week"),
+        "pods": counts.get::<_, i64>("pods"), "sides": sides, "ships": ships, "pilots": pilots }))
 }
 
-async fn kills(server: &Server) -> Answer {
+async fn kill_detail(server: &Server, id: i64) -> Answer {
+    if id <= 0 { return Ok(json!({ "error": "Invalid kill ID" })); }
+    let sql = format!(r#"SELECT k."killID" AS id, {time} AS time,
+           COALESCE(vc."characterName", 'Unknown pilot') AS victim,
+           COALESCE(vco."corporationName", '') AS "victimCorporation",
+           COALESCE(va."allianceName", '') AS "victimAlliance",
+           COALESCE(t."typeName", 'Unknown ship') AS ship,
+           k."victimShipTypeID" AS "shipTypeID", COALESCE(g."groupName", '') AS "shipClass",
+           COALESCE(t."basePrice", 0)::float8 AS "hullValue",
+           COALESCE(s."solarSystemName", 'Unknown system') AS system,
+           COALESCE(s."security", 0)::float8 AS security,
+           COALESCE(r."regionName", '') AS region,
+           k."totalDamage" AS damage, k."isPodKill" = 1 AS pod
+      FROM "killLog" k
+      LEFT JOIN "character_" vc ON vc."characterID" = k."victimCharID"
+      LEFT JOIN "corporation" vco ON vco."corporationID" = k."victimCorpID"
+      LEFT JOIN alliances va ON va."allianceID" = k."victimAllianceID"
+      LEFT JOIN "invTypes" t ON t."typeID" = k."victimShipTypeID"
+      LEFT JOIN "invGroups" g ON g."groupID" = t."groupID"
+      LEFT JOIN "mapSolarSystems" s ON s."solarSystemID" = k."solarSystemID"
+      LEFT JOIN "mapRegions" r ON r."regionID" = s."regionID"
+     WHERE k."killID" = $1"#, time = ms(r#"k."killTime""#));
+    let Some(kill) = server.db.query_opt(sql.as_str(), &[&id]).await? else {
+        return Ok(json!({ "error": "Kill not found" }));
+    };
+    let participants = rows(&server.db.query(
+        r#"SELECT p."ownerID" AS id, COALESCE(c."characterName", 'Unknown pilot') AS pilot,
+                  COALESCE(co."corporationName", '') AS corporation,
+                  COALESCE(a."allianceName", '') AS alliance,
+                  COALESCE(ship."typeName", '') AS ship, p."shipTypeID" AS "shipTypeID",
+                  CASE WHEN COALESCE(p."weaponTypeID", 0) <= 0 THEN 'Unknown weapon'
+                       ELSE COALESCE(weapon."typeName", 'Unknown weapon') END AS weapon,
+                  p."damageDone" AS damage, p."finalBlow" = 1 AS "finalBlow"
+             FROM "killLogParticipants" p
+             LEFT JOIN "character_" c ON c."characterID" = p."ownerID"
+             LEFT JOIN "corporation" co ON co."corporationID" = p."corporationID"
+             LEFT JOIN alliances a ON a."allianceID" = p."allianceID"
+             LEFT JOIN "invTypes" ship ON ship."typeID" = p."shipTypeID"
+             LEFT JOIN "invTypes" weapon ON weapon."typeID" = p."weaponTypeID"
+            WHERE p."killID" = $1 ORDER BY p."finalBlow" DESC, p."damageDone" DESC"#, &[&id]).await?);
+    let items = rows(&server.db.query(r#"SELECT i."typeID" AS "typeID", t."typeName" AS name,
+                 i."flag" AS flag, i."quantity" AS quantity, i."dropped" AS dropped,
+                 COALESCE(t."basePrice",0)::float8 AS "unitValue"
+            FROM "killLogItems" i JOIN "invTypes" t ON t."typeID"=i."typeID"
+           WHERE i."killID"=$1 ORDER BY i."flag", i."typeID""#, &[&id]).await?);
+    Ok(json!({ "kill": rows(&[kill]).as_array().and_then(|a| a.first()).cloned(), "participants": participants, "items": items }))
+}
+
+async fn kills(server: &Server, page: i64) -> Answer {
     let sql = format!(
         r#"SELECT k."killID" AS id, {time} AS time, vc."characterName" AS victim, vco."corporationName" AS "victimCorporation",
-                  t."typeName" AS ship, s."solarSystemName" AS system, fc."characterName" AS "finalBlow", k."isPodKill" = 1 AS pod
+                  t."typeName" AS ship, k."victimShipTypeID" AS "shipTypeID", COALESCE(g."groupName", '') AS "shipClass",
+                  COALESCE(t."basePrice",0)::float8 AS "hullValue",
+                  s."solarSystemName" AS system, fc."characterName" AS "finalBlow", k."isPodKill" = 1 AS pod
              FROM "killLog" k
              LEFT JOIN "character_" vc ON vc."characterID" = k."victimCharID"
              LEFT JOIN "corporation" vco ON vco."corporationID" = k."victimCorpID"
              LEFT JOIN "invTypes" t ON t."typeID" = k."victimShipTypeID"
+             LEFT JOIN "invGroups" g ON g."groupID" = t."groupID"
              LEFT JOIN "mapSolarSystems" s ON s."solarSystemID" = k."solarSystemID"
              LEFT JOIN "character_" fc ON fc."characterID" = k."finalBlowID"
-            ORDER BY k."killID" DESC LIMIT 30"#,
+            ORDER BY k."killID" DESC LIMIT 30 OFFSET $1"#,
         time = ms(r#"k."killTime""#)
     );
-    Ok(rows(&server.db.query(sql.as_str(), &[]).await?))
+    Ok(rows(&server.db.query(sql.as_str(), &[&(page * 30)]).await?))
 }

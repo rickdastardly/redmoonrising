@@ -311,16 +311,25 @@ pub async fn get_capacity(ctx: &Ctx<'_>, container: Container, flag: Option<i64>
                     None
                 }
             };
-            let sql = r#"SELECT t."capacity" FROM "entity" e
+            let sql = r#"SELECT t."capacity",
+                                  (SELECT COALESCE(a."valueFloat", a."valueInt"::float8)
+                                     FROM "dgmTypeAttributes" a
+                                    WHERE a."typeID" = e."typeID" AND a."attributeID" = 912)
+                                    AS "corporateHangarCapacity"
+                           FROM "entity" e
                            JOIN "invTypes" t ON t."typeID" = e."typeID"
                           WHERE e."itemID" = $1"#;
             match silo {
                 Some(capacity) => capacity,
                 None => match ctx.db.query(sql, &[&(item_id as i32)]).await {
-                    Ok(rows) => rows
-                        .first()
-                        .and_then(|r| r.try_get::<_, f64>(0).ok())
-                        .unwrap_or(0.0),
+                    Ok(rows) => rows.first().map_or(0.0, |r| {
+                        if flag.is_some_and(|f| f == crate::svc::moves::FLAG_CAPITAL_CORP_HANGAR
+                            || (crate::svc::moves::FLAG_CORP_HANGAR_FIRST..=crate::svc::moves::FLAG_CORP_HANGAR_LAST).contains(&f)) {
+                            r.try_get::<_, Option<f64>>(1).ok().flatten().unwrap_or(0.0)
+                        } else {
+                            r.try_get::<_, Option<f64>>(0).ok().flatten().unwrap_or(0.0)
+                        }
+                    }),
                     Err(e) => {
                         error!("invbroker GetCapacity capacity: {err}", err = crate::logging::chain(&e));
                         0.0
@@ -334,8 +343,13 @@ pub async fn get_capacity(ctx: &Ctx<'_>, container: Container, flag: Option<i64>
     let used = match contents_scope(ctx, container) {
         Some((mut where_sql, mut vals)) => {
             if let Some(f) = flag {
-                where_sql.push_str(&format!(r#" AND e."flag" = ${}"#, vals.len() + 1));
-                vals.push(f as i32);
+                if f == crate::svc::moves::FLAG_CAPITAL_CORP_HANGAR
+                    || (crate::svc::moves::FLAG_CORP_HANGAR_FIRST..=crate::svc::moves::FLAG_CORP_HANGAR_LAST).contains(&f) {
+                    where_sql.push_str(r#" AND (e."flag" = 4 OR e."flag" BETWEEN 116 AND 122)"#);
+                } else {
+                    where_sql.push_str(&format!(r#" AND e."flag" = ${}"#, vals.len() + 1));
+                    vals.push(f as i32);
+                }
             }
             let sql = format!(
                 r#"SELECT COALESCE(SUM(t."volume" * e."quantity"), 0)

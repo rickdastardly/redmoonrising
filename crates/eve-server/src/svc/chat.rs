@@ -60,6 +60,26 @@ pub async fn lsc(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
                 let members = world.channel_members(channel);
                 if members.contains(&ctx.client_id) {
                     announce(&world, &members, channel, "SendMessage", &who(ctx.session), vec![message.clone()]);
+                    if let Some(system) = local_system(channel) {
+                        let bots = world.bot_local.get(&system).map(Vec::as_slice).unwrap_or(&[]);
+                        if !bots.is_empty() {
+                            let said = message.as_string().unwrap_or_default();
+                            let choice = said.bytes().fold(ctx.session.char_id.unwrap_or(0) as usize, |n, b| n.wrapping_add(b as usize)) % bots.len();
+                            if let Some(bot) = world.bot_roster.get(bots[choice] as usize) {
+                                let answer = local_reply(&said, &ctx.session.char_name, system, &world, bot.char_id);
+                                announce_counted(&world, &members, members.len() + bots.len(), channel,
+                                    "SendMessage", &bot_who(bot), vec![Value::text(answer)]);
+                            }
+                            if bots.len() > 1 {
+                                let other = (choice + 1) % bots.len();
+                                if let Some(bot) = world.bot_roster.get(bots[other] as usize) {
+                                    let second = if said.contains('?') { "I'm curious what they say back." } else { "Now local's getting interesting." };
+                                    announce_counted(&world, &members, members.len() + bots.len(), channel,
+                                        "SendMessage", &bot_who(bot), vec![Value::text(second)]);
+                                }
+                            }
+                        }
+                    }
                 } else {
                     warn!("SendMessage to a channel the speaker has not joined");
                 }
@@ -120,6 +140,44 @@ pub async fn lsc(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         _ => return None,
     };
     Some(Outcome::Value(value))
+}
+
+fn local_reply(message: &str, pilot: &str, system: i64, world: &WorldState, bot_id: i64) -> String {
+    let lower = message.to_ascii_lowercase();
+    let present = world.bot_local.get(&system).map_or(0, Vec::len);
+    let park = world.parks.get(&system);
+    let in_space = park.map_or(0, |p| p.ships.values().filter(|s| s.is_pilot()).count());
+    let belt = park.and_then(|p| p.celestials.iter().find(|c| c.group_id == 9)).map(|c| c.name.as_str());
+    let bot_ship = park.and_then(|p| p.ships.values().find(|s| s.pilot.char_id == bot_id)).map(|s| s.pilot.name.as_str());
+    if lower.contains("mission") && (lower.contains("where") || lower.contains("warp") || lower.contains("location")) {
+        "Your Journal has the mission bookmark. Right-click in space and look under the agent's mission to warp there.".to_string()
+    } else if lower.contains("how many") || lower.contains("anyone here") || lower.contains("who's here") {
+        format!("{present} of us in local, {in_space} pilots visible in space right now, {pilot}.")
+    } else if lower.contains("where") || lower.contains("belt") {
+        match belt {
+            Some(name) => format!("Try {name}. I can see {in_space} pilots in space, so watch your scan."),
+            None => format!("I can see {in_space} pilots in space. Check the map for the nearest belt."),
+        }
+    } else if lower.contains("what") && lower.contains("fly") || lower.contains("your ship") {
+        match bot_ship { Some(name) => format!("I'm in a {name}. What are you flying, {pilot}?"), None => "I'm docked at the moment. What are you flying?".to_string() }
+    } else if lower.contains("fight") || lower.contains("kill") || lower.contains("pvp") {
+        format!("{pilot}, say where you want the fight. I'll bring a ship.")
+    } else if lower.contains("hello") || lower.contains("o7") || lower.starts_with("hi") {
+        format!("o7 {pilot}. You travelling or looking for trouble?")
+    } else if lower.ends_with('?') {
+        format!("I'm not sure about that one, {pilot}. What part are you asking about?")
+    } else {
+        let topic = message.split_whitespace().take(5).collect::<Vec<_>>().join(" ");
+        format!("{topic} — go on, {pilot}. I'm listening.")
+    }
+}
+
+pub fn bot_good_fight(world: &crate::world::World, system: i64, bot_id: i64, line: &str) {
+    let world = world.lock();
+    let Some(bot) = world.bot_index.get(&bot_id).and_then(|index| world.bot_roster.get(*index as usize)) else { return };
+    let Some((_, channel, members)) = world.local_channels().into_iter().find(|(at, _, members)| *at == system && !members.is_empty()) else { return };
+    let count = members.len() + world.bot_local.get(&system).map_or(0, Vec::len);
+    announce_counted(&world, &members, count, &channel, "SendMessage", &bot_who(bot), vec![Value::text(line)]);
 }
 
 async fn get_my_messages(ctx: &Ctx<'_>) -> Value {

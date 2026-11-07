@@ -37,6 +37,8 @@ const SCOOP_RANGE: f64 = 2_500.0;
 /// How far beyond its ship's hull a drone comes out.
 const LAUNCH_CLEARANCE: f64 = 150.0;
 const THINK_MS: i64 = 1_000;
+const FIGHTER_GROUP: i64 = 549;
+const FIGHTER_ARRIVAL_MS: i64 = 60_000;
 
 /// drone.py's activity states (eveConstants entity*).
 pub mod activity {
@@ -72,6 +74,17 @@ pub struct Drone {
     mined: bool,
     orbit: f64,
     next_think_ms: i64,
+    transit: Option<Transit>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Transit {
+    target: i64,
+    arrival_ms: Option<i64>,
+}
+
+pub fn in_transit(ship: &Ship) -> bool {
+    ship.drone.as_ref().is_some_and(|d| d.transit.is_some())
 }
 
 /// Rows for SetState's droneState rowset:
@@ -253,6 +266,7 @@ fn make(t: &npc::NpcType, id: i64, pilot: Pilot, client_id: i64, controller: i64
         mined: false,
         orbit,
         next_think_ms: now,
+        transit: None,
     };
     let mut ship = Ship::new(id, client_id, stats, pilot, pos, Vec3::ZERO);
     ship.fight = Some(fighter);
@@ -268,13 +282,15 @@ fn make(t: &npc::NpcType, id: i64, pilot: Pilot, client_id: i64, controller: i64
 pub async fn entity(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
     let ids: Vec<i64> = call.args.first().and_then(|v| v.seq()).unwrap_or(&[]).iter().filter_map(|v| v.as_i64()).collect();
     let target = call.arg_i64(1);
+    if matches!(call.method.as_str(), "CmdAbandonDrone" | "CmdRelinquishControl") {
+        return Some(Outcome::Value(abandon(ctx, &ids)));
+    }
     let order = match call.method.as_str() {
         "CmdEngage" => Order::Engage(target?),
         "CmdMine" => Order::Mine { target: target?, repeat: false },
         "CmdMineRepeatedly" => Order::Mine { target: target?, repeat: true },
         "CmdReturnHome" => Order::ReturnHome,
         "CmdReturnBay" => Order::ReturnBay,
-        "CmdAbandonDrone" | "CmdRelinquishControl" => Order::Idle,
         "CmdDelegateControl" | "CmdUnanchor" => {
             return Some(Outcome::custom("Your drones cannot do that."));
         }
@@ -295,8 +311,17 @@ fn command(ctx: &Ctx<'_>, ids: &[i64], order: Order) -> Value {
         Order::Mine { target, .. } => park.rocks.contains_key(target),
         _ => true,
     };
+    let transit_destination = match &order {
+        Order::Engage(target) => Some(*target),
+        Order::ReturnHome | Order::ReturnBay => ctx.session.ship_id,
+        _ => None,
+    };
+    let destination_in_warp = transit_destination
+        .and_then(|id| park.ships.get(&id))
+        .is_some_and(Ship::in_warp);
+    let now = combat::now_ms();
     for id in ids {
-        let Some(drone) = park.ships.get_mut(id).and_then(|s| s.drone.as_mut()).filter(|d| d.owner == char_id) else {
+        let Some(drone) = park.ships.get_mut(id).and_then(|s| s.drone.as_mut()).filter(|d| d.owner == char_id && d.controller.is_some()) else {
             failed.push((*id, "That is not your drone."));
             continue;
         };
@@ -308,12 +333,7 @@ fn command(ctx: &Ctx<'_>, ids: &[i64], order: Order) -> Value {
             failed.push((*id, "That drone cannot mine."));
             continue;
         }
-        drone.order = order.clone();
-        drone.mined = false;
-        drone.next_think_ms = 0;
-        if drone.controller.is_none() {
-            drone.controller = ctx.session.ship_id;
-        }
+        order_drone(drone, &order, transit_destination, destination_in_warp, now);
     }
     debug!("drones {ids:?}: {order:?}");
     Value::Dict(
@@ -327,17 +347,150 @@ fn command(ctx: &Ctx<'_>, ids: &[i64], order: Order) -> Value {
     )
 }
 
+fn order_drone(drone: &mut Drone, order: &Order, destination: Option<i64>, destination_in_warp: bool, now: i64) {
+    drone.order = order.clone();
+    drone.mined = false;
+    drone.next_think_ms = 0;
+    if let (Some(transit), Some(destination)) = (drone.transit.as_mut(), destination) {
+        // A new order supersedes the fighter's old warp destination. In
+        // particular, a target that left the grid must not strand a fighter
+        // that has since been told to return to its carrier.
+        transit.target = destination;
+        transit.arrival_ms = (!destination_in_warp).then_some(now + FIGHTER_ARRIVAL_MS);
+    }
+}
+
+fn abandon(ctx: &Ctx<'_>, ids: &[i64]) -> Value {
+    let (Some(char_id), Some(system)) = (ctx.session.char_id, ctx.session.solar_system_id) else {
+        return Value::Dict(Vec::new());
+    };
+    let mut world = ctx.world.lock();
+    let Some(park) = world.parks.get_mut(&system) else { return Value::Dict(Vec::new()) };
+    let mut out = Out::default();
+    let mut failed = Vec::new();
+    for id in ids {
+        let owned = park.ships.get(id).and_then(|s| s.drone.as_ref()).is_some_and(|d| d.owner == char_id && d.controller.is_some());
+        if !owned {
+            failed.push((*id, "That is not a drone under your control."));
+            continue;
+        }
+        let modules: Vec<i64> = park.ships.get(id).and_then(|s| s.fight.as_ref())
+            .map(|f| f.modules.iter().map(|m| m.module_id).collect()).unwrap_or_default();
+        for module in modules {
+            crate::fight::stop(park, *id, module, combat::now_ms(), &mut out, None);
+        }
+        if let Some(ship) = park.ships.get_mut(id) {
+            if let Some(fight) = ship.fight.as_mut() { fight.locks.clear(); }
+            if let Some(drone) = ship.drone.as_mut() {
+                drone.controller = None;
+                drone.order = Order::Idle;
+                drone.activity = activity::IDLE;
+                drone.next_think_ms = 0;
+                out.note(drone.client_id, "OnDroneStateChange", Value::Tuple(state_line(*id, drone, ship.pilot.type_id)));
+            }
+        }
+        park.command(*id, Command::Stop);
+        if let Some(ship) = park.ships.get(id) {
+            space::queue_ship_entries(park, *id, vec![space::command_entry(ship, park.tick)], &mut out);
+        }
+    }
+    out.deliver(&world);
+    Value::Dict(failed.into_iter().map(|(id, why)| {
+        let args = Value::Dict(vec![(Value::bytes("error"), Value::text(why))]);
+        (Value::Int(id), Value::Tuple(vec![Value::bytes("CustomError"), args]))
+    }).collect())
+}
+
 // ---- thinking ---------------------------------------------------------------------------------
 
 pub fn think(park: &mut Park, now: i64, out: &mut Out) {
     let due: Vec<i64> = park
         .ships
         .values()
-        .filter(|s| s.drone.as_ref().is_some_and(|d| d.next_think_ms <= now))
+        .filter(|s| s.drone.as_ref().is_some_and(|d| d.transit.is_none() && d.next_think_ms <= now))
         .map(|s| s.id)
         .collect();
     for id in due {
         think_one(park, id, now, out);
+    }
+}
+
+/// Fighters leave the old grid with a warping target or controller. A fighter
+/// pursuing its attack target keeps that order; one following its controller
+/// returns to idle. Its delayed arrival is scheduled from the landing tick.
+pub fn on_warp_entered(park: &mut Park, warped: i64, now: i64, out: &mut Out) {
+    let followers: Vec<(i64, bool)> = park.ships.values().filter_map(|ship| {
+        let d = ship.drone.as_ref()?;
+        if ship.pilot.group_id != FIGHTER_GROUP { return None; }
+        if d.order == Order::Engage(warped) { Some((ship.id, true)) }
+        else if d.controller == Some(warped) { Some((ship.id, false)) }
+        else { None }
+    }).collect();
+    for (id, pursue) in followers {
+        let modules: Vec<i64> = park.ships.get(&id).and_then(|s| s.fight.as_ref())
+            .map(|f| f.modules.iter().map(|m| m.module_id).collect()).unwrap_or_default();
+        for module in modules { crate::fight::stop(park, id, module, now, out, None); }
+        park.command(id, Command::Stop);
+        if let Some(ship) = park.ships.get_mut(&id) {
+            if let Some(fight) = ship.fight.as_mut() { fight.locks.clear(); }
+            if let Some(drone) = ship.drone.as_mut() {
+                if !pursue { drone.order = Order::Idle; }
+                drone.activity = activity::DEPARTING_2;
+                drone.transit = Some(Transit { target: warped, arrival_ms: None });
+                out.note(drone.client_id, "OnDroneStateChange", Value::Tuple(state_line(id, drone, ship.pilot.type_id)));
+            }
+        }
+    }
+}
+
+pub fn on_warp_landed(park: &mut Park, landed: i64, now: i64) {
+    for ship in park.ships.values_mut() {
+        if let Some(transit) = ship.drone.as_mut().and_then(|d| d.transit.as_mut()) {
+            if transit.target == landed { transit.arrival_ms = Some(now + FIGHTER_ARRIVAL_MS); }
+        }
+    }
+}
+
+pub fn arrive_following_fighters(park: &mut Park, now: i64, out: &mut Out) {
+    // A pursued player can leave this park entirely. Send those fighters home
+    // after the same travel delay instead of dropping their order at a remote
+    // position and making them cross the system at sub-warp speed.
+    let lost_targets: Vec<i64> = park.ships.values().filter_map(|s| {
+        let transit = s.drone.as_ref()?.transit.as_ref()?;
+        (!park.ships.contains_key(&transit.target)).then_some(s.id)
+    }).collect();
+    for id in lost_targets {
+        let controller = park.ships.get(&id).and_then(|s| s.drone.as_ref()).and_then(|d| d.controller);
+        let home = controller.filter(|c| park.ships.contains_key(c));
+        if let Some(drone) = park.ships.get_mut(&id).and_then(|s| s.drone.as_mut()) {
+            if let (Some(transit), Some(home)) = (drone.transit.as_mut(), home) {
+                if matches!(drone.order, Order::Engage(_)) { drone.order = Order::ReturnHome; }
+                transit.target = home;
+                transit.arrival_ms = Some(now + FIGHTER_ARRIVAL_MS);
+            }
+        }
+    }
+    let arrivals: Vec<(i64, i64)> = park.ships.values().filter_map(|s| {
+        let transit = s.drone.as_ref()?.transit.as_ref()?;
+        (transit.arrival_ms.is_some_and(|due| due <= now) || !park.ships.contains_key(&transit.target))
+            .then_some((s.id, transit.target))
+    }).collect();
+    for (id, target) in arrivals {
+        let at = park.ships.get(&target).map(|s| (s.pos, s.stats.radius));
+        if let Some(ship) = park.ships.get_mut(&id) {
+            if let Some((pos, radius)) = at {
+                ship.pos = pos + Vec3::new(radius + ship.stats.radius + 1_500.0, 0.0, 0.0);
+                ship.vel = Vec3::ZERO;
+                out.jobs.push(Job::DronePosition { drone_id: id, pos: ship.pos });
+            }
+            if let Some(drone) = ship.drone.as_mut() {
+                if at.is_none() { drone.order = Order::Idle; }
+                drone.transit = None;
+                drone.activity = activity::IDLE;
+                drone.next_think_ms = now;
+                out.note(drone.client_id, "OnDroneStateChange", Value::Tuple(state_line(id, drone, ship.pilot.type_id)));
+            }
+        }
     }
 }
 
@@ -552,5 +705,122 @@ pub async fn lost(server: &Server, db: &mut Client, client_id: Option<i64>, dron
             }
         }
         Err(e) => warn!("destroying drone {drone_id}: {}", crate::logging::chain(&e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fighter_reaches_warping_enemy_after_a_minute_and_keeps_engaging() {
+        let mut park = Park::new(30000001, Vec::new(), 0);
+        let stats = ShipStats::new(50.0, 1_000_000.0, 1.0, 300.0, 1.0);
+        let pilot = Pilot { type_id: 587, group_id: 25, name: "Rifter".into(), char_id: 100, corp_id: 1, alliance_id: None, security: 0.0, bounty: 0.0 };
+        park.ships.insert(10, Ship::new(10, 1, stats, pilot, Vec3::ZERO, Vec3::ZERO));
+        let fighter_pilot = Pilot { type_id: 23057, group_id: FIGHTER_GROUP, name: "Einherji".into(), char_id: 200, corp_id: 2, alliance_id: None, security: 0.0, bounty: 0.0 };
+        let mut fighter = Ship::new(20, 2, stats, fighter_pilot, Vec3::new(1_000.0, 0.0, 0.0), Vec3::ZERO);
+        fighter.drone = Some(Drone { owner: 200, client_id: 2, controller: Some(30), order: Order::Engage(10), activity: activity::COMBAT,
+            weapons: Vec::new(), miner: None, mined: false, orbit: 1_000.0, next_think_ms: 0, transit: None });
+        park.ships.insert(20, fighter);
+        let mut out = Out::default();
+        on_warp_entered(&mut park, 10, 0, &mut out);
+        assert!(in_transit(&park.ships[&20]));
+        park.ships.get_mut(&10).unwrap().pos = Vec3::new(1.0e12, 0.0, 0.0);
+        on_warp_landed(&mut park, 10, 1_000);
+        arrive_following_fighters(&mut park, 60_999, &mut out);
+        assert!(in_transit(&park.ships[&20]));
+        arrive_following_fighters(&mut park, 61_000, &mut out);
+        assert!(!in_transit(&park.ships[&20]));
+        assert_eq!(park.ships[&20].drone.as_ref().unwrap().order, Order::Engage(10));
+        assert!((park.ships[&20].pos - park.ships[&10].pos).len() < 2_000.0);
+        assert!(out.jobs.iter().any(|j| matches!(j, Job::DronePosition { drone_id: 20, .. })));
+    }
+
+    #[test]
+    fn return_order_redirects_a_fighter_pursuing_a_warping_player() {
+        let mut park = Park::new(30000001, Vec::new(), 0);
+        let stats = ShipStats::new(50.0, 1_000_000.0, 1.0, 300.0, 1.0);
+        let pilot = |char_id| Pilot { type_id: 587, group_id: 25, name: "Pilot".into(), char_id,
+            corp_id: char_id, alliance_id: None, security: 0.0, bounty: 0.0 };
+        park.ships.insert(10, Ship::new(10, 1, stats, pilot(100), Vec3::ZERO, Vec3::ZERO));
+        park.ships.insert(30, Ship::new(30, 2, stats, pilot(200), Vec3::new(10_000.0, 0.0, 0.0), Vec3::ZERO));
+        let mut fighter = Ship::new(20, 2, stats, Pilot { type_id: 23057, group_id: FIGHTER_GROUP,
+            name: "Dragonfly".into(), ..pilot(200) }, Vec3::new(1_000.0, 0.0, 0.0), Vec3::ZERO);
+        fighter.drone = Some(Drone { owner: 200, client_id: 2, controller: Some(30), order: Order::Engage(10),
+            activity: activity::COMBAT, weapons: Vec::new(), miner: None, mined: false, orbit: 1_000.0,
+            next_think_ms: 0, transit: None });
+        park.ships.insert(20, fighter);
+        let mut out = Out::default();
+        on_warp_entered(&mut park, 10, 0, &mut out);
+        order_drone(park.ships.get_mut(&20).unwrap().drone.as_mut().unwrap(), &Order::ReturnBay,
+            Some(30), false, 1_000);
+        park.ships.remove(&10);
+        arrive_following_fighters(&mut park, 60_999, &mut out);
+        assert!(in_transit(&park.ships[&20]));
+        arrive_following_fighters(&mut park, 61_000, &mut out);
+        assert!(!in_transit(&park.ships[&20]));
+        assert_eq!(park.ships[&20].drone.as_ref().unwrap().order, Order::ReturnBay);
+        assert!(park.surface_distance(20, 30).unwrap() <= DOCK_RANGE);
+        think(&mut park, 61_000, &mut out);
+        assert!(!park.ships.contains_key(&20));
+    }
+
+    #[test]
+    fn fighter_returns_home_when_its_warp_target_disappears() {
+        let mut park = Park::new(30000001, Vec::new(), 0);
+        let stats = ShipStats::new(50.0, 1_000_000.0, 1.0, 300.0, 1.0);
+        let pilot = Pilot { type_id: 587, group_id: 25, name: "Owner".into(), char_id: 200,
+            corp_id: 2, alliance_id: None, security: 0.0, bounty: 0.0 };
+        park.ships.insert(30, Ship::new(30, 2, stats, pilot, Vec3::new(10_000.0, 0.0, 0.0), Vec3::ZERO));
+        let fighter_pilot = Pilot { type_id: 23057, group_id: FIGHTER_GROUP, name: "Dragonfly".into(),
+            char_id: 200, corp_id: 2, alliance_id: None, security: 0.0, bounty: 0.0 };
+        let mut fighter = Ship::new(20, 2, stats, fighter_pilot, Vec3::ZERO, Vec3::ZERO);
+        fighter.drone = Some(Drone { owner: 200, client_id: 2, controller: Some(30), order: Order::Engage(10),
+            activity: activity::DEPARTING_2, weapons: Vec::new(), miner: None, mined: false, orbit: 1_000.0,
+            next_think_ms: 0, transit: Some(Transit { target: 10, arrival_ms: None }) });
+        park.ships.insert(20, fighter);
+        let mut out = Out::default();
+        arrive_following_fighters(&mut park, 1_000, &mut out);
+        assert!(in_transit(&park.ships[&20]));
+        assert_eq!(park.ships[&20].drone.as_ref().unwrap().order, Order::ReturnHome);
+        arrive_following_fighters(&mut park, 61_000, &mut out);
+        assert!(!in_transit(&park.ships[&20]));
+        assert!(park.surface_distance(20, 30).unwrap() <= DOCK_RANGE);
+    }
+
+    #[test]
+    fn ordered_fighter_locks_and_damages_a_player_ship() {
+        let mut park = Park::new(30000001, Vec::new(), 0);
+        let stats = ShipStats::new(50.0, 1_000_000.0, 1.0, 300.0, 1.0);
+        let pilot = |char_id| Pilot { type_id: 587, group_id: 25, name: "Pilot".into(), char_id,
+            corp_id: char_id, alliance_id: None, security: 0.0, bounty: 0.0 };
+        let victim_type = npc::NpcType::with(587, 25, 50.0, 1_000_000.0, &[
+            (attr::SHIELD_CAPACITY, 1_000.0), (attr::ARMOR_HP, 1_000.0), (attr::HP, 1_000.0),
+            (attr::SIGNATURE_RADIUS, 500.0),
+        ]);
+        let mut victim = Ship::new(10, 1, stats, pilot(100), Vec3::ZERO, Vec3::ZERO);
+        victim.fight = Some(npc::entity_fighter(&victim_type, 60_000.0, 1, 300.0, 0));
+        park.ships.insert(10, victim);
+        park.ships.insert(30, Ship::new(30, 2, stats, pilot(200), Vec3::new(2_000.0, 0.0, 0.0), Vec3::ZERO));
+        let fighter_type = npc::NpcType::with(23055, FIGHTER_GROUP, 20.0, 10_000.0, &[
+            (attr::MAX_VELOCITY, 500.0), (attr::SHIELD_CAPACITY, 500.0), (attr::HP, 500.0),
+            (attr::SCAN_RESOLUTION, 1_000.0), (attr::SIGNATURE_RADIUS, 125.0),
+            (attr::DAMAGE_MULTIPLIER, 2.0), (attr::SPEED, 2_000.0),
+            (attr::EM_DAMAGE, 100.0), (attr::MAX_RANGE, 5_000.0),
+            (attr::TRACKING_SPEED, 1.0), (attr::OPTIMAL_SIG_RADIUS, 125.0),
+        ]);
+        let mut rng = combat::Rng::seeded(1);
+        let mut fighter = make(&fighter_type, 20, Pilot { type_id: 23055, group_id: FIGHTER_GROUP,
+            name: "Templar".into(), ..pilot(200) }, 2, 30, Vec3::new(1_000.0, 0.0, 0.0), 0, &mut rng);
+        assert_eq!(fighter.drone.as_ref().unwrap().weapons.len(), 1);
+        order_drone(fighter.drone.as_mut().unwrap(), &Order::Engage(10), Some(10), false, 0);
+        park.ships.insert(20, fighter);
+        let mut out = Out::default();
+        think(&mut park, 0, &mut out);
+        assert_eq!(park.ships[&20].drone.as_ref().unwrap().activity, activity::COMBAT);
+        crate::fight::step(&mut park, 60_000, &mut out);
+        crate::fight::step(&mut park, 61_000, &mut out);
+        assert!(park.ships[&10].fight.as_ref().unwrap().vitals.shield.at(61_000) < 1_000.0);
     }
 }

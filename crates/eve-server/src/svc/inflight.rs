@@ -55,6 +55,7 @@ mod effect {
     pub const TARGET_PAINT: i64 = 1549;
     pub const ENERGY_DESTABILIZATION_NEW: i64 = 2303;
     pub const ENERGY_NOSFERATU: i64 = 2304;
+    pub const EMP_WAVE_GRID: i64 = 2071;
 
     pub const PROPULSION: [i32; 4] =
         [SPEED_BOOST as i32, SPEED_BOOST_MASS_ADDITION as i32, SPEED_BOOST_MASS_SIG_RAD as i32, SPEED_BOOST_MASS_SIG_VELOCITY as i32];
@@ -587,6 +588,13 @@ fn plan(loadout: &Loadout<'_>, item_id: i64, effect: &EffectRow, target: Option<
     let mut burned = None;
     let mut built_in = None;
     let action = match effect.id {
+        effect::EMP_WAVE_GRID => {
+            let fuel_type = v(713) as i64;
+            let fuel_quantity = v(714).max(1.0) as i64;
+            if fuel_type <= 0 { return Err("The doomsday has no fuel type configured.".into()); }
+            burned = Some((0, fuel_type, fuel_quantity));
+            Action::Doomsday
+        }
         effect::TARGET_ATTACK | effect::PROJECTILE_FIRED => {
             let multiplier = v(attr::DAMAGE_MULTIPLIER);
             let base = match charge {
@@ -668,6 +676,7 @@ fn plan(loadout: &Loadout<'_>, item_id: i64, effect: &EffectRow, target: Option<
     // A missile's look lives on the charge's launching effect.
     let guid = match (effect.id, charge) {
         (effect::USE_MISSILES, Some(_)) => "effects.MissileDeployment".to_string(),
+        (effect::EMP_WAVE_GRID, _) => "effects.EMPWaveGrid".to_string(),
         _ => effect.guid.clone(),
     };
     let module = Active {
@@ -684,7 +693,7 @@ fn plan(loadout: &Loadout<'_>, item_id: i64, effect: &EffectRow, target: Option<
         started_ms: 0,
         next_ms: 0,
         cycles: 0,
-        repeat: repeat.min(REPEAT_FOREVER),
+        repeat: if effect.id == effect::EMP_WAVE_GRID { 0 } else { repeat.min(REPEAT_FOREVER) },
         stopping: false,
         name: String::new(),
         reach,
@@ -698,6 +707,15 @@ async fn finish(ctx: &Ctx<'_>, plan: Plan) -> Result<Active, String> {
     let mut module = plan.module;
     module.name = type_name(ctx, module.type_id).await;
     if let Some((item_id, type_id, per_cycle)) = plan.burns {
+        let item_id = if item_id == 0 {
+            let Some(ship_id) = ctx.session.ship_id else { return Err("You must be in a ship.".into()) };
+            let rows = ctx.query(r#"SELECT "itemID" FROM entity WHERE "locationID" = $1
+                                    AND "flag" = 5 AND "typeID" = $2 AND "quantity" >= $3
+                                    ORDER BY "quantity" DESC LIMIT 1"#,
+                                 &[&(ship_id as i32), &(type_id as i32), &(per_cycle as i32)]).await;
+            rows.first().map(|r| r.get::<_, i32>(0) as i64)
+                .ok_or("Not enough isotopes in your cargo hold for a doomsday blast.")?
+        } else { item_id };
         let quantity = ctx
             .query_one(r#"SELECT "quantity" FROM entity WHERE "itemID" = $1"#, &[&(item_id as i32)])
             .await

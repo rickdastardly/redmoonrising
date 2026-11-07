@@ -86,7 +86,7 @@ echo                  [--no-auto-client] [--client "folder"]
 echo                  [--game-port N] [--web-port N] [--database-port N]
 echo No options opens the launcher window. --check tests the server then stops it.
 echo --server-only runs without selecting or starting a game client.
-echo EVE starts only when you click Launch EVE in the launcher window.
+echo EVE starts automatically when the server is ready. --no-auto-client keeps it closed.
 echo Default ports: game 26000, web 18080, database 5432; busy ports advance automatically.
 echo Explicit ports must be available. --help displays this text without setup.
 exit /b 0
@@ -123,6 +123,13 @@ $StatusPath = Join-Path $Runtime 'status.json'
 if (-not $env:RMR_RUN_ID) { $env:RMR_RUN_ID = [Guid]::NewGuid().ToString('N') }
 $script:Status = [ordered]@{ runId = $env:RMR_RUN_ID; stage = 'Preparing'; message = 'Checking local setup'; progress = 0; ready = $false; error = $false; stopped = $false; gamePort = 0; webPort = 0 }
 $script:Stopping = $false
+
+function Get-RmrFileHash([string]$Path) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($Path)
+    try { return [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '') }
+    finally { $stream.Dispose(); $sha.Dispose() }
+}
 
 function Write-Log([string]$Message) {
     $Message = $Message -replace '\x1B\[[0-9;]*[a-zA-Z]', ''
@@ -575,7 +582,7 @@ function Get-RmrDumpFingerprint([string[]]$Paths) {
     try {
         foreach ($path in $Paths) {
             Assert-Running
-            $itemHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+            $itemHash = Get-RmrFileHash $path
             $data = [Text.Encoding]::UTF8.GetBytes(([IO.Path]::GetFileName($path) + ':' + $itemHash + "`n"))
             [void]$hash.TransformBlock($data, 0, $data.Length, $null, 0)
         }
@@ -699,7 +706,7 @@ function Start-RmrWorker {
         if ((Test-Path -LiteralPath $buildStamp) -and (Test-Path -LiteralPath $serverExe) -and (Test-Path -LiteralPath $fakeClientExe)) {
             try {
                 $old = Get-Content -LiteralPath $buildStamp -Raw | ConvertFrom-Json
-                if ($old.fingerprint -eq $fingerprint -and $old.serverHash -eq (Get-FileHash -LiteralPath $serverExe -Algorithm SHA256).Hash -and $old.clientHash -eq (Get-FileHash -LiteralPath $fakeClientExe -Algorithm SHA256).Hash) { $needsBuild = $false }
+                if ($old.fingerprint -eq $fingerprint -and $old.serverHash -eq (Get-RmrFileHash $serverExe) -and $old.clientHash -eq (Get-RmrFileHash $fakeClientExe)) { $needsBuild = $false }
             } catch { Write-Log 'Build cache could not be verified; rebuilding.' }
         }
         if ($needsBuild) {
@@ -737,7 +744,7 @@ function Start-RmrWorker {
                 $componentIndex++
                 Set-Status 'Downloading Rust' ("Compiler component {0} of {1}: {2}" -f $componentIndex,$components.Count,$component.name) (8 + 2 * $componentIndex)
                 $cachedArchive = Join-Path $rustupDownloads $component.hash
-                if ([IO.File]::Exists($cachedArchive) -and (Get-FileHash -LiteralPath $cachedArchive -Algorithm SHA256).Hash -eq $component.hash) { continue }
+                if ([IO.File]::Exists($cachedArchive) -and (Get-RmrFileHash $cachedArchive) -eq $component.hash) { continue }
                 $archiveName = $component.name + '-1.97.0-x86_64-pc-windows-gnu.tar.xz'
                 $componentArchive = Get-Download ('https://static.rust-lang.org/dist/2026-07-09/' + $archiveName) $archiveName $component.hash
                 [IO.File]::Copy($componentArchive, $cachedArchive, $true)
@@ -762,7 +769,7 @@ function Start-RmrWorker {
             Set-Status 'Building' 'Compiling RMR; later launches reuse the verified build' 35
             Invoke-Native $rustup @('run','1.97.0-x86_64-pc-windows-gnu','cargo','build','--release','--locked','-p','eve-server','--bins','--target','x86_64-pc-windows-gnu')
             if (-not (Test-Path -LiteralPath $serverExe) -or -not (Test-Path -LiteralPath $fakeClientExe)) { throw 'The build did not produce both server and fakeclient executables.' }
-            $buildRecord = [pscustomobject]@{ fingerprint = $fingerprint; serverHash = (Get-FileHash -LiteralPath $serverExe -Algorithm SHA256).Hash; clientHash = (Get-FileHash -LiteralPath $fakeClientExe -Algorithm SHA256).Hash }
+            $buildRecord = [pscustomobject]@{ fingerprint = $fingerprint; serverHash = (Get-RmrFileHash $serverExe); clientHash = (Get-RmrFileHash $fakeClientExe) }
             [IO.File]::WriteAllText($buildStamp, ($buildRecord | ConvertTo-Json), $Utf8)
         }
 
@@ -886,6 +893,11 @@ function Start-RmrWorker {
         $env:RMR_WEB = '127.0.0.1:' + $webPort
         $env:RMR_LOG_FILE = Join-Path $Logs 'server.log'
         $env:RMR_DUMP_DIR = Join-Path $Logs 'dumps'
+        $env:RMR_SHUTDOWN_FILE = Join-Path $Runtime 'shutdown.request'
+        # A generic shell RUST_LOG must not override this server's rmr.yml
+        # log.level. RMR_LOG remains available as the deliberate override.
+        $env:RUST_LOG = $null
+        if ([IO.File]::Exists($env:RMR_SHUTDOWN_FILE)) { Remove-Item -LiteralPath $env:RMR_SHUTDOWN_FILE -Force }
         [IO.Directory]::CreateDirectory($env:RMR_DUMP_DIR) | Out-Null
         $binaryDir = Join-Path $Root 'target\x86_64-pc-windows-gnu\release'
         $server = New-NativeProcess (Join-Path $binaryDir 'eve-server.exe') @()
@@ -902,13 +914,21 @@ function Start-RmrWorker {
         $script:Status.ready = $true
         Set-Status 'Online' ("Client: 127.0.0.1:{0}   |   Dashboard: http://127.0.0.1:{1}" -f $gamePort,$webPort) 100
         Assert-Running
+        if ($env:RMR_MODE -eq 'worker' -and $env:RMR_NO_AUTO_CLIENT -ne '1' -and $env:RMR_NO_CLIENT -ne '1') {
+            try {
+                Start-RmrGameClient -ClientPath $script:Status.clientPath -GamePort $gamePort
+                Write-Log 'EVE client launched.'
+            } catch {
+                Write-Log ('EVE client did not launch: ' + $_.Exception.Message)
+            }
+        }
         if ($env:RMR_CHECK -eq '1') {
             Set-Status 'Checking' 'Testing the server handshake and login' 100
             $checkOutput = Invoke-Native $fakeClientExe @("127.0.0.1:$gamePort",'--no-cache') -Capture -Timeout 90
             if ($checkOutput -notmatch '(?i)session change' -or $checkOutput -match '(?im)(FAILED|\bFAIL\b|-> refused:|-> no reply|-> no usable reply)') { throw 'Protocol/login check did not complete successfully. See logs/launcher.log.' }
             Write-Log 'Protocol/login check passed.'
         } else {
-            # EVE is launched only by the Launch EVE button, never on server startup.
+            # The launcher keeps the server alive until stopped.
             while (-not $server.Process.HasExited) { Assert-Running; Read-NativeOutput $server; Start-Sleep -Milliseconds 100 }
             Read-NativeOutput $server
             throw "Server exited unexpectedly with code $($server.Process.ExitCode). See logs/server.log."
@@ -926,9 +946,17 @@ function Start-RmrWorker {
                 $script:Stopping = $true
                 $script:Status.ready = $false
                 if ($server) {
+                    if (-not $server.Process.HasExited -and $env:RMR_SHUTDOWN_FILE) {
+                        [IO.File]::WriteAllText($env:RMR_SHUTDOWN_FILE, 'save', $Utf8)
+                        Write-Log 'Waiting for the game server to save live state...'
+                        [void]$server.Process.WaitForExit(25000)
+                    }
                     Stop-NativeProcess $server.Process
                     Read-NativeOutput $server
                     $server.Process.Dispose()
+                    if ($env:RMR_SHUTDOWN_FILE -and [IO.File]::Exists($env:RMR_SHUTDOWN_FILE)) {
+                        Remove-Item -LiteralPath $env:RMR_SHUTDOWN_FILE -Force
+                    }
                 }
                 if ($databaseOwned) {
                     Write-Log 'Stopping this launcher''s PostgreSQL database...'
@@ -1081,10 +1109,10 @@ function Save-RmrOriginal {
     $base = Join-Path (Join-Path $ClientDirectory '.rmr-backup') $RelativePath
     $parent = Split-Path -Parent $base
     if (-not (Test-Path -LiteralPath $parent)) { [void](New-Item -ItemType Directory -Path $parent -Force) }
-    $sourceHash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
+    $sourceHash = Get-RmrFileHash $source
     $destination = $base
     if (Test-Path -LiteralPath $base) {
-        if ((Get-FileHash -LiteralPath $base -Algorithm SHA256).Hash -eq $sourceHash) { return }
+        if ((Get-RmrFileHash $base) -eq $sourceHash) { return }
         $destination = "$base.$sourceHash"
         if (Test-Path -LiteralPath $destination) { return }
     }
@@ -1904,6 +1932,66 @@ except:
     _rmr_log('Warp range setup failed: ' + _rmr_warp_error)
     sys.exc_clear()
 
+def _rmr_install_self_info():
+    # infosvc.ShowInfo routes one's own character to the character sheet.
+    # Use its ordinary info-window path for the same itemID instead.
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        # LocalSvc returns a ServiceConnection proxy. StartService returns
+        # the service instance in this client build.
+        info = sm.StartService('info')
+        cls = info.__class__
+        if getattr(cls, '_rmr_self_info_installed', False):
+            return
+        original = cls.ShowInfo
+        def show_info(self, typeID, itemID=None, new=0, rec=None, parentID=None, headerOnly=0):
+            if itemID != eve.session.charid:
+                return original(self, typeID, itemID, new, rec, parentID, headerOnly)
+            modal = eve.LocalSvc('ui').GetModalWindow()
+            wnd = self.GetWnd(new, modal)
+            if wnd.destroyed:
+                wnd = self.GetWnd(1, modal)
+            wnd.IsBrowser = 1
+            wnd.GoTo = self.GoTo
+            self.FormatWnd(wnd, typeID, itemID, rec=rec, parentID=parentID, headerOnly=headerOnly)
+            wnd.Maximize()
+            return None
+        cls.ShowInfo = show_info
+        cls._rmr_self_info_installed = True
+        _rmr_log('Own-character Show Info opens the normal character info window.')
+    except:
+        _rmr_log('Own-character Show Info hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+import uthread
+uthread.new(_rmr_install_self_info)
+
+def _rmr_install_area_doomsday():
+    # An area doomsday has no targetID. The old confirmation path tries to
+    # read that missing target's ownerID before Activate reaches the server.
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        consider = sm.StartService('consider')
+        cls = consider.__class__
+        if getattr(cls, '_rmr_area_doomsday_installed', False):
+            return
+        original = cls.DoAttackConfirmations
+        def confirm(self, targetID, effect, *args, **kwargs):
+            if targetID is None and getattr(effect, 'effectID', None) == 2071:
+                _rmr_log('Area doomsday confirmation accepted without a target.')
+                return 1
+            return original(self, targetID, effect, *args, **kwargs)
+        cls.DoAttackConfirmations = confirm
+        cls._rmr_area_doomsday_installed = True
+        _rmr_log('Area doomsday client activation enabled.')
+    except:
+        _rmr_log('Area doomsday hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+uthread.new(_rmr_install_area_doomsday)
+
 '@
 
 function Start-LauncherUi {
@@ -2257,6 +2345,7 @@ namespace Rmr {
 
     $state = @{
         Process = $null
+        Attached = $false
         Ready = $false
         StopRequested = $false
         CloseRequested = $false
@@ -2500,7 +2589,7 @@ namespace Rmr {
                 $progressCaption.Text = 'SESSION FINISHED'
                 $progressPercent.Text = 'OFFLINE'
                 $setupHint.Text = 'Close this window when you are ready.'
-                if ($state.Process.ExitCode -eq 0) {
+                if ($state.Attached -or $state.Process.ExitCode -eq 0) {
                     $stageLabel.Text = 'Red Moon Rising stopped'
                     $messageLabel.Text = 'Your database is kept for next time. Run start.bat whenever you are ready.'
                 } else {
@@ -2521,6 +2610,35 @@ namespace Rmr {
             $form.Activate()
             $null = [System.IO.Directory]::CreateDirectory($Runtime)
             $null = [System.IO.Directory]::CreateDirectory($Logs)
+            # Attach a new launcher window to this checkout's live server.
+            # A headless run keeps the worker lock, so a second worker would
+            # fail; the UI can monitor the existing server process directly.
+            if ([IO.File]::Exists($state.StatusPath)) {
+                $online = [IO.File]::ReadAllText($state.StatusPath) | ConvertFrom-Json
+                if ($online.ready -and -not $online.stopped -and -not $online.error -and $online.gamePort) {
+                    $listener = Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort ([int]$online.gamePort) -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+                    if ($listener) {
+                        $running = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
+                        if ($running -and $running.ProcessName -eq 'eve-server') {
+                            $state.Process = $running
+                            $state.Attached = $true
+                            $state.RunId = [string]$online.runId
+                            $timer.Start()
+                            if ($online.clientPath -and $env:RMR_NO_AUTO_CLIENT -ne '1') {
+                                $clientPath = [string]$online.clientPath
+                                $clientOpen = @(Get-Process -Name exefile -ErrorAction SilentlyContinue | Where-Object {
+                                    $_.Path -and [string]::Equals($_.Path, (Join-Path $clientPath 'bin\exefile.exe'), [StringComparison]::OrdinalIgnoreCase)
+                                }).Count -gt 0
+                                if (-not $clientOpen) {
+                                    try { & $launchClient -ClientPath $clientPath -GamePort ([int]$online.gamePort) }
+                                    catch { $messageLabel.Text = 'Could not launch EVE: ' + $_.Exception.Message }
+                                }
+                            }
+                            return
+                        }
+                    }
+                }
+            }
             $lockPath = Join-Path $Runtime 'launcher.lock'
             try {
                 $probe = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)

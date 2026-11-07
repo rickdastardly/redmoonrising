@@ -167,6 +167,7 @@ fn cycle(park: &mut Park, ship_id: i64, module_id: i64, now: i64, out: &mut Out)
         Action::Missile { damage, flight_ms, range, cloud, aoe_velocity } => {
             launch(park, ship_id, &m, *damage, *flight_ms, *range, *cloud, *aoe_velocity, now)
         }
+        Action::Doomsday => doomsday(park, ship_id, &m, now, out),
         Action::ShieldBoost(amount) => heal(park, ship_id, now, out, |v| v.shield.add(now, *amount)),
         Action::ArmorRepair(amount) => heal(park, ship_id, now, out, |v| v.repair_armor(*amount)),
         Action::HullRepair(amount) => heal(park, ship_id, now, out, |v| v.repair_hull(*amount)),
@@ -176,6 +177,22 @@ fn cycle(park: &mut Park, ship_id: i64, module_id: i64, now: i64, out: &mut Out)
         }
         Action::Mining { .. } | Action::Passive => {}
         _ => project(park, ship_id, &m, now, out),
+    }
+}
+
+fn doomsday(park: &mut Park, ship_id: i64, weapon: &Active, now: i64, out: &mut Out) {
+    const GRID_RANGE: f64 = 1_000_000.0;
+    const CAPITAL_GROUPS: [i64; 5] = [30, 485, 513, 547, 659];
+    let Some(source) = park.ships.get(&ship_id) else { return };
+    let (at, by) = (source.pos, attacker(source, weapon));
+    let targets: Vec<i64> = park.ships.values()
+        .filter(|ship| ship.id != ship_id && ship.fight.is_some() && !ship.in_warp()
+            && !CAPITAL_GROUPS.contains(&ship.pilot.group_id)
+            && (ship.pos - at).len() <= GRID_RANGE)
+        .map(|ship| ship.id).collect();
+    let blast = Shot::Hit { quality: 3, multiplier: 1.0 };
+    for target in targets {
+        hit(park, by, target, [1_000_000_000.0; 4], blast, &weapon.name, now, out);
     }
 }
 

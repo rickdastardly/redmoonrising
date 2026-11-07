@@ -16,8 +16,25 @@ use crate::svc::inventory::{Container, CONTAINER_HANGAR, FLAG_HANGAR};
 
 pub const FLAG_CARGO: i64 = 5;
 pub const FLAG_DRONE_BAY: i64 = 87;
+pub const FLAG_CORP_HANGAR_FIRST: i64 = 116;
+pub const FLAG_CORP_HANGAR_LAST: i64 = 122;
+/// Build 3913 uses flagHangar for a capital's single corporate hangar.
+pub const FLAG_CAPITAL_CORP_HANGAR: i64 = 4;
 const CATEGORY_SHIP: i64 = 6;
 const ATTR_DRONE_CAPACITY: i32 = 283;
+const ATTR_CORP_HANGAR_CAPACITY: i32 = 912;
+
+/// Dreadnoughts in this data set have no corporate hangar attribute. Give
+/// each one the same 5,000 m3 hold exposed by the capital inventory client.
+pub async fn ensure_capital_storage(db: &tokio_postgres::Client) -> Result<(), tokio_postgres::Error> {
+    db.execute(
+        r#"INSERT INTO "dgmTypeAttributes" ("typeID", "attributeID", "valueInt", "valueFloat")
+           SELECT "typeID", 912, 5000, NULL FROM "invTypes" WHERE "groupID" = 485
+           ON CONFLICT ("typeID", "attributeID") DO NOTHING"#,
+        &[],
+    ).await?;
+    Ok(())
+}
 
 /// Why a move did not happen.
 pub enum MoveError {
@@ -237,8 +254,13 @@ async fn destination(
                 let capacity = match flag {
                     FLAG_CARGO => type_capacity(txn, holder.type_id).await?,
                     FLAG_DRONE_BAY => drone_capacity(txn, holder.type_id).await?,
+                    FLAG_CAPITAL_CORP_HANGAR | FLAG_CORP_HANGAR_FIRST..=FLAG_CORP_HANGAR_LAST =>
+                        attribute_capacity(txn, holder.type_id, ATTR_CORP_HANGAR_CAPACITY).await?,
                     _ => return refuse("Items cannot be put there."),
                 };
+                if capacity <= 0.0 {
+                    return refuse("This ship has no capacity in that hold.");
+                }
                 Ok(Destination { location: id, flag, capacity: Some(capacity), fitting: None })
             } else {
                 if !holder.singleton {
@@ -266,12 +288,16 @@ async fn type_capacity(txn: &ItemTxn<'_>, type_id: i64) -> DbResult<f64> {
 }
 
 async fn drone_capacity(txn: &ItemTxn<'_>, type_id: i64) -> DbResult<f64> {
+    attribute_capacity(txn, type_id, ATTR_DRONE_CAPACITY).await
+}
+
+async fn attribute_capacity(txn: &ItemTxn<'_>, type_id: i64, attribute: i32) -> DbResult<f64> {
     let r = txn
         .tx()
         .query_opt(
             r#"SELECT coalesce("valueFloat", "valueInt"::float8) FROM "dgmTypeAttributes"
                 WHERE "typeID" = $1 AND "attributeID" = $2"#,
-            &[&(type_id as i32), &ATTR_DRONE_CAPACITY],
+            &[&(type_id as i32), &attribute],
         )
         .await?;
     Ok(r.and_then(|r| r.get::<_, Option<f64>>(0)).unwrap_or(0.0))
@@ -279,6 +305,8 @@ async fn drone_capacity(txn: &ItemTxn<'_>, type_id: i64) -> DbResult<f64> {
 
 /// Volume already in a destination, leaving out `except`.
 async fn used(txn: &ItemTxn<'_>, dest: &Destination, except: i64) -> DbResult<f64> {
+    let corp_hangar = dest.flag == FLAG_CAPITAL_CORP_HANGAR
+        || (FLAG_CORP_HANGAR_FIRST..=FLAG_CORP_HANGAR_LAST).contains(&dest.flag);
     let r = txn
         .tx()
         .query_one(
@@ -287,8 +315,9 @@ async fn used(txn: &ItemTxn<'_>, dest: &Destination, except: i64) -> DbResult<f6
                                                 JOIN "invTypes" ct ON ct."typeID" = c."typeID" WHERE c."locationID" = e."itemID")
                                         ELSE t."volume" * e."quantity" END), 0)::float8
                  FROM entity e JOIN "invTypes" t ON t."typeID" = e."typeID"
-                WHERE e."locationID" = $1 AND e."flag" = $2 AND e."itemID" <> $3"#,
-            &[&(dest.location as i32), &(dest.flag as i32), &(except as i32), &(crate::svc::missions::TYPE_PLASTIC_WRAP as i32)],
+                WHERE e."locationID" = $1 AND e."itemID" <> $3
+                  AND (e."flag" = $2 OR ($5 AND (e."flag" = 4 OR e."flag" BETWEEN 116 AND 122)))"#,
+            &[&(dest.location as i32), &(dest.flag as i32), &(except as i32), &(crate::svc::missions::TYPE_PLASTIC_WRAP as i32), &corp_hangar],
         )
         .await?;
     Ok(r.get(0))
@@ -390,7 +419,9 @@ async fn add(
     if Some(item.id) == ctx.session.ship_id && dest.capacity.is_some() {
         return refuse("You cannot put your active ship in a container.");
     }
-    if item.category_id == CATEGORY_SHIP && item.singleton && dest.capacity.is_some() {
+    if item.category_id == CATEGORY_SHIP && item.singleton && dest.capacity.is_some()
+        && dest.flag != FLAG_CAPITAL_CORP_HANGAR
+        && !(FLAG_CORP_HANGAR_FIRST..=FLAG_CORP_HANGAR_LAST).contains(&dest.flag) {
         return refuse("Assembled ships cannot be put in a cargo hold; repackage it first.");
     }
     if (fitting::is_slot(item.flag) || dest.fitting.is_some()) && fitting_before.is_none() {

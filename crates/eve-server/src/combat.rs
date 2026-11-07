@@ -406,6 +406,8 @@ pub enum Lock {
 pub enum Action {
     Turret { damage: Damage, gun: Gun },
     Missile { damage: Damage, flight_ms: i64, range: f64, cloud: f64, aoe_velocity: f64 },
+    /// Old area doomsday: hits every subcapital ship on the local grid.
+    Doomsday,
     ShieldBoost(f64),
     ArmorRepair(f64),
     HullRepair(f64),
@@ -445,6 +447,7 @@ impl Action {
             self,
             Action::Turret { .. }
                 | Action::Missile { .. }
+                | Action::Doomsday
                 | Action::ShieldBoost(_)
                 | Action::ArmorRepair(_)
                 | Action::HullRepair(_)

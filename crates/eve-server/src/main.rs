@@ -93,6 +93,10 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     market_seed::ensure(&mut client).await.map_err(|e| format!("seeding the market: {}", logging::chain(&e)))?;
+    svc::moves::ensure_capital_storage(&client).await.map_err(|e| format!("preparing capital hangars: {}", logging::chain(&e)))?;
+    svc::fitting::ensure_doomsday_fitting(&client).await.map_err(|e| format!("preparing doomsday fittings: {}", logging::chain(&e)))?;
+    svc::agent_missions::ensure(&client).await.map_err(|e| format!("preparing period missions: {}", logging::chain(&e)))?;
+    losses::ensure_kill_items(&client).await.map_err(|e| format!("preparing kill item records: {}", logging::chain(&e)))?;
 
     let started = Instant::now();
     let bulk =
@@ -120,14 +124,27 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     pos::set_speedup(config.starbase_speedup);
     tokio::spawn(heartbeat::run(Arc::clone(&server)));
     bots::configure(config.bots_pirates_attack, config.bots_controls);
-    tokio::spawn(bots::run(Arc::clone(&server), config.bots, config.bots_speed, config.bots_shown));
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let bot_task = tokio::spawn(bots::run(Arc::clone(&server), config.bots, config.bots_speed, config.bots_shown, shutdown_rx));
     tokio::spawn(web::run(Arc::clone(&server), config.web.clone()));
     let listener = TcpListener::bind(&config.bind).await?;
     info!("listening on {} as node {}", config.bind, config.node_id);
 
     let mut seq = 0i64;
+    let shutdown_file = std::env::var_os("RMR_SHUTDOWN_FILE").map(std::path::PathBuf::from);
+    let mut shutdown_check = tokio::time::interval(std::time::Duration::from_millis(500));
     loop {
-        let (stream, peer) = match listener.accept().await {
+        let accepted = tokio::select! {
+            result = listener.accept() => result,
+            _ = shutdown_check.tick() => {
+                if shutdown_file.as_ref().is_some_and(|path| path.exists()) {
+                    info!("graceful shutdown requested");
+                    break;
+                }
+                continue;
+            }
+        };
+        let (stream, peer) = match accepted {
             Ok(v) => v,
             Err(e) => {
                 warn!("accept failed: {err}", err = crate::logging::chain(&e));
@@ -138,6 +155,32 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         seq += 1;
         tokio::spawn(Conn::new(stream, peer, Arc::clone(&server), seq).run());
     }
+    let _ = shutdown_tx.send(true);
+    match tokio::time::timeout(std::time::Duration::from_secs(20), bot_task).await {
+        Ok(Ok(())) => info!("bot state saved"),
+        Ok(Err(e)) => warn!("bot shutdown task failed: {e}"),
+        Err(_) => warn!("timed out saving bot state"),
+    }
+    save_live_ships(&server).await;
+    Ok(())
+}
+
+async fn save_live_ships(server: &Server) {
+    let ships: Vec<_> = {
+        let world = server.world.lock();
+        world.parks.values().flat_map(|park| park.ships.values()).filter(|ship| ship.is_player() || ship.drone.is_some())
+            .map(|ship| (ship.id, ship.pos, ship.fight.clone())).collect()
+    };
+    for (id, pos, fight) in &ships {
+        if let Err(e) = server.db.execute(r#"UPDATE entity SET "x"=$2,"y"=$3,"z"=$4 WHERE "itemID"=$1"#,
+            &[&(*id as i32), &pos.x, &pos.y, &pos.z]).await {
+            warn!("saving ship {id} position: {}", logging::chain(&e));
+        }
+        if let Some(fight) = fight {
+            svc::inflight::save_vitals(&server.db, *id, fight, false).await;
+        }
+    }
+    info!("saved {} live ships and drones", ships.len());
 }
 
 fn report_bulk(bulk: &bulkdata::BulkData, started: Instant) {

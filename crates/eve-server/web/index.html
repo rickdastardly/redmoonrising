@@ -3,30 +3,33 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>RMR Server Status</title>
+  <title>Red Moon Rising · Command Center</title>
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.js"></script>
 </head>
 <body>
-  <nav class="neocom" aria-label="Windows">
-    <a href="#w-status" title="Server Status">STA</a>
-    <a href="#w-wars" title="War Report">WAR</a>
-    <a href="#w-pilots" title="Pilots Online">PIL</a>
-    <a href="#w-systems" title="Busiest Systems">MAP</a>
-    <a href="#w-alliances" title="Alliances">ALL</a>
-    <a href="#w-corporations" title="Corporations">CRP</a>
-    <a href="#w-sieges" title="Sieges">SIE</a>
-    <a href="#w-news" title="Galactic News">NEW</a>
-    <a href="#w-kills" title="Kill Reports">KIL</a>
-    <a href="#w-killboard" title="Killboard">KB</a>
-    <a href="#w-market" title="Market">MKT</a>
-    <a href="#w-relations" title="Standings">STD</a>
-    <a href="#w-follow" title="Follow a Pilot">FOL</a>
-    <a href="#w-control" title="Events and Controls">CTL</a>
+  <header class="masthead"><div class="brand-mark">R</div><div><p class="eyebrow">NEW EDEN / LIVE INTELLIGENCE</p><h1>Red Moon Rising</h1><p class="subtitle">A living view of the universe</p></div><span class="live-pill">● LIVE SERVER</span></header>
+  <nav class="neocom" aria-label="Dashboard pages">
+    <a href="#home" title="Home">HOME</a>
+    <a href="#status" title="Server Status">STA</a>
+    <a href="#wars" title="War Report">WAR</a>
+    <a href="#pilots" title="Pilots Online">PIL</a>
+    <a href="#systems" title="Busiest Systems">MAP</a>
+    <a href="#alliances" title="Alliances">ALL</a>
+    <a href="#corporations" title="Corporations">CRP</a>
+    <a href="#sieges" title="Sieges">SIE</a>
+    <a href="#news" title="Galactic News">NEW</a>
+    <a href="#killboard" title="Killboard">KBD</a>
+    <a href="#market" title="Market">MKT</a>
+    <a href="#relations" title="Standings">STD</a>
+    <a href="#follow" title="Follow a Pilot">FOL</a>
+    <a href="#control" title="Events and Controls">CTL</a>
     <div class="clock" title="EVE time (UTC)"><span id="clock-time">--:--</span><span id="clock-date"></span></div>
   </nav>
 
   <main class="desktop">
+    <div class="page-heading"><p class="eyebrow" id="page-kicker">COMMAND CENTER</p><h2 id="page-title">Home</h2><p id="page-description">Live activity across New Eden.</p></div>
+    <div class="section-title"><span>01 / COMMAND OVERVIEW</span><strong>Universe at a glance</strong></div>
     <section class="window narrow" id="w-status">
       <header class="caption"><span class="glyph"></span><h2>Server Status</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
       <div class="body">
@@ -70,16 +73,26 @@
       <div class="body"><table id="news"></table></div>
     </section>
 
+    <div class="section-title"><span>02 / CONFLICT INTELLIGENCE</span><strong>Killboard & reports</strong></div>
+
     <section class="window wide" id="w-kills">
-      <header class="caption"><span class="glyph"></span><h2>Kill Reports</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
-      <div class="body"><table id="kills"></table></div>
+      <header class="caption"><span class="glyph"></span><h2>Recent killmails</h2><div class="kill-search"><input id="kill-search" type="search" placeholder="Search these kills" aria-label="Search kills"></div></header>
+      <div class="body"><table id="kills"></table><div class="kill-pager"><button id="kills-prev" type="button">← Previous</button><span id="kills-page">Page 1</span><button id="kills-next" type="button">Next →</button></div></div>
     </section>
 
-    <section class="window" id="w-killboard">
-      <header class="caption"><span class="glyph"></span><h2>Killboard (24h)</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
+    <section class="window wide" id="w-kill-detail" hidden>
+      <header class="caption"><span class="glyph"></span><h2>Killmail details</h2><a class="caption-link" href="#killboard">← Killboard</a></header>
+      <div class="body kill-report"><div id="kill-detail"></div></div>
+    </section>
+
+    <section class="window wide" id="w-killboard">
+      <header class="caption"><span class="glyph"></span><h2>Killboard statistics</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
       <div class="body">
-        <p class="note" id="killboard-total"></p>
+        <div id="killboard-stats" class="killboard-stats"></div>
+        <h3 class="table-heading">Top killers · all time</h3><table id="killboard-pilots"></table>
+        <h3 class="table-heading">Corporations & alliances</h3>
         <table id="killboard"></table>
+        <h3 class="table-heading">Most lost hulls</h3>
         <table id="killboard-ships"></table>
       </div>
     </section>

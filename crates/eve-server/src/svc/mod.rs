@@ -111,6 +111,7 @@ pub fn registry() -> Registry {
         .add_bound("corpRegistry", handler!(corp::registry))
         .add_bound("corpStationMgr", handler!(corp::station_mgr))
         .add_bound("corpMembers", handler!(corp::members_provider))
+        .add_bound("corpOffices", handler!(corp::offices_provider))
         .add_bound("allianceRegistry", handler!(alliance::alliance_registry))
         .add_bound("warRegistry", handler!(war::war_registry))
         // social

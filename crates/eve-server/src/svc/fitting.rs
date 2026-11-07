@@ -39,6 +39,27 @@ const SLOTS: [(i32, i64, i32); 4] = [
 /// Every computed attribute of a loadout, by item.
 pub type Snapshot = HashMap<i64, HashMap<i32, f64>>;
 
+/// The archived doomsday types demand 10,000 CPU and 100,000 grid, so the
+/// Avatar and Leviathan cannot online their racial weapon. Give all area
+/// doomsdays a titan-sized, but usable, fitting cost before bulk data loads.
+pub async fn ensure_doomsday_fitting(db: &tokio_postgres::Client) -> Result<(), tokio_postgres::Error> {
+    db.execute(
+        r#"UPDATE "dgmTypeAttributes" SET "valueInt" = 100, "valueFloat" = NULL
+            WHERE "attributeID" = 50
+              AND COALESCE("valueFloat", "valueInt"::float8) >= 10000
+              AND "typeID" IN (SELECT "typeID" FROM "dgmTypeEffects" WHERE "effectID" = 2071)"#,
+        &[],
+    ).await?;
+    db.execute(
+        r#"UPDATE "dgmTypeAttributes" SET "valueInt" = 10000, "valueFloat" = NULL
+            WHERE "attributeID" = 30
+              AND COALESCE("valueFloat", "valueInt"::float8) >= 100000
+              AND "typeID" IN (SELECT "typeID" FROM "dgmTypeEffects" WHERE "effectID" = 2071)"#,
+        &[],
+    ).await?;
+    Ok(())
+}
+
 pub async fn snapshot(db: &impl tokio_postgres::GenericClient, catalog: &Catalog, char_id: i64, ship_id: Option<i64>) -> Result<Snapshot, tokio_postgres::Error> {
     Ok(Loadout::load(db, catalog, char_id, ship_id, &HashSet::new()).await?.snapshot())
 }

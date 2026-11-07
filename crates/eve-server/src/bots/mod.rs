@@ -116,7 +116,7 @@ pub fn db_url() -> String {
     DB_URL.get().cloned().unwrap_or_default()
 }
 
-pub async fn run(server: Arc<Server>, target: usize, speed: f64, shown: usize) {
+pub async fn run(server: Arc<Server>, target: usize, speed: f64, shown: usize, shutdown: tokio::sync::watch::Receiver<bool>) {
     if target == 0 {
         return;
     }
@@ -156,7 +156,7 @@ pub async fn run(server: Arc<Server>, target: usize, speed: f64, shown: usize) {
             let names = panels::names(&db).await;
             let types = character_types(&db).await;
             let sim = Sim::new(server, db, atlas, bots, ids, types, presence, politics, econ, yard, relations, density, names, speed);
-            sim.run().await
+            sim.run(shutdown).await
         }
         Err(e) => error!("bots: {e}"),
     }
@@ -336,7 +336,7 @@ impl Sim {
         }
     }
 
-    async fn run(mut self) {
+    async fn run(mut self, mut shutdown: tokio::sync::watch::Receiver<bool>) {
         {
             let ctx = Ctx { atlas: &self.atlas, econ: &mut self.econ, yard: Some(&*self.yard), day0: self.day0, density: &self.density };
             for (i, bot) in self.bots.iter_mut().enumerate() {
@@ -353,12 +353,20 @@ impl Sim {
         self.refresh_politics_figures().await;
         let (mut next_politics, mut next_skirmish) = (POLITICS_EVERY, SKIRMISH_EVERY);
         let mut last_sync = Instant::now();
-        let (mut last_flush, mut last_report, mut last_tick, mut last_balances) = (Instant::now(), Instant::now(), Instant::now(), Instant::now());
+        let (mut last_flush, mut last_report, mut last_tick, mut last_balances, mut last_battle) = (Instant::now(), Instant::now(), Instant::now(), Instant::now(), Instant::now());
         let mut interval = tokio::time::interval(TICK);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         info!("bots: running {} at {}x", self.bots.len(), self.speed);
         loop {
-            interval.tick().await;
+            tokio::select! {
+                _ = interval.tick() => {},
+                _ = shutdown.changed() => {
+                    info!("bots: saving before shutdown");
+                    self.sync(RUNNING.load(Ordering::Relaxed)).await;
+                    self.flush_all(RUNNING.load(Ordering::Relaxed)).await;
+                    return;
+                }
+            }
             let elapsed = last_tick.elapsed();
             last_tick = Instant::now();
             let running = RUNNING.load(Ordering::Relaxed);
@@ -399,6 +407,7 @@ impl Sim {
                 }
             }
             if last_report.elapsed() >= REPORT {
+                if running { local_banter(&self.server.world, self.clock as u64); }
                 let mut summary = report(&self.bots, &self.tally, last_report.elapsed(), self.clock, self.speed, running);
                 let s = &self.econ.stats;
                 summary.push_str(&format!(
@@ -424,6 +433,10 @@ impl Sim {
                 }
                 self.tally = Tally::default();
                 last_report = Instant::now();
+            }
+            if running && last_battle.elapsed() >= Duration::from_secs(10) {
+                local_battle_banter(&self.server.world, self.clock as u64);
+                last_battle = Instant::now();
             }
         }
     }
@@ -963,6 +976,53 @@ fn tell_local(w: &crate::world::WorldState, before: &HashMap<i64, Vec<u32>>) {
         for (i, method) in came.chain(went) {
             if let Some(b) = w.bot_roster.get(i as usize) {
                 chat::announce_counted(w, &members, count, &channel, method, &chat::bot_who(b), Vec::new());
+            }
+        }
+    }
+}
+
+/// A short exchange in watched Local channels once a minute.
+fn local_banter(world: &crate::world::World, clock: u64) {
+    use crate::svc::chat;
+    let w = world.lock();
+    let open = w.local_channels();
+    let lines = [
+        ("That wreck in the belt wasn't mine when I got here.", "Sure. And you just happened to be looting it?"),
+        ("Anyone hunting today, or just hiding in station?", "I am in space. Where are you?"),
+        ("I see new pilots on scan. Hope they brought insurance.", "Careful. They might be looking for you."),
+        ("The belts are busy tonight.", "Good. I was getting bored."),
+    ];
+    let (first, second) = lines[(clock as usize / 60) % lines.len()];
+    for (system, channel, members) in open {
+        let Some(bots) = w.bot_local.get(&system) else { continue };
+        if bots.len() < 2 || members.is_empty() { continue; }
+        let start = (clock as usize / 60) % bots.len();
+        let Some(a) = w.bot_roster.get(bots[start] as usize) else { continue };
+        let Some(b) = w.bot_roster.get(bots[(start + 1) % bots.len()] as usize) else { continue };
+        let count = members.len() + bots.len();
+        chat::announce_counted(&w, &members, count, &channel, "SendMessage", &chat::bot_who(a), vec![eve_marshal::Value::text(first)]);
+        chat::announce_counted(&w, &members, count, &channel, "SendMessage", &chat::bot_who(b), vec![eve_marshal::Value::text(second)]);
+    }
+}
+
+fn local_battle_banter(world: &crate::world::World, clock: u64) {
+    use crate::svc::chat;
+    let w = world.lock();
+    for (system, channel, members) in w.local_channels() {
+        if members.is_empty() { continue; }
+        let Some(park) = w.parks.get(&system) else { continue };
+        let active: Vec<_> = park.ships.values().filter(|s| s.fight.as_ref().is_some_and(|f| f.modules.iter().any(|m| m.offensive))).collect();
+        let crowded = active.iter().any(|a| active.iter().filter(|b| (a.pos - b.pos).len() <= 200_000.0).count() >= 4);
+        if !crowded { continue; }
+        let Some(bots) = w.bot_local.get(&system) else { continue };
+        if bots.len() < 2 { continue; }
+        let lines = ["Break their lock and push in!", "That armor is folding. Stay on target!", "Someone's about to lose a ship.", "Keep talking in local. I can still hear you over the guns."];
+        let count = members.len() + bots.len();
+        for turn in 0..bots.len().min(3) {
+            let index = (clock as usize / 10 + turn) % bots.len();
+            if let Some(bot) = w.bot_roster.get(bots[index] as usize) {
+                let line = lines[(clock as usize / 10 + turn) % lines.len()];
+                chat::announce_counted(&w, &members, count, &channel, "SendMessage", &chat::bot_who(bot), vec![eve_marshal::Value::text(line)]);
             }
         }
     }

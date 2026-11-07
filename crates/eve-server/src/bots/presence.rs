@@ -460,6 +460,37 @@ impl Presence {
             }
         }
 
+        // Pilots from different corporations sharing a belt can start a fight
+        // without a formal war. Keep station and gate traffic out of this.
+        for (system, park) in w.parks.iter_mut() {
+            let in_belts: Vec<(i64, i64, i64, Vec3)> = self.shown.iter().filter_map(|(index, (at, ship_id))| {
+                if *at as i64 != *system || !matches!(bots[*index as usize].activity, Activity::Mining | Activity::Ratting) {
+                    return None;
+                }
+                let ship = park.ships.get(ship_id)?;
+                if ship.warping() || ship.npc.as_ref()?.engaged() { return None; }
+                let belt = pick(park, GROUP_BELT, bots[*index as usize].id)?;
+                ((ship.pos - belt.pos).len() < 100_000.0)
+                    .then_some((ship.id, ship.pilot.corp_id, belt.id, ship.pos))
+            }).collect();
+            let mut attacks = Vec::new();
+            for (i, (ship, corp, belt, pos)) in in_belts.iter().enumerate() {
+                if let Some((target, ..)) = in_belts.iter().skip(i + 1)
+                    .find(|(other, their_corp, their_belt, there)|
+                        other != ship && their_corp != corp && their_belt == belt && (*there - *pos).len() < 100_000.0) {
+                    attacks.push((*ship, *target));
+                }
+            }
+            for (attacker, target) in attacks {
+                if let Some(brain) = park.ships.get_mut(&attacker).and_then(|s| s.npc.as_mut()) {
+                    brain.provoked(target);
+                }
+                if let Some(brain) = park.ships.get_mut(&target).and_then(|s| s.npc.as_mut()) {
+                    brain.provoked(attacker);
+                }
+            }
+        }
+
         let (before, after) = (self.observed.len(), observed.len());
         if before != after {
             info!("bots: {after} system(s) watched, {} bot ship(s) shown", self.shown.len());

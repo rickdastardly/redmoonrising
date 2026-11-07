@@ -12,18 +12,16 @@ const CATEGORIES: &[i32] = &[4, 5, 6, 7, 8, 9, 16, 17, 18, 20, 22, 23, 24, 25];
 pub async fn ensure(db: &mut Client) -> Result<(), Error> {
     let tx = db.transaction().await?;
 
-    // A few real capital modules and Tech II charges in this data set were
-    // marked unpublished, so the market browser would hide them even after
-    // they received stock.
+    // The old catalog marks many real Tech II ships, drones and modules as
+    // unpublished. Orders alone cannot make them appear in the client. Expose
+    // every inventory item in the marketable categories, including test hulls
+    // until the special-ship catalog gets its own policy.
     let published = tx.execute(
         r#"UPDATE "invTypes" t SET "published" = 1
              FROM "invGroups" g
             WHERE g."groupID" = t."groupID" AND t."published" = 0
-              AND ((g."categoryID" = 7 AND t."typeName" ILIKE 'Capital %')
-                   OR (g."categoryID" = 8 AND EXISTS (
-                       SELECT 1 FROM "invMetaTypes" m WHERE m."typeID" = t."typeID"
-                         AND m."metaGroupID" IN (1, 2))))"#,
-        &[],
+              AND g."categoryID" = ANY($1)"#,
+        &[&CATEGORIES],
     ).await?;
 
     // Variants belong beside their Tech I parent whenever that parent has a

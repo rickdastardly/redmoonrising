@@ -8,7 +8,7 @@
 //! the kill log and mailed, in the old killmail form, to the victim and
 //! whoever landed the final blow.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use eve_marshal::Value;
 use tokio_postgres::{Client, GenericClient};
@@ -38,6 +38,19 @@ const REF_INSURANCE: i32 = 19;
 const OWNER_SYSTEM: i64 = 1;
 /// Of what was in a destroyed ship, this share survives into the can.
 const SURVIVING_SHARE: f64 = 0.5;
+
+type KillItem = (i32, i32, i32, bool); // type, slot flag, quantity, dropped
+
+pub async fn ensure_kill_items(db: &impl GenericClient) -> Result<(), tokio_postgres::Error> {
+    db.batch_execute(r#"CREATE TABLE IF NOT EXISTS "killLogItems" (
+        "killID" bigint NOT NULL REFERENCES "killLog"("killID") ON DELETE CASCADE,
+        "typeID" integer NOT NULL,
+        "flag" integer NOT NULL,
+        "quantity" integer NOT NULL,
+        "dropped" boolean NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS "killLogItems_killID_idx" ON "killLogItems"("killID");"#).await
+}
 
 /// Who hit a ship that died, and with what.
 #[derive(Debug, Clone)]
@@ -93,21 +106,37 @@ impl Loss {
 }
 
 pub async fn handle(server: &Server, db: &mut Client, loss: Loss) {
+    if let Some(bot) = loss.final_blow.filter(|id| server.world.lock().bot_index.contains_key(id)) {
+        crate::svc::chat::bot_good_fight(&server.world, loss.system, bot, "gf. That was a close one.");
+    }
     let report = report_text(db, &loss).await;
+    let contents = if loss.capsule { Vec::new() } else {
+        match db.query(r#"SELECT "itemID","typeID","flag","quantity" FROM entity WHERE "locationID"=$1 AND "itemID"<>$2"#,
+            &[&(loss.ship_id as i32), &(loss.char_id as i32)]).await {
+            Ok(rows) => rows.iter().map(|r| (r.get::<_, i32>(0), r.get::<_, i32>(1), r.get::<_, i32>(2), r.get::<_, i32>(3))).collect(),
+            Err(e) => { warn!("reading kill items: {}", crate::logging::chain(&e)); Vec::new() }
+        }
+    };
     let destroyed = if loss.capsule { podded(server, db, &loss).await } else { ship_lost(server, db, &loss).await };
-    record(server, db, &loss, report, destroyed).await;
+    let ids: Vec<i32> = contents.iter().map(|(id, _, _, _)| *id).collect();
+    let surviving: HashSet<i32> = db.query(r#"SELECT "itemID" FROM entity WHERE "itemID"=ANY($1)"#, &[&ids]).await
+        .map(|rows| rows.iter().map(|r| r.get(0)).collect()).unwrap_or_default();
+    let items = contents.into_iter().map(|(id, kind, flag, qty)| (kind, flag, qty, surviving.contains(&id))).collect();
+    record(server, db, &loss, report, destroyed, items).await;
 }
 
 /// A bot's ship destroyed: the kill log and the killmail, as for a player.
 /// The rest (a new ship, waking at home) is the bot simulation's.
 pub async fn bot_lost(server: &Server, db: &mut Client, loss: Loss) {
+    crate::svc::chat::bot_good_fight(&server.world, loss.system, loss.char_id, "gf. You caught me there.");
     let report = report_text(db, &loss).await;
     let mut destroyed = Vec::new();
     for (t, n) in &loss.items {
         let name = type_name(&*db, *t).await;
         destroyed.push(if *n > 1 { format!("{name}, Qty: {n}") } else { name });
     }
-    record(server, db, &loss, report, destroyed).await;
+    let items = loss.items.iter().map(|(kind, qty)| (*kind as i32, 5, *qty as i32, false)).collect();
+    record(server, db, &loss, report, destroyed, items).await;
 }
 
 // ---- the ship -----------------------------------------------------------------------------
@@ -521,7 +550,7 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 }
 
 /// The kill log rows, and the killmail to the victim and the final blow.
-async fn record(server: &Server, db: &mut Client, loss: &Loss, mut text: String, destroyed: Vec<String>) {
+async fn record(server: &Server, db: &mut Client, loss: &Loss, mut text: String, destroyed: Vec<String>, items: Vec<KillItem>) {
     text.push_str("\nDestroyed items:\n\n");
     for item in &destroyed {
         text.push_str(item);
@@ -553,6 +582,10 @@ async fn record(server: &Server, db: &mut Client, loss: &Loss, mut text: String,
         )
         .await?
         .get(0);
+        for (kind, flag, quantity, dropped) in &items {
+            tx.execute(r#"INSERT INTO "killLogItems" ("killID","typeID","flag","quantity","dropped") VALUES ($1,$2,$3,$4,$5)"#,
+                &[&kill_id, kind, flag, quantity, dropped]).await?;
+        }
         for a in loss.attackers.iter().filter(|a| a.who > 0) {
             let p = who(&tx, a.who).await;
             tx.execute(

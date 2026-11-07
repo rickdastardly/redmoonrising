@@ -82,7 +82,44 @@ const ORES: [&[i64]; 5] = [&[1230, 1228], &[1230, 1228, 1224], &[1224, 18, 1227]
 const COURIER_NAMES: [&str; 5] = ["Urgent Delivery", "Sealed Documents", "Parcel Run", "Supply Drop", "Special Delivery"];
 const MINING_NAMES: [&str; 3] = ["Ore Requisition", "Raw Materials", "Mineral Shortage"];
 const TRADE_NAMES: [&str; 3] = ["Supply Order", "Procurement", "Shopping List"];
-const ENCOUNTER_NAMES: [&str; 5] = ["Pirate Incursion", "Clear the Pocket", "Hunters Hunted", "Smuggler Camp", "Rogue Patrol"];
+// These names occur in 2005-06 mission reports. The bundled agtMissions
+// table is empty, so the encounters are playable reconstructions.
+#[derive(Clone, Copy)]
+struct Encounter {
+    name: &'static str,
+    first_level: usize,
+    last_level: usize,
+    waves: usize,
+}
+
+const ENCOUNTERS: &[Encounter] = &[
+    Encounter { name: "The Blockade", first_level: 1, last_level: 5, waves: 4 },
+    Encounter { name: "Gone Berserk", first_level: 2, last_level: 4, waves: 3 },
+    Encounter { name: "Pirate Invasion", first_level: 2, last_level: 5, waves: 2 },
+];
+
+fn encounter_for(name: &str) -> Option<Encounter> {
+    ENCOUNTERS.iter().copied().find(|e| e.name == name)
+}
+
+fn encounter_options(level: usize) -> Vec<Encounter> {
+    ENCOUNTERS.iter().copied().filter(|e| e.first_level <= level && level <= e.last_level).collect()
+}
+
+/// Retire the server's placeholder encounter titles without invalidating a
+/// pilot's existing offer, bookmark or progress.
+pub async fn ensure(db: &tokio_postgres::Client) -> Result<(), tokio_postgres::Error> {
+    let old = ["Pirate Incursion", "Clear the Pocket", "Hunters Hunted", "Smuggler Camp", "Rogue Patrol"];
+    let updated = db.execute(
+        r#"UPDATE "agtCharMissions" SET "name" = 'Pirate Invasion'
+            WHERE "kind" = $1 AND "state" IN (0, 2, 3) AND "name" = ANY($2)"#,
+        &[&KIND_ENCOUNTER, &old.as_slice()],
+    ).await?;
+    if updated > 0 {
+        info!("missions: restored {updated} open encounter title(s) from placeholder names");
+    }
+    Ok(())
+}
 
 // ---- the agent and the mission -----------------------------------------------------------
 
@@ -309,7 +346,7 @@ async fn objective(db: &impl GenericClient, agent: &Agent, m: &Mission) -> Strin
         KIND_MINING => format!("Bring me {} unit(s) of {what}, here at {}.", m.quantity, html(&agent.station_name)),
         KIND_TRADE => format!("I'm short of {} unit(s) of {what}. Get them to me here at {}.", m.quantity, html(&agent.station_name)),
         _ => format!(
-            "A band of pirates has set up in {}. Clear them out; the location is in your journal. Report back to me when it's done.",
+            "Pirates have established a position in {}. Clear their ships and any reinforcements; the location is in your journal. Report back when the site is secure.",
             html(&system_name(db, m.destination).await)
         ),
     }
@@ -364,7 +401,9 @@ async fn offer(ctx: &Ctx<'_>, agent: &Agent) -> Option<Mission> {
             let &(system, _) = systems.get(rng.below(systems.len().max(1)))?;
             let at = site_position(ctx.db, system, &mut rng).await;
             let reward = base * 1.3;
-            (pick(&mut rng, &ENCOUNTER_NAMES), 0, 0, system, Some(at), reward, reward * 0.4, 2.0)
+            let encounters = encounter_options(level);
+            let encounter = encounters.get(rng.below(encounters.len()))?;
+            (encounter.name, 0, 0, system, Some(at), reward, reward * 0.4, 2.0)
         }
     };
     let sql = r#"INSERT INTO "agtCharMissions" ("characterID", "agentID", "kind", "state", "name", "typeID", "quantity",
@@ -669,6 +708,9 @@ async fn bookmarks(db: &impl GenericClient, m: &Mission) -> Vec<Value> {
             ("itemID", Value::Int(item)),
             ("typeID", Value::Int(type_id)),
             ("locationID", Value::Int(system)),
+            // Navigation's mission right-click menu reads this exact legacy
+            // spelling; without it the entire right-click menu raises.
+            ("solarsystemID", Value::Int(system)),
             ("x", Value::Double(at.x)),
             ("y", Value::Double(at.y)),
             ("z", Value::Double(at.z)),
@@ -752,23 +794,37 @@ pub async fn go_to(ctx: &Ctx<'_>, number: i64, range: f64, approach: bool) -> Ou
 
 async fn open_site(ctx: &Ctx<'_>, m: &Mission, system: i64, at: Vec3) {
     let level = agent(ctx.db, m.agent_id).await.map_or(1, |a| a.level);
-    let mut w = ctx.world.lock();
-    let nearby = {
+    let empty = {
+        let mut w = ctx.world.lock();
+        let (nearby, empty) = {
         let Some(park) = w.parks.get_mut(&system) else { return };
         if park.sites.values().any(|s| s.mission_id == m.id) {
             return;
         }
+        let site_id = crate::npc::next_id();
         let site = crate::sites::Site {
-            id: crate::npc::next_id(),
+            id: site_id,
             mission_id: m.id,
             char_id: ctx.session.char_id.unwrap_or(0),
             name: m.name.clone(),
             pos: at,
             rats: Vec::new(),
+            wave: 0,
+            waves: encounter_for(&m.name).map_or(1, |e| e.waves),
+            security: ENCOUNTER_SECURITY[level - 1],
         };
-        crate::sites::open(park, site, ENCOUNTER_SECURITY[level - 1], crate::combat::now_ms())
+        let nearby = crate::sites::open(park, site, ENCOUNTER_SECURITY[level - 1], crate::combat::now_ms());
+        let empty = park.sites.get(&site_id).is_some_and(|s| s.rats.is_empty());
+        (nearby, empty)
+        };
+        crate::svc::space::notify_targeted_updates(&w, nearby);
+        empty
     };
-    crate::svc::space::notify_targeted_updates(&w, nearby);
+    if empty {
+        // A faction with no available NPC ship types must not leave the
+        // pilot with an encounter that can never be completed.
+        site_cleared(ctx.world, ctx.db, m.id, ctx.session.char_id.unwrap_or(0)).await;
+    }
 }
 
 // ---- names and amounts -----------------------------------------------------------------------

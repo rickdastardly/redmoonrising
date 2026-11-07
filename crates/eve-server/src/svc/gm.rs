@@ -10,6 +10,7 @@
 //! - /giveskill <skill> [level]: trained, straight into the character;
 //! - /giveallskills: every skill type at level 5 on your character;
 //! - /setstanding <ownerID> <standing>: an NPC's standing toward you;
+//! - /maxstandings: maximum standing from every agent, faction, NPC corporation, and alliance;
 //! - /spawn: a group of the system's rats, around your ship;
 //! - /tr me <station | system | celestial | character>;
 //! - /bots on|off|status: the bot population; /bots event <betrayal |
@@ -44,7 +45,7 @@ const ATTR_SKILL_LEVEL: i32 = 280;
 const REF_GM: i32 = 25;
 const OWNER_SYSTEM: i64 = 1;
 
-const HELP: &str = "/create <type> [qty], /giveisk <amount>, /giveskill <skill> [level], /giveallskills, /setstanding <ownerID> <standing>, /spawn, /tr me <place or pilot>, /bots on|off|status|event <kind>|war <a> | <b>|density <region> <x>|follow <name>";
+const HELP: &str = "/create <type> [qty], /giveisk <amount>, /giveskill <skill> [level], /giveallskills, /setstanding <ownerID> <standing>, /maxstandings, /spawn, /tr me <place or pilot>, /bots on|off|status|event <kind>|war <a> | <b>|density <region> <x>|follow <name>";
 
 pub async fn slash(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
     if call.method != "SlashCmd" {
@@ -65,6 +66,7 @@ pub async fn slash(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         "giveskill" => give_skill(ctx, &rest).await,
         "giveallskills" => give_all_skills(ctx, &rest).await,
         "setstanding" => set_standing(ctx, &rest).await,
+        "maxstandings" => max_standings(ctx, &rest).await,
         "spawn" => spawn(ctx),
         "tr" => teleport(ctx, &rest).await,
         "bots" => match rest.first().copied() {
@@ -296,6 +298,22 @@ async fn set_standing(ctx: &Ctx<'_>, words: &[&str]) -> Result<String, String> {
     let w = ctx.world.lock();
     w.notify(&w.clients_of(me), "OnStandingSet", Value::Tuple(vec![Value::Int(from), Value::Int(me), Value::Double(standing)]));
     Ok(format!("{from}'s standing toward you is now {standing:.2}"))
+}
+
+async fn max_standings(ctx: &Ctx<'_>, words: &[&str]) -> Result<String, String> {
+    if !words.is_empty() {
+        return Err("Usage: /maxstandings".into());
+    }
+    let me = ctx.session.char_id.ok_or("Select a character first.")? as i32;
+    let sql = r#"INSERT INTO "chrNPCStandings" ("characterID", "fromID", "standing")
+                 SELECT $1, owners.id, 10.0
+                   FROM (SELECT "agentID" AS id FROM "agtAgents"
+                         UNION SELECT "corporationID" FROM "crpNPCCorporations"
+                         UNION SELECT "factionID" FROM "chrFactions"
+                         UNION SELECT "allianceID" FROM alliances WHERE "deleted" = 0) owners
+                 ON CONFLICT ("characterID", "fromID") DO UPDATE SET "standing" = 10.0"#;
+    let count = ctx.db.execute(sql, &[&me]).await.map_err(|e| e.to_string())?;
+    Ok(format!("Maximum standing set for {count} agents, NPC corporations, factions and alliances. Log in again to refresh standings."))
 }
 
 fn spawn(ctx: &Ctx<'_>) -> Result<String, String> {

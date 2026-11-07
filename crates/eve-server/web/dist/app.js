@@ -3,6 +3,9 @@
 // game's security colours, [CORP] and <ALLIANCE> tickers, EVE time.
 const REFRESH_MS = 15000;
 const numbers = new Intl.NumberFormat("en-US");
+let killPage = 0;
+let killTotal = 0;
+let killRows = [];
 async function get(path) {
     const response = await fetch(path, { cache: "no-store" });
     if (!response.ok) {
@@ -84,6 +87,19 @@ function draw(id) {
     }
     for (const item of items) {
         const tr = body.insertRow();
+        if (id === "kills") {
+            tr.className = "selectable-kill";
+            tr.tabIndex = 0;
+            tr.setAttribute("role", "link");
+            tr.setAttribute("aria-label", `Open kill report ${item.id}`);
+            tr.addEventListener("click", () => openKill(item.id));
+            tr.addEventListener("keydown", (event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    openKill(item.id);
+                }
+            });
+        }
         for (const c of l.columns) {
             const td = tr.insertCell();
             if (c.num) {
@@ -91,6 +107,124 @@ function draw(id) {
             }
             td.append(...c.cell(item));
         }
+    }
+}
+function openKill(id) {
+    window.location.hash = `kill-${id}`;
+}
+function typeImage(typeID, variation, size) {
+    const img = document.createElement("img");
+    img.src = `https://images.evetech.net/types/${typeID}/${variation}?size=${size}`;
+    img.alt = "";
+    img.loading = "lazy";
+    img.addEventListener("error", () => { img.style.display = "none"; });
+    return img;
+}
+function card(title, ...content) {
+    const section = document.createElement("section");
+    section.className = "kill-card";
+    const heading = document.createElement("h3");
+    heading.textContent = title;
+    section.append(heading, ...content);
+    return section;
+}
+function detailLine(label, value) {
+    const row = document.createElement("div");
+    row.className = "detail-line";
+    row.append(span(label, "dim"), span(value, ""));
+    return row;
+}
+async function showKill(id) {
+    const section = document.getElementById("w-kill-detail");
+    const output = document.getElementById("kill-detail");
+    section.hidden = false;
+    output.replaceChildren(span("Loading kill report…", "dim"));
+    try {
+        const detail = await get(`/api/kill?id=${id}`);
+        if (!detail.kill) {
+            output.replaceChildren(span(detail.error ?? "Report unavailable", "hostile"));
+            return;
+        }
+        const k = detail.kill;
+        const layout = document.createElement("div");
+        layout.className = "kill-layout";
+        const main = document.createElement("div");
+        main.className = "kill-main";
+        const side = document.createElement("aside");
+        side.className = "kill-side";
+        const portrait = document.createElement("div");
+        portrait.className = "ship-portrait";
+        portrait.append(typeImage(k.shipTypeID, "render", 512));
+        const shipLabel = document.createElement("div");
+        shipLabel.className = "ship-label";
+        shipLabel.append(span(k.shipClass || "Destroyed ship", "eyebrow"), document.createElement("strong"));
+        shipLabel.querySelector("strong").textContent = k.ship;
+        portrait.append(shipLabel);
+        const fitting = document.createElement("div");
+        fitting.className = "fitting-ring";
+        for (const [i, item] of (detail.items ?? []).filter((item) => item.flag >= 11 && item.flag <= 35).slice(0, 20).entries()) {
+            const icon = document.createElement("div");
+            icon.className = "fitting-icon";
+            const angle = (i / Math.min(20, (detail.items ?? []).length)) * Math.PI * 2 - Math.PI / 2;
+            icon.style.left = `${50 + 43 * Math.cos(angle)}%`;
+            icon.style.top = `${50 + 43 * Math.sin(angle)}%`;
+            icon.title = item.name;
+            icon.append(typeImage(item.typeID, "icon", 64));
+            fitting.append(icon);
+        }
+        const fittingStage = document.createElement("div");
+        fittingStage.className = "fitting-stage";
+        fittingStage.append(portrait, fitting);
+        main.append(fittingStage);
+        if (!detail.items?.length)
+            main.append(span("Fitting and cargo were not recorded for this older killmail.", "kill-history-note"));
+        const itemTable = document.createElement("table");
+        itemTable.className = "kill-items";
+        const itemHead = itemTable.createTHead().insertRow();
+        for (const h of ["Item", "Qty", "Base value", "Status"]) {
+            const th = document.createElement("th");
+            th.textContent = h;
+            itemHead.append(th);
+        }
+        const itemBody = itemTable.createTBody();
+        for (const item of detail.items ?? []) {
+            const tr = itemBody.insertRow();
+            const name = tr.insertCell();
+            name.className = "item-name";
+            name.append(typeImage(item.typeID, "icon", 64), span(item.name, ""));
+            tr.insertCell().textContent = numbers.format(item.quantity);
+            tr.insertCell().textContent = item.unitValue > 0 ? isk(item.unitValue * item.quantity) : "—";
+            const status = tr.insertCell();
+            status.textContent = item.dropped ? "Dropped" : "Destroyed";
+            status.className = item.dropped ? "dropped" : "hostile";
+        }
+        main.append(card(`Items destroyed & dropped (${detail.items?.length ?? 0})`, itemTable));
+        const victim = document.createElement("div");
+        victim.className = "victim-name";
+        victim.append(typeImage(k.shipTypeID, "icon", 64), span(k.victim, ""));
+        side.append(card("Victim", victim, detailLine("Corporation", k.victimCorporation || "Unknown"), detailLine("Alliance", k.victimAlliance || "—")));
+        side.append(card("Kill details", detailLine("System", `${k.system} (${k.security.toFixed(1)})`), detailLine("Region", k.region), detailLine("Time", `${eveTime(k.time)} EVE`), detailLine("Total damage", numbers.format(k.damage))));
+        side.append(card("Estimated hull value", detailLine("Base price", k.hullValue > 0 ? isk(k.hullValue) : "Unavailable"), span("Historical kill values require prices that were not recorded at the time.", "dim small")));
+        const finalBlow = detail.participants?.find((p) => p.finalBlow);
+        side.append(card("Final blow", detailLine("Pilot", finalBlow?.pilot || "Unknown"), detailLine("Ship", finalBlow?.ship || "—"), detailLine("Weapon", finalBlow?.weapon || "—")));
+        const partyList = document.createElement("div");
+        partyList.className = "party-list";
+        for (const p of detail.participants ?? []) {
+            const party = document.createElement("div");
+            party.className = "party";
+            if (p.shipTypeID)
+                party.append(typeImage(p.shipTypeID, "icon", 64));
+            const names = document.createElement("div");
+            names.append(span(p.pilot, "party-name"), span([p.corporation, p.alliance].filter(Boolean).join(" · "), "dim"));
+            party.append(names, span(`${numbers.format(p.damage)}${p.finalBlow ? " · FINAL BLOW" : ""}`, p.finalBlow ? "hostile" : "dim"));
+            partyList.append(party);
+        }
+        side.append(card(`Involved parties (${detail.participants?.length ?? 0})`, partyList));
+        layout.append(main, side);
+        output.replaceChildren(layout);
+    }
+    catch (e) {
+        output.replaceChildren(span(`Could not load report: ${String(e)}`, "hostile"));
     }
 }
 const count = (n) => [numbers.format(n)];
@@ -138,7 +272,7 @@ async function refresh() {
             get("/api/systems"),
             get("/api/alliances"),
             get("/api/corporations"),
-            get("/api/kills"),
+            get(`/api/kills?page=${killPage}`),
             get("/api/news"),
             get("/api/sieges"),
         ]);
@@ -193,19 +327,38 @@ async function refresh() {
             { title: "Time", key: (n) => n.time, cell: (n) => [eveTime(n.time)] },
             { title: "Report", key: (n) => n.text, cell: (n) => [n.text] },
         ], news, "Nothing has happened in null-sec yet.", 0, true);
-        list("kills", [
-            { title: "Time", key: (k) => k.time ?? 0, cell: (k) => [eveTime(k.time)] },
-            { title: "Victim", key: (k) => k.victim ?? "", cell: (k) => [k.victim ?? "", k.victimCorporation ? span(` (${k.victimCorporation})`, "dim") : ""] },
-            { title: "Destroyed", key: (k) => k.ship ?? "", cell: (k) => [k.ship ?? "", k.pod ? span(" (pod)", "hostile") : ""] },
-            { title: "System", key: (k) => k.system ?? "", cell: (k) => [k.system ?? ""] },
-            { title: "Final blow", key: (k) => k.finalBlow ?? "", cell: (k) => [k.finalBlow ?? ""] },
-        ], kills, "No kills have been reported.", 0, true);
+        killRows = kills;
+        showKillList();
         await refreshBots();
     }
     catch (e) {
         const line = document.getElementById("statusline");
         line.textContent = `Status: unreachable, retrying (${e instanceof Error ? e.message : String(e)})`;
     }
+}
+function showKillList() {
+    const query = document.getElementById("kill-search").value.trim().toLowerCase();
+    const kills = query ? killRows.filter((k) => [k.victim, k.ship, k.system, k.finalBlow].some((s) => s?.toLowerCase().includes(query))) : killRows;
+    list("kills", [
+        { title: "Ship type", key: (k) => k.ship ?? "", cell: (k) => {
+                const cell = document.createElement("div");
+                cell.className = "kill-ship-cell";
+                if (k.shipTypeID)
+                    cell.append(typeImage(k.shipTypeID, "render", 64));
+                const labels = document.createElement("div");
+                labels.append(span(k.ship ?? "Unknown ship", "ship-name"), span(k.shipClass ?? "", "dim"));
+                cell.append(labels);
+                return [cell];
+            } },
+        { title: "Victim", key: (k) => k.victim ?? "", cell: (k) => [span(k.victim ?? "Unknown", "pilot-name"), span(k.victimCorporation ?? "", "subline")] },
+        { title: "Final blow", key: (k) => k.finalBlow ?? "", cell: (k) => [span(k.finalBlow ?? "Unknown", "pilot-name")] },
+        { title: "Location", key: (k) => k.system ?? "", cell: (k) => [k.system ?? "Unknown"] },
+        { title: "Hull base value", num: true, key: (k) => k.hullValue ?? 0, cell: (k) => [k.hullValue ? isk(k.hullValue) : "—"] },
+        { title: "Time", key: (k) => k.time ?? 0, cell: (k) => [eveTime(k.time)] },
+    ], kills, "No kills found on this page.", 5, true);
+    setText("kills-page", `Page ${killPage + 1} of ${Math.max(1, Math.ceil(killTotal / 30))}`);
+    document.getElementById("kills-prev").disabled = killPage === 0;
+    document.getElementById("kills-next").disabled = (killPage + 1) * 30 >= killTotal;
 }
 // ---- the bots' windows -------------------------------------------------------------
 let market = null;
@@ -219,7 +372,21 @@ async function refreshBots() {
         get("/api/followed"),
         get("/api/events"),
     ]);
-    setText("killboard-total", `${numbers.format(board.total)} ships destroyed in the last day`);
+    killTotal = board.total;
+    showKillList();
+    const stats = document.getElementById("killboard-stats");
+    stats.replaceChildren(...[
+        ["Total killmails", board.total], ["Kills (24h)", board.day], ["Kills (7d)", board.week], ["Pod kills", board.pods],
+    ].map(([label, value]) => {
+        const item = document.createElement("div");
+        item.className = "stat-tile";
+        item.append(span(label, "eyebrow"), span(numbers.format(value), "stat-number"));
+        return item;
+    }));
+    list("killboard-pilots", [
+        { title: "Pilot", key: (p) => p.name, cell: (p) => [p.name, corpTicker(p.corporation)] },
+        { title: "Final blows", num: true, key: (p) => p.kills, cell: (p) => count(p.kills) },
+    ], board.pilots, "No kills in the last day.", 1, true);
     list("killboard", [
         { title: "Alliance / corporation", key: (k) => k.name, cell: (k) => [k.name, allianceTicker(k.ticker), k.bots ? "" : span(" (players)", "dim")] },
         { title: "Kills", num: true, key: (k) => k.kills, cell: (k) => count(k.kills) },
@@ -382,6 +549,15 @@ function searchPilots() {
     });
 }
 document.getElementById("hub").addEventListener("change", showMarket);
+document.getElementById("kill-search").addEventListener("input", showKillList);
+document.getElementById("kills-prev").addEventListener("click", () => { if (killPage > 0) {
+    killPage--;
+    void refresh();
+} });
+document.getElementById("kills-next").addEventListener("click", () => { if ((killPage + 1) * 30 < killTotal) {
+    killPage++;
+    void refresh();
+} });
 document.getElementById("pilot-search").addEventListener("input", () => {
     clearTimeout(searchTimer);
     searchTimer = window.setTimeout(searchPilots, 250);
@@ -408,8 +584,45 @@ function tick() {
 for (const button of document.querySelectorAll(".window .min")) {
     button.addEventListener("click", () => button.closest(".window")?.classList.toggle("minimized"));
 }
+const pages = {
+    home: { title: "Command overview", description: "Live activity across New Eden.", windows: ["w-status", "w-wars", "w-pilots", "w-news"] },
+    status: { title: "Server status", description: "Connections, simulation and uptime.", windows: ["w-status"] },
+    wars: { title: "War report", description: "Active wars and losses.", windows: ["w-wars"] },
+    pilots: { title: "Pilots online", description: "Capsuleers currently connected.", windows: ["w-pilots"] },
+    systems: { title: "Busiest systems", description: "Where pilots are flying now.", windows: ["w-systems"] },
+    alliances: { title: "Alliances", description: "Coalitions and their territory.", windows: ["w-alliances"] },
+    corporations: { title: "Corporations", description: "Corporation roster and members.", windows: ["w-corporations"] },
+    sieges: { title: "Sieges", description: "Campaigns and system assaults.", windows: ["w-sieges"] },
+    news: { title: "Galactic news", description: "Recent events from across the cluster.", windows: ["w-news"] },
+    killboard: { title: "Killboard", description: "Killmails, top killers and recent destruction.", windows: ["w-killboard", "w-kills"] },
+    market: { title: "Market", description: "Trade activity and hub stock.", windows: ["w-market"] },
+    relations: { title: "Standings", description: "Bot relationships and grudges.", windows: ["w-relations"] },
+    follow: { title: "Follow a pilot", description: "Track a pilot's current activity.", windows: ["w-follow"] },
+    control: { title: "Events and controls", description: "Simulation events and commands.", windows: ["w-control"] },
+};
+function route() {
+    const hash = window.location.hash.slice(1) || "home";
+    const killID = Number(hash.match(/^kill-(\d+)$/)?.[1] ?? 0);
+    const page = killID > 0 ? { title: `Killmail #${killID}`, description: "Fitting, loss and involved pilots.", windows: ["w-kill-detail"] } : pages[hash] ?? pages.home;
+    setText("page-title", page.title);
+    setText("page-description", page.description);
+    setText("page-kicker", killID > 0 || hash === "killboard" ? "KILLBOARD / NEW EDEN" : "COMMAND CENTER / NEW EDEN");
+    document.title = `${page.title} · Red Moon Rising`;
+    for (const window of document.querySelectorAll(".desktop .window")) {
+        window.classList.toggle("page-hidden", !page.windows.includes(window.id));
+    }
+    document.getElementById("w-kill-detail").hidden = killID === 0;
+    for (const link of document.querySelectorAll(".neocom a")) {
+        link.classList.toggle("active", link.hash === (killID > 0 ? "#killboard" : `#${hash}`));
+    }
+    if (killID > 0)
+        void showKill(killID);
+    window.scrollTo(0, 0);
+}
+window.addEventListener("hashchange", route);
 tick();
 setInterval(tick, 1000);
+route();
 void refresh();
 setInterval(() => void refresh(), REFRESH_MS);
 export {};

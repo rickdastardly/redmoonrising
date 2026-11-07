@@ -84,10 +84,10 @@ fn pirates_for(faction_id: Option<i64>, solar_system_id: i64) -> &'static Pirate
     }
 }
 
-/// Ores by the lowest security they appear in: (typeID, security floor).
+/// Ores by the highest security they appear in: (typeID, security ceiling).
 const ORES: [(i64, f64); 16] = [
-    (1230, -1.0), // Veldspar
-    (1228, -1.0), // Scordite
+    (1230, 1.0),  // Veldspar
+    (1228, 1.0),  // Scordite
     (1224, 0.7),  // Pyroxeres
     (18, 0.5),    // Plagioclase
     (1227, 0.4),  // Omber
@@ -370,7 +370,7 @@ pub async fn load(db: &tokio_postgres::Client, solar_system_id: i64) -> Result<W
         list.sort_by(|a, b| a.bounty().total_cmp(&b.bounty()).then(a.type_id.cmp(&b.type_id)));
     }
 
-    let ore_ids: Vec<i32> = ORES.iter().filter(|(_, floor)| security >= *floor).map(|(id, _)| *id as i32).collect();
+    let ore_ids: Vec<i32> = ORES.iter().filter(|(_, ceiling)| security <= *ceiling).map(|(id, _)| *id as i32).collect();
     let ores = db
         .query(r#"SELECT "typeID", COALESCE("typeName", ''), COALESCE("volume", 1) FROM "invTypes" WHERE "typeID" = ANY($1)"#, &[&ore_ids])
         .await?
@@ -587,17 +587,21 @@ fn plan(security: f64, rng: &mut combat::Rng) -> Vec<Class> {
             add(Class::Destroyer, n(rng, 0, 1));
         }
         s if s > 0.0 => {
+            if s <= 0.4 {
+                add(Class::Battleship, if s <= 0.2 { n(rng, 1, 2) } else { 1 });
+            }
             add(Class::Cruiser, n(rng, 1, 2));
             add(Class::Destroyer, n(rng, 0, 2));
             add(Class::Frigate, n(rng, 1, 2));
         }
         s if s > -0.5 => {
+            add(Class::Battleship, n(rng, 2, 3));
             add(Class::Battlecruiser, n(rng, 0, 1));
             add(Class::Cruiser, n(rng, 2, 3));
             add(Class::Frigate, n(rng, 0, 2));
         }
         _ => {
-            add(Class::Battleship, n(rng, 1, 2));
+            add(Class::Battleship, n(rng, 3, 5));
             add(Class::Cruiser, n(rng, 1, 3));
         }
     }
@@ -1092,8 +1096,19 @@ fn disengage(park: &mut Park, id: i64, now: i64, out: &mut Out) {
 /// A rat died: its belt starts the clock on a new spawn once it is empty.
 pub fn killed(park: &mut Park, ship: &Ship, now: i64, out: &mut Out) {
     let Some(brain) = &ship.npc else { return };
-    if let Some((mission_id, char_id)) = crate::sites::rat_killed(park, brain.belt, ship.id) {
-        out.jobs.push(crate::heartbeat::Job::SiteCleared { mission_id, char_id });
+    if let Some(progress) = crate::sites::rat_killed(park, brain.belt, ship.id, now) {
+        match progress {
+            crate::sites::Progress::Reinforcements(ids) => {
+                for id in ids {
+                    for (client, entry) in space::add_ball_entries_for_nearby(park, id) {
+                        out.destiny_to(park.solar_system_id, client, entry);
+                    }
+                }
+            }
+            crate::sites::Progress::Cleared { mission_id, char_id } => {
+                out.jobs.push(crate::heartbeat::Job::SiteCleared { mission_id, char_id });
+            }
+        }
         return;
     }
     let Some(belt) = park.belts.iter_mut().find(|b| b.id == brain.belt) else { return };
@@ -1115,6 +1130,8 @@ mod tests {
         for _ in 0..20 {
             assert!(plan(0.9, &mut rng).iter().all(|c| *c == Class::Frigate));
             assert!(plan(-0.8, &mut rng).contains(&Class::Battleship));
+            assert!(!plan(0.41, &mut rng).contains(&Class::Battleship));
+            assert!(plan(0.4, &mut rng).contains(&Class::Battleship));
         }
     }
 

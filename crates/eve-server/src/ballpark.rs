@@ -207,7 +207,7 @@ enum WarpState {
     Aligning,
     /// On the way: `start` is the tick the warp began, `distance` from where
     /// it began to `exit`.
-    InWarp { exit: Vec3, distance: f64, start: i64 },
+    InWarp { exit: Vec3, back: Vec3, distance: f64, start: i64 },
 }
 
 #[derive(Debug, Clone)]
@@ -740,14 +740,19 @@ fn aligned(ship: &Ship) -> bool {
 /// our side of it. destiny keeps the range as a float.
 fn enter_warp(ship: &mut Ship, range: f64, now: i32) {
     let exit = ship.goal + (ship.pos - ship.goal).unit() * f64::from(range as f32);
-    ship.warp = Some(WarpState::InWarp { exit, distance: (exit - ship.pos).len(), start: i64::from(now) });
+    ship.warp = Some(WarpState::InWarp {
+        exit,
+        back: (ship.pos - exit).unit(),
+        distance: (exit - ship.pos).len(),
+        start: i64::from(now),
+    });
 }
 
 /// Step 3 for one ship: integrate it, or carry it along its warp.
 fn move_ship(ship: &mut Ship, push: Vec3, now: i32) {
     ship.prev_vel = ship.vel;
-    if let Some(WarpState::InWarp { exit, distance, start }) = ship.warp {
-        warp_along(ship, exit, distance, (i64::from(now) - start) as f64 * DT);
+    if let Some(WarpState::InWarp { exit, back, distance, start }) = ship.warp {
+        warp_along(ship, exit, back, distance, (i64::from(now) - start) as f64 * DT);
         return;
     }
     let (pos, vel) = drift(ship.pos, ship.vel, push, ship.stats.inertia(), DT);
@@ -758,11 +763,10 @@ fn move_ship(ship: &mut Ship, push: Vec3, now: i32) {
 /// Where a warp `t` seconds old has the ship (0x10017170): out along e^3t,
 /// cruise, then in along e^-(t - slowing); it drops out when slower than the
 /// ship's own top speed, still moving, and coasts to a stop.
-fn warp_along(ship: &mut Ship, exit: Vec3, distance: f64, t: f64) {
+fn warp_along(ship: &mut Ship, exit: Vec3, back: Vec3, distance: f64, t: f64) {
     let top = (ship.stats.warp_factor as f64 * WARP_FACTOR_SPEED).min(distance * WARP_DISTANCE_SPEED);
     let cruising = (top / 3.0).ln() / 3.0;
     let slowing = (3.0 * distance + top * ((top / 3.0).ln() - 2.0)) / (3.0 * top);
-    let back = (ship.pos - exit).unit();
     let (left, speed) = if t < cruising {
         let gone = (3.0 * t).exp();
         (distance - gone, 3.0 * gone)
@@ -773,9 +777,13 @@ fn warp_along(ship: &mut Ship, exit: Vec3, distance: f64, t: f64) {
         let gone = (3.0 * distance - top * x.exp()) / 3.0;
         (distance - gone, (x.exp() * top / 3.0).abs())
     };
-    ship.pos = exit + back * left;
+    // Keep the direction from warp entry. Recomputing it from the current
+    // position flips the ship around if a tick passes the exit point.
+    ship.pos = exit + back * left.clamp(0.0, distance);
     ship.vel = back * -speed;
     if t >= slowing && speed < ship.stats.max_velocity {
+        ship.pos = exit;
+        ship.vel = Vec3::ZERO;
         ship.warp = None;
         ship.command = Command::Stop;
     }
@@ -956,6 +964,19 @@ mod tests {
         let short = (target - ship.pos).len();
         let coast = 320.0 * (rifter().tau() - 1.0);
         assert!(short <= 15_000.0 + 320.0 && short >= 15_000.0 - coast, "landed {short} m short");
+    }
+
+    #[test]
+    fn warp_exit_does_not_reverse_or_leave_the_belt_grid() {
+        let mut park = park_with_ship(Vec3::ZERO);
+        let target = Vec3::new(5.0e12, 0.0, 0.0);
+        park.command(1, Command::Warp { target, range: 0.0 });
+        park.advance(400);
+        let ship = &park.ships[&1];
+        assert!(!ship.in_warp());
+        assert!((ship.pos - target).len() < 1.0, "warp landed {} m away", (ship.pos - target).len());
+        park.advance(100);
+        assert!((park.ships[&1].pos - target).len() < 1.0, "ship drifted away after landing");
     }
 
     #[test]

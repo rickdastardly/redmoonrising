@@ -191,14 +191,53 @@ async fn corporation_row(ctx: &Ctx<'_>, corp_id: i64) -> Value {
     }
 }
 
-/// The office list is fetched during the corporation service's session
-/// change. A newly founded corporation has no offices, but the client still
-/// needs an empty rowset to finish opening its corporation panel.
-async fn offices(ctx: &Ctx<'_>, corp_id: i64) -> Value {
-    const HEADER: &[&str] = &["itemID", "corporationID", "stationID", "typeID", "officeFolderID"];
+const OFFICE_LIST_HEADER: &[&str] = &["itemID", "corporationID", "stationID", "typeID", "officeFolderID"];
+const OFFICES_PROVIDER: &str = "corpOffices";
+
+async fn office_lines(ctx: &Ctx<'_>, corp_id: i64) -> Vec<(i64, Vec<Value>)> {
     let sql = r#"SELECT "itemID", "corporationID", "stationID", "typeID", "officeFolderID"
-                   FROM "crpOffices" WHERE "corporationID" = $1 ORDER BY "stationID""#;
-    ctx.rowset(HEADER, sql, &[&(corp_id as i32)]).await
+                   FROM "crpOffices" WHERE "corporationID" = $1 ORDER BY "stationID", "itemID""#;
+    ctx.query(sql, &[&(corp_id as i32)]).await.iter().map(|r| (int(r, 0).unwrap_or(0), line(r))).collect()
+}
+
+/// The corporation panel calls Fetch on this result during its session
+/// change, including when the new corporation has no rented offices.
+async fn offices(ctx: &Ctx<'_>, corp_id: i64) -> Value {
+    let count = office_lines(ctx, corp_id).await.len() as i64;
+    let provider = bound::object_ref_with(
+        ctx.node_id,
+        OFFICES_PROVIDER,
+        &[corp_id],
+        vec![("realRowCount", Value::Int(count)), ("header", crate::svc::rows::header_value(OFFICE_LIST_HEADER))],
+    );
+    Value::Instance {
+        class: Box::new(Value::bytes("util.SparseRowset")),
+        state: Box::new(Value::Tuple(vec![crate::svc::rows::header_value(OFFICE_LIST_HEADER), provider, Value::Int(count)])),
+    }
+}
+
+pub async fn offices_provider(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
+    let corp_id = bound::parse(&call.service).and_then(|b| b.params.first().copied()).unwrap_or(0);
+    if !matches!(call.method.as_str(), "Fetch" | "FetchByKey") {
+        return None;
+    }
+    if ctx.session.corp_id != Some(corp_id) {
+        return Some(Outcome::custom("That is not your corporation's office list."));
+    }
+    let lines = office_lines(ctx, corp_id).await;
+    let value = if call.method == "Fetch" {
+        let start = call.arg_i64(0).unwrap_or(0).max(0) as usize;
+        let size = call.arg_i64(1).unwrap_or(0).max(0) as usize;
+        lines.into_iter().skip(start).take(size)
+            .map(|(pk, line)| Value::Tuple(vec![Value::Int(pk), Value::List(line)]))
+            .collect()
+    } else {
+        let wanted: Vec<i64> = call.args.first().and_then(|v| v.seq()).unwrap_or(&[]).iter().filter_map(|v| v.as_i64()).collect();
+        lines.into_iter().enumerate().filter(|(_, (pk, _))| wanted.contains(pk))
+            .map(|(i, (pk, line))| Value::Tuple(vec![Value::Int(pk), Value::Int(i as i64), Value::List(line)]))
+            .collect()
+    };
+    Some(Outcome::Value(Value::List(value)))
 }
 
 async fn eve_owners(ctx: &Ctx<'_>, corp_id: i64) -> Value {

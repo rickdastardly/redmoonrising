@@ -8,6 +8,16 @@ use crate::session::CORP_ROLE_DIRECTOR;
 use crate::svc::rows::{cell, float, rowset};
 
 const OWNER_HEADER: &[&str] = &["ownerID", "ownerName", "typeID"];
+// /maxstandings stores every agent relationship for mission access. The
+// build 3913 standings window eagerly creates a row for each result; sending
+// over ten thousand untouched agents freezes it. Keep the full server data,
+// while listing only NPC organizations and agents with mission history.
+const VISIBLE_NPC_STANDINGS: &str = r#"SELECT s."fromID",s."standing" FROM "chrNPCStandings" s
+    WHERE s."characterID" = $1 AND (
+        NOT EXISTS (SELECT 1 FROM "agtAgents" a WHERE a."agentID" = s."fromID")
+        OR EXISTS (SELECT 1 FROM "agtCharMissions" m
+                    WHERE m."characterID" = $1 AND m."agentID" = s."fromID")
+    )"#;
 
 pub async fn standing(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
     let value = match call.method.as_str() {
@@ -17,15 +27,14 @@ pub async fn standing(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
             ctx.rowset(&["fromID", "toID", "standing"], sql, &[]).await
         }
         "GetMyStandings" => my_standings(ctx).await,
-        "GetStandingTransactions" => standing_transactions(),
+        "GetStandingTransactions" => standing_transactions(ctx).await,
         "GetSecurityRating" => {
             let sql = r#"SELECT "securityRating" FROM "character_" WHERE "characterID" = $1"#;
             let rating = ctx.query_one(sql, &[&(call.arg_id(0) as i32)]).await;
             Value::Double(rating.and_then(|r| float(&r, 0)).unwrap_or(0.0))
         }
         "GetNPCStandingsTo" => {
-            let sql = r#"SELECT "fromID","standing" FROM "chrNPCStandings" WHERE "characterID" = $1"#;
-            ctx.rowset(&["fromID", "standing"], sql, &[&(call.arg_id(0) as i32)]).await
+            ctx.rowset(&["fromID", "standing"], VISIBLE_NPC_STANDINGS, &[&(call.arg_id(0) as i32)]).await
         }
         "GetStandingCompositions" => {
             standing_compositions(ctx, call.arg_id(0), call.arg_id(1)).await
@@ -103,12 +112,17 @@ async fn standing_compositions(ctx: &Ctx<'_>, from_id: i64, to_id: i64) -> Value
     ctx.rowset(&["ownerID", "standing"], sql, &[&(from_id as i32), &(to_id as i32)]).await
 }
 
-fn standing_transactions() -> Value {
+async fn standing_transactions(ctx: &Ctx<'_>) -> Value {
     const HEADER: &[&str] = &[
         "eventID", "eventTypeID", "eventDateTime", "fromID", "toID", "originalFromID",
         "originalToID", "modification", "int_1", "int_2", "int_3", "msg",
     ];
-    rowset(HEADER, Vec::new())
+    let Some(character) = ctx.session.char_id else { return rowset(HEADER, Vec::new()) };
+    ctx.rowset(HEADER, r#"SELECT "eventID", "eventTypeID", "eventDateTime", "fromID", "toID",
+                             "originalFromID", "originalToID", "modification", "int_1", "int_2", "int_3", "msg"
+                        FROM "standingTransactions" WHERE "toID" = $1
+                       ORDER BY "eventDateTime" DESC, "eventID" DESC LIMIT 500"#,
+               &[&(character as i32)]).await
 }
 
 /// standingsvc.__Init unpacks (charstandings, charprime, npccharstandings,
@@ -125,7 +139,7 @@ async fn my_standings(ctx: &Ctx<'_>) -> Value {
         .await;
     let char_prime = owners_of(ctx, r#"SELECT "toID" FROM "chrStandings" WHERE "characterID" = $1"#, char_id).await;
     let npc_standings = ctx
-        .rowset(FROM_HEADER, r#"SELECT "fromID","standing" FROM "chrNPCStandings" WHERE "characterID" = $1"#, &[&char_id])
+        .rowset(FROM_HEADER, VISIBLE_NPC_STANDINGS, &[&char_id])
         .await;
     let corp_standings = ctx
         .rowset(TO_HEADER, r#"SELECT "toID","standing" FROM "ownerStandings" WHERE "fromID" = $1"#, &[&corp_id])

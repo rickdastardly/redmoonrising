@@ -388,7 +388,7 @@ pub fn set_state_entries(park: &Park, ego: i64, station_owners: &[(i64, i64)], c
 fn visible_ship_ids(park: &Park, ego: i64) -> BTreeSet<i64> {
     park.ships
         .values()
-        .filter(|ship| ship.id == ego || within_overview_range(park, ego, ship.id))
+        .filter(|ship| !crate::drones::in_transit(ship) && (ship.id == ego || within_overview_range(park, ego, ship.id)))
         .map(|ship| ship.id)
         .collect()
 }
@@ -397,7 +397,7 @@ fn within_overview_range(park: &Park, viewer: i64, target: i64) -> bool {
     park.ships
         .get(&viewer)
         .zip(park.ships.get(&target))
-        .is_some_and(|(viewer, target)| (viewer.pos - target.pos).len() <= SHIP_OVERVIEW_RANGE)
+        .is_some_and(|(viewer, target)| !crate::drones::in_transit(target) && (viewer.pos - target.pos).len() <= SHIP_OVERVIEW_RANGE)
 }
 
 fn within_overview_range_at(park: &Park, viewer: i64, at: Vec3) -> bool {
@@ -984,7 +984,9 @@ pub fn arrival_point(gate: Vec3, gate_radius: f64) -> Vec3 {
 }
 
 const UNDOCK_ALONG_MIN_COS: f64 = 0.25;
-const UNDOCK_CLEARANCE: f64 = 1_000.0;
+// The client measures undock distance from the hull's surface. Leave a
+// small gap from the station's declared collision boundary, within 0-300 m.
+const UNDOCK_CLEARANCE: f64 = 200.0;
 
 /// The undock point and push of a station: its type's dock entry, heading out
 /// along the dock orientation. The ship's centre starts beyond the entry by
@@ -1013,13 +1015,18 @@ pub async fn undock_point(ctx: &Ctx<'_>, station_id: i64, ship_radius: f64) -> O
 pub(crate) fn undock_exit(entry: Vec3, orientation: Vec3, station_radius: f64, ship_radius: f64) -> (Vec3, Vec3) {
     let heading = undock_heading(entry, orientation);
     let hull_clearance = ship_radius.max(0.0) + UNDOCK_CLEARANCE;
-    if entry == Vec3::ZERO {
-        // A missing dock entry must never put a ship at the station centre.
-        return (heading * (station_radius.max(10_000.0) + hull_clearance), heading);
-    }
-    let outward = entry.unit();
-    let radial_speed = heading.dot(outward).max(UNDOCK_ALONG_MIN_COS);
-    (entry + heading * (hull_clearance / radial_speed), heading)
+    // The dock entry is a point on the station model, not its outer bound.
+    // Solve the ray/sphere intersection so every hull clears the station's
+    // declared radius, even on large station models or oblique undock lanes.
+    let outer_radius = station_radius.max(10_000.0) + hull_clearance;
+    let forward = entry.dot(heading);
+    let discriminant = forward * forward + outer_radius * outer_radius - entry.dot(entry);
+    let distance = if discriminant > 0.0 {
+        (-forward + discriminant.sqrt()).max(0.0)
+    } else {
+        0.0
+    };
+    (entry + heading * distance, heading)
 }
 
 /// See `undock_point`: the orientation if it leads away from the station,
@@ -1135,7 +1142,7 @@ mod tests {
     }
 
     #[test]
-    fn an_undocking_ship_clears_the_dock_entry() {
+    fn an_undocking_ship_clears_every_station_radius() {
         for (entry, orientation) in [
             (Vec3::new(6765.0, 938.0, 0.0), Vec3::new(6947.0, -2257.0, 0.0)),
             (Vec3::new(1_000.0, 0.0, 0.0), Vec3::new(1.0, 2.0, 0.0)),
@@ -1143,8 +1150,8 @@ mod tests {
             (Vec3::new(0.0, -198.0, 4800.0), Vec3::new(0.0, -4967.0, 0.0)),
         ] {
             let (at, heading) = undock_exit(entry, orientation, 30_000.0, 1_650.0);
-            let radial_clearance = (at - entry).dot(entry.unit());
-            assert!((radial_clearance - (1_650.0 + UNDOCK_CLEARANCE)).abs() < 1e-6);
+            assert!((at.len() - (30_000.0 + 1_650.0 + UNDOCK_CLEARANCE)).abs() < 1e-6);
+            assert!((at - entry).dot(heading) >= 0.0);
             assert!(heading.dot(entry.unit()) > 0.0);
         }
     }

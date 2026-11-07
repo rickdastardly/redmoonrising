@@ -23,6 +23,7 @@ const PULSE_MS: u64 = 250;
 /// Pulses between looks at slow corporate business (alliance applications
 /// coming due): once a minute.
 const AFFAIRS_EVERY: u64 = 60_000 / PULSE_MS;
+const SECURITY_EVERY: u64 = 20 * 60_000 / PULSE_MS;
 const FLAG_CARGO: i64 = 5;
 /// market_refTypes: "Bounty Prize".
 const REF_BOUNTY_PRIZE: i32 = 17;
@@ -132,6 +133,8 @@ pub enum Job {
     DroneHome { client_id: i64, drone_id: i64, ship_id: i64 },
     /// A drone was destroyed.
     DroneLost { client_id: Option<i64>, drone_id: i64 },
+    /// A fighter reached the grid it followed its target to.
+    DronePosition { drone_id: i64, pos: Vec3 },
     /// The last rat of a mission site died.
     SiteCleared { mission_id: i64, char_id: i64 },
     /// A crime, or a kill, changed a pilot's security status by this much.
@@ -159,6 +162,9 @@ pub async fn run(server: Arc<Server>) {
         }
     };
     crate::svc::pvptrade::recover(&db).await;
+    if let Err(e) = ensure_security_history(&db).await {
+        error!("security history setup: {}", crate::logging::chain(&e));
+    }
     info!("heartbeat every {PULSE_MS} ms");
     let mut interval = tokio::time::interval(Duration::from_millis(PULSE_MS));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -179,6 +185,11 @@ pub async fn run(server: Arc<Server>) {
             crate::guard::reload(&server.world, &db).await;
             crate::guard::refresh_standings(&db).await;
         }
+        if pulses % SECURITY_EVERY == 1 {
+            if let Err(e) = apply_security_tick(&mut db).await {
+                error!("security status tick: {}", crate::logging::chain(&e));
+            }
+        }
     }
 }
 
@@ -197,13 +208,16 @@ fn pulse(world: &World, now: i64) -> Vec<Job> {
         park.advance(tick);
         let entered_warp = std::mem::take(&mut park.entered_warp);
         for ship_id in entered_warp {
-            if !park.ships.get(&ship_id).is_some_and(|ship| ship.in_warp()) {
-                continue;
-            }
             let effect = space::warp_fx(park.tick, ship_id, true);
-            for client in space::ship_viewers(park, ship_id) {
+            let mut viewers = space::ship_viewers(park, ship_id);
+            if let Some(ship) = park.ships.get(&ship_id).filter(|ship| ship.is_player()) {
+                if !viewers.contains(&ship.client_id) { viewers.push(ship.client_id); }
+                info!("player warp entry: ship {ship_id} at {:?}, {:?}, {} viewer(s)", ship.pos, ship.command, viewers.len());
+            }
+            for client in viewers {
                 out.destiny_to(park.solar_system_id, client, effect.clone());
             }
+            crate::drones::on_warp_entered(park, ship_id, now, &mut out);
         }
         let landed = std::mem::take(&mut park.landed);
         for ship_id in landed {
@@ -211,13 +225,23 @@ fn pulse(world: &World, now: i64) -> Vec<Job> {
                 continue;
             }
             let effect = space::warp_fx(park.tick, ship_id, false);
-            for client in space::ship_viewers(park, ship_id) {
+            let mut viewers = space::ship_viewers(park, ship_id);
+            if let Some(ship) = park.ships.get(&ship_id).filter(|ship| ship.is_player()) {
+                if !viewers.contains(&ship.client_id) { viewers.push(ship.client_id); }
+                let nearest = park.belts.iter().map(|belt| (belt.id, (ship.pos - belt.pos).len()))
+                    .min_by(|a, b| a.1.total_cmp(&b.1));
+                let rocks = park.rocks.values().filter(|rock| (ship.pos - rock.pos).len() <= 1_000_000.0).count();
+                info!("player warp landing: ship {ship_id} at {:?}, nearest belt {nearest:?}, {rocks} nearby asteroid(s), {} viewer(s)", ship.pos, viewers.len());
+            }
+            for client in viewers {
                 out.destiny_to(park.solar_system_id, client, effect.clone());
             }
             for (client, entry) in space::landed_ship_entries(park, ship_id) {
                 out.destiny_to(park.solar_system_id, client, entry);
             }
+            crate::drones::on_warp_landed(park, ship_id, now);
         }
+        crate::drones::arrive_following_fighters(park, now, &mut out);
         crate::fight::step(park, now, &mut out);
         for (client, entry) in space::sync_ship_visibility(park) {
             out.destiny_to(park.solar_system_id, client, entry);
@@ -237,7 +261,7 @@ async fn perform(server: &Server, db: &mut Client, job: Job) {
         }
         Job::Bounty { client_id, char_id, amount, npc_type, security } => {
             bounty(server, db, client_id, char_id, amount, npc_type).await;
-            raise_security(db, char_id, security).await;
+            queue_security(db, char_id, npc_type, security).await;
         }
         Job::Refit { client_id, char_id, ship_id, system } => {
             inflight::refit(db, &server.dogma, &server.world, client_id, char_id, ship_id, system).await
@@ -248,6 +272,12 @@ async fn perform(server: &Server, db: &mut Client, job: Job) {
         Job::Scrap { can_id } => crate::loot::scrap(db, can_id).await,
         Job::DroneHome { client_id, drone_id, ship_id } => crate::drones::home(server, db, client_id, drone_id, ship_id).await,
         Job::DroneLost { client_id, drone_id } => crate::drones::lost(server, db, client_id, drone_id).await,
+        Job::DronePosition { drone_id, pos } => {
+            if let Err(e) = db.execute(r#"UPDATE "entity" SET "x"=$2,"y"=$3,"z"=$4 WHERE "itemID"=$1"#,
+                &[&(drone_id as i32), &pos.x, &pos.y, &pos.z]).await {
+                warn!("saving fighter {drone_id} position: {}", crate::logging::chain(&e));
+            }
+        }
         Job::Security { char_id, delta } => change_security(db, char_id, delta).await,
         Job::SiteCleared { mission_id, char_id } => crate::svc::agent_missions::site_cleared(&server.world, db, mission_id, char_id).await,
         Job::Structure { id, state, stamp, tower } => save_structure(db, id, state, stamp, tower).await,
@@ -344,18 +374,48 @@ async fn bounty(server: &Server, db: &mut Client, client_id: Option<i64>, char_i
     }
 }
 
-/// A pirate killed: security status rises by a share of the way to 10, but
-/// no killing of that rat raises it past its maximum.
-async fn raise_security(db: &mut Client, char_id: i64, (bonus, max_gain): (f64, f64)) {
+async fn ensure_security_history(db: &Client) -> Result<(), tokio_postgres::Error> {
+    db.execute(r#"CREATE TABLE IF NOT EXISTS "securityPending" (
+        "eventID" bigserial PRIMARY KEY, "characterID" integer NOT NULL,
+        "npcTypeID" integer NOT NULL, "bonus" float8 NOT NULL, "killedAt" bigint NOT NULL)"#, &[]).await?;
+    db.execute(r#"CREATE SEQUENCE IF NOT EXISTS "standingTransactions_eventID_seq""#, &[]).await?;
+    db.query_one(r#"SELECT setval('"standingTransactions_eventID_seq"',
+        GREATEST((SELECT COALESCE(MAX("eventID"), 0) FROM "standingTransactions"), 1))"#, &[]).await?;
+    Ok(())
+}
+
+/// Queue every pirate kill so the 20-minute tick includes all of them.
+async fn queue_security(db: &Client, char_id: i64, npc_type: i64, (bonus, _): (f64, f64)) {
     if bonus <= 0.0 {
         return;
     }
-    let sql = r#"UPDATE "character_"
-                    SET "securityRating" = LEAST($3, "securityRating" + (10 - "securityRating") * $2)
-                  WHERE "characterID" = $1 AND "securityRating" < $3"#;
-    if let Err(e) = db.execute(sql, &[&(char_id as i32), &bonus, &max_gain]).await {
-        error!("raising the security status of {char_id}: {}", crate::logging::chain(&e));
+    let sql = r#"INSERT INTO "securityPending" ("characterID", "npcTypeID", "bonus", "killedAt") VALUES ($1,$2,$3,$4)"#;
+    if let Err(e) = db.execute(sql, &[&(char_id as i32), &(npc_type as i32), &bonus, &crate::bulkdata::filetime_now()]).await {
+        error!("queuing security gain for {char_id}: {}", crate::logging::chain(&e));
     }
+}
+
+async fn apply_security_tick(db: &mut Client) -> Result<(), tokio_postgres::Error> {
+    let tx = db.transaction().await?;
+    let pending = tx.query(r#"SELECT "eventID", "characterID", "npcTypeID", "bonus", "killedAt"
+                              FROM "securityPending" ORDER BY "eventID" FOR UPDATE"#, &[]).await?;
+    for kill in pending {
+        let (id, character, npc, bonus, killed_at): (i64, i32, i32, f64, i64) =
+            (kill.get(0), kill.get(1), kill.get(2), kill.get(3), kill.get(4));
+        let changed = tx.query_opt(r#"UPDATE "character_" SET "securityRating" =
+                 LEAST(10.0, "securityRating" + (10.0 - "securityRating") * $2)
+                 WHERE "characterID" = $1 RETURNING "securityRating""#, &[&character, &bonus]).await?;
+        if changed.is_some() {
+            tx.execute(r#"INSERT INTO "standingTransactions"
+                ("eventID", "eventTypeID", "eventDateTime", "fromID", "toID",
+                 "originalFromID", "originalToID", "modification", "int_1", "msg")
+                VALUES (nextval('"standingTransactions_eventID_seq"'), 89, $1, $2, $3,
+                        $2, $3, $4, $5, 'Pirate ship destroyed')"#,
+                &[&killed_at, &(OWNER_CONCORD as i32), &character, &bonus, &npc]).await?;
+        }
+        tx.execute(r#"DELETE FROM "securityPending" WHERE "eventID" = $1"#, &[&id]).await?;
+    }
+    tx.commit().await
 }
 
 async fn save_structure(db: &mut Client, id: i64, state: i16, stamp: Option<i64>, tower: Option<i64>) {
