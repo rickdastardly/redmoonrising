@@ -13,6 +13,61 @@ async function get(path) {
     }
     return (await response.json());
 }
+const STAFF_ROLES = ["Player", "ISD", "ISD BH", "BH", "GM", "CCP"];
+async function refreshUsers() {
+    const reply = document.getElementById("users-reply");
+    try {
+        const accounts = await get("/api/users");
+        list("users", [
+            { title: "Account", key: (a) => a.name.toLowerCase(), cell: (a) => [a.name, a.banned ? span(" (banned)", "hostile") : ""] },
+            { title: "Chat colour", key: (a) => a.staffRole, cell: (a) => [span(a.staffRole, `staff-${a.staffRole.toLowerCase().replace(/\s/g, "-")}`)] },
+            { title: "Role", key: (a) => a.staffRole, cell: (a) => {
+                    const select = document.createElement("select");
+                    select.setAttribute("aria-label", `Role for ${a.name}`);
+                    for (const name of STAFF_ROLES) {
+                        const option = document.createElement("option");
+                        option.value = name;
+                        option.textContent = name;
+                        select.append(option);
+                    }
+                    select.value = a.staffRole;
+                    select.addEventListener("change", () => void saveUserRole(a, select));
+                    return [select];
+                } },
+        ], accounts, "No player accounts found.");
+        reply.textContent = `${accounts.length} accounts. Changes take effect after the player logs in again.`;
+        reply.className = "note";
+    }
+    catch (e) {
+        reply.textContent = e instanceof Error && e.message.includes("403")
+            ? "Account management is available only on the server machine."
+            : `Could not load accounts: ${String(e)}`;
+        reply.className = "note hostile";
+    }
+}
+async function saveUserRole(account, select) {
+    const reply = document.getElementById("users-reply");
+    select.disabled = true;
+    try {
+        const response = await fetch(`/api/users/role?id=${account.id}&role=${encodeURIComponent(select.value)}`, {
+            method: "POST", headers: { "X-RMR-Admin": "1" }, cache: "no-store",
+        });
+        const answer = (await response.json());
+        if (!response.ok)
+            throw new Error(answer.error ?? `HTTP ${response.status}`);
+        await refreshUsers();
+        reply.textContent = answer.ok ?? "Role saved.";
+        reply.className = "note";
+    }
+    catch (e) {
+        select.value = account.staffRole;
+        reply.textContent = `Could not change role: ${String(e)}`;
+        reply.className = "note hostile";
+    }
+    finally {
+        select.disabled = false;
+    }
+}
 function span(text, className) {
     const e = document.createElement("span");
     e.textContent = text;
@@ -549,6 +604,7 @@ function searchPilots() {
     });
 }
 document.getElementById("hub").addEventListener("change", showMarket);
+document.getElementById("users-refresh").addEventListener("click", () => void refreshUsers());
 document.getElementById("kill-search").addEventListener("input", showKillList);
 document.getElementById("kills-prev").addEventListener("click", () => { if (killPage > 0) {
     killPage--;
@@ -599,6 +655,7 @@ const pages = {
     relations: { title: "Standings", description: "Bot relationships and grudges.", windows: ["w-relations"] },
     follow: { title: "Follow a pilot", description: "Track a pilot's current activity.", windows: ["w-follow"] },
     control: { title: "Events and controls", description: "Simulation events and commands.", windows: ["w-control"] },
+    users: { title: "User accounts", description: "Account roles and in-game staff colours.", windows: ["w-users"] },
 };
 function route() {
     const hash = window.location.hash.slice(1) || "home";
@@ -617,6 +674,8 @@ function route() {
     }
     if (killID > 0)
         void showKill(killID);
+    if (hash === "users")
+        void refreshUsers();
     window.scrollTo(0, 0);
 }
 window.addEventListener("hashchange", route);

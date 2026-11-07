@@ -5,10 +5,8 @@
 //! pilots being followed and politics' upheavals. `RMR_WEB` is where it
 //! listens (empty: off).
 //!
-//! It answers GET, and closes each connection after its answer: a dashboard
-//! polling every few seconds needs no more. The one thing it changes is the
-//! bots (POST /api/control, with the request in `do`), and only when
-//! `bots.dashboardControls` allows it.
+//! It closes each connection after its answer. Bot controls and account role
+//! edits use POST; account management is available only from loopback.
 //!
 //! The page is TypeScript (web/src/app.ts), compiled to web/dist/app.js with
 //! `npm run build` in crates/eve-server/web; the compiled file is part of the
@@ -63,6 +61,7 @@ pub async fn run(server: Arc<Server>, bind: String) {
 }
 
 async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
+    let local = stream.peer_addr()?.ip().is_loopback();
     let mut buf = Vec::with_capacity(1024);
     let mut chunk = [0u8; 1024];
     while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
@@ -79,6 +78,50 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
     let mut parts = head.lines().next().unwrap_or("").split_whitespace();
     let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
     let path = target.split('?').next().unwrap_or("/");
+    if path == "/api/users" || path == "/api/users/role" {
+        let host = header(&head, "Host").unwrap_or("");
+        if !local || !local_host(host, stream.local_addr()?.port()) {
+            return respond(&mut stream, 403, "application/json", br#"{"error":"Account management is available only on the server machine."}"#).await;
+        }
+        if method == "POST" && path == "/api/users/role" {
+            // A custom header blocks cross-origin form posts; the browser's
+            // Origin must also match this dashboard's Host when it sends one.
+            let origin = header(&head, "Origin");
+            if header(&head, "X-RMR-Admin") != Some("1") ||
+                origin != Some(format!("http://{host}").as_str()) {
+                return respond(&mut stream, 403, "application/json", br#"{"error":"Invalid dashboard request."}"#).await;
+            }
+            let query = target.split_once('?').map_or("", |(_, q)| q);
+            let id = query.split('&').find_map(|kv| kv.strip_prefix("id=")).and_then(|s| s.parse::<i32>().ok());
+            let role = query.split('&').find_map(|kv| kv.strip_prefix("role=")).map(decode);
+            let (Some(id), Some(role)) = (id, role) else {
+                return respond(&mut stream, 400, "application/json", br#"{"error":"Account ID and role are required."}"#).await;
+            };
+            let Some(bits) = crate::config::staff_role(&role) else {
+                return respond(&mut stream, 400, "application/json", br#"{"error":"Unknown staff role."}"#).await;
+            };
+            let mask = !crate::config::STAFF_ROLE_BITS;
+            let result = server.db.query_opt(
+                r#"UPDATE "account" SET "role" = ("role" & $2) | $3 WHERE "accountID" = $1 RETURNING "accountName", "role""#,
+                &[&id, &mask, &bits],
+            ).await;
+            let (status, body) = match result {
+                Ok(Some(row)) => {
+                    info!(account = %row.get::<_, String>(0), role = %role, "dashboard account role changed");
+                    (200, json!({"ok": format!("{} is now {}. Relog in EVE to apply the role.", row.get::<_, String>(0), role)}))
+                }
+                Ok(None) => (404, json!({"error": "Account not found."})),
+                Err(e) => {
+                    warn!("dashboard role change: {}", crate::logging::chain(&e));
+                    (500, json!({"error": "Database error."}))
+                }
+            };
+            return respond(&mut stream, status, "application/json", body.to_string().as_bytes()).await;
+        }
+        if method != "GET" || path != "/api/users" {
+            return respond(&mut stream, 405, "text/plain", b"Method not allowed").await;
+        }
+    }
     if method == "POST" && path == "/api/control" {
         let query = target.split_once('?').map_or("", |(_, q)| q);
         let asked = query.split('&').find_map(|kv| kv.strip_prefix("do=")).map(decode).unwrap_or_default();
@@ -107,6 +150,7 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
                 "/api/sieges" => Some(sieges(server)),
                 "/api/wars" => Some(wars(server).await),
                 "/api/players" => Some(players(server).await),
+                "/api/users" => Some(users(server).await),
                 "/api/alliances" => Some(alliances(server).await),
                 "/api/corporations" => Some(corporations(server).await),
                 "/api/systems" => Some(systems(server).await),
@@ -143,6 +187,19 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
         }
         _ => respond(&mut stream, 404, "text/plain", b"Not found").await,
     }
+}
+
+fn header<'a>(head: &'a str, key: &str) -> Option<&'a str> {
+    head.lines().skip(1).take_while(|line| !line.trim().is_empty()).find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.trim().eq_ignore_ascii_case(key).then_some(value.trim())
+    })
+}
+
+fn local_host(host: &str, port: u16) -> bool {
+    host == format!("127.0.0.1:{port}") ||
+        host == format!("localhost:{port}") ||
+        host == format!("[::1]:{port}")
 }
 
 async fn respond(stream: &mut TcpStream, status: u16, kind: &str, body: &[u8]) -> std::io::Result<()> {
@@ -194,6 +251,20 @@ fn ms(column: &str) -> String {
 }
 
 type Answer = Result<Json, tokio_postgres::Error>;
+
+async fn users(server: &Server) -> Answer {
+    let found = server.db.query(
+        r#"SELECT "accountID" AS id, "accountName" AS name, "role", "banned" FROM "account" ORDER BY "accountName" LIMIT 2000"#,
+        &[],
+    ).await?;
+    let mut list = rows(&found);
+    if let Json::Array(accounts) = &mut list {
+        for (item, row) in accounts.iter_mut().zip(found.iter()) {
+            item["staffRole"] = json!(crate::config::staff_role_name(row.get::<_, i64>(2)));
+        }
+    }
+    Ok(list)
+}
 
 async fn summary(server: &Server) -> Answer {
     let held: i64 = server.db.query_one(r#"SELECT count(*) FROM "mapSolarSystems" WHERE "allianceID" IS NOT NULL"#, &[]).await?.get(0);
@@ -509,4 +580,22 @@ async fn kills(server: &Server, page: i64) -> Answer {
         time = ms(r#"k."killTime""#)
     );
     Ok(rows(&server.db.query(sql.as_str(), &[&(page * 30)]).await?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{header, local_host};
+
+    #[test]
+    fn account_controls_accept_only_literal_loopback_hosts() {
+        assert!(local_host("127.0.0.1:18080", 18080));
+        assert!(local_host("localhost:18080", 18080));
+        assert!(!local_host("evil.example:18080", 18080));
+        assert!(!local_host("127.0.0.1:8080", 18080));
+    }
+
+    #[test]
+    fn dashboard_header_matching_is_case_insensitive() {
+        assert_eq!(header("POST / HTTP/1.1\r\nhOsT: 127.0.0.1:18080\r\nx-rmr-admin: 1\r\n\r\n", "X-RMR-Admin"), Some("1"));
+    }
 }

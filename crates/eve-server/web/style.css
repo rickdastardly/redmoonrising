@@ -361,6 +361,13 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid #7cc4ff; ou
 .page-heading h2 { margin: 3px 0; font-size: clamp(24px, 3vw, 36px); font-weight: 650; letter-spacing: -.04em; }
 .page-heading p:last-child { margin: 0; color: var(--dim); }
 .neocom a.active { color: #ffd193; background: #e0a65b21; box-shadow: inset 3px 0 #e5ab65; }
+.staff-player { color: #c8d1dc; }
+.staff-isd { color: #00ffcc; font-weight: 700; }
+.staff-isd-bh { color: #00ff00; font-weight: 700; }
+.staff-bh { color: #ffff20; font-weight: 700; }
+.staff-gm { color: #ee6666; font-weight: 700; }
+.staff-ccp { color: #0099ff; font-weight: 700; }
+#w-users select { min-width: 130px; }
 .desktop .window:not(.page-hidden) .body { max-height: none; overflow: visible; padding: 18px; }
 #w-killboard:not(.page-hidden) .body { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr); gap: 10px 26px; }
 #w-killboard { order: -1; }

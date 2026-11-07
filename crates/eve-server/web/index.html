@@ -24,6 +24,7 @@
     <a href="#relations" title="Standings">STD</a>
     <a href="#follow" title="Follow a Pilot">FOL</a>
     <a href="#control" title="Events and Controls">CTL</a>
+    <a href="#users" title="User Accounts">USR</a>
     <div class="clock" title="EVE time (UTC)"><span id="clock-time">--:--</span><span id="clock-date"></span></div>
   </nav>
 
@@ -150,6 +151,15 @@
         <p class="note" id="control-reply"></p>
         <table id="raids"></table>
         <table id="events"></table>
+      </div>
+    </section>
+
+    <section class="window wide" id="w-users">
+      <header class="caption"><span class="glyph"></span><h2>User Accounts</h2><button id="users-refresh" type="button">Refresh</button></header>
+      <div class="body">
+        <p class="note">Manage account roles from the server machine. Players receive the new role when they log in again.</p>
+        <p class="note" id="users-reply" role="status"></p>
+        <table id="users"></table>
       </div>
     </section>
   </main>

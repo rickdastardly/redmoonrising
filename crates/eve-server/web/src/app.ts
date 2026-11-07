@@ -35,6 +35,14 @@ interface Player {
   docked?: boolean;
 }
 
+interface UserAccount {
+  id: number;
+  name: string;
+  role: number;
+  staffRole: string;
+  banned: number;
+}
+
 interface SystemRow {
   name: string;
   security: number;
@@ -181,6 +189,60 @@ async function get<T>(path: string): Promise<T> {
     throw new Error(`${path}: ${response.status}`);
   }
   return (await response.json()) as T;
+}
+
+const STAFF_ROLES = ["Player", "ISD", "ISD BH", "BH", "GM", "CCP"];
+
+async function refreshUsers(): Promise<void> {
+  const reply = document.getElementById("users-reply") as HTMLElement;
+  try {
+    const accounts = await get<UserAccount[]>("/api/users");
+    list<UserAccount>("users", [
+      { title: "Account", key: (a) => a.name.toLowerCase(), cell: (a) => [a.name, a.banned ? span(" (banned)", "hostile") : ""] },
+      { title: "Chat colour", key: (a) => a.staffRole, cell: (a) => [span(a.staffRole, `staff-${a.staffRole.toLowerCase().replace(/\s/g, "-")}`)] },
+      { title: "Role", key: (a) => a.staffRole, cell: (a) => {
+        const select = document.createElement("select");
+        select.setAttribute("aria-label", `Role for ${a.name}`);
+        for (const name of STAFF_ROLES) {
+          const option = document.createElement("option");
+          option.value = name;
+          option.textContent = name;
+          select.append(option);
+        }
+        select.value = a.staffRole;
+        select.addEventListener("change", () => void saveUserRole(a, select));
+        return [select];
+      } },
+    ], accounts, "No player accounts found.");
+    reply.textContent = `${accounts.length} accounts. Changes take effect after the player logs in again.`;
+    reply.className = "note";
+  } catch (e) {
+    reply.textContent = e instanceof Error && e.message.includes("403")
+      ? "Account management is available only on the server machine."
+      : `Could not load accounts: ${String(e)}`;
+    reply.className = "note hostile";
+  }
+}
+
+async function saveUserRole(account: UserAccount, select: HTMLSelectElement): Promise<void> {
+  const reply = document.getElementById("users-reply") as HTMLElement;
+  select.disabled = true;
+  try {
+    const response = await fetch(`/api/users/role?id=${account.id}&role=${encodeURIComponent(select.value)}`, {
+      method: "POST", headers: { "X-RMR-Admin": "1" }, cache: "no-store",
+    });
+    const answer = (await response.json()) as { ok?: string; error?: string };
+    if (!response.ok) throw new Error(answer.error ?? `HTTP ${response.status}`);
+    await refreshUsers();
+    reply.textContent = answer.ok ?? "Role saved.";
+    reply.className = "note";
+  } catch (e) {
+    select.value = account.staffRole;
+    reply.textContent = `Could not change role: ${String(e)}`;
+    reply.className = "note hostile";
+  } finally {
+    select.disabled = false;
+  }
 }
 
 function span(text: string, className: string): HTMLElement {
@@ -752,6 +814,7 @@ function searchPilots(): void {
 }
 
 (document.getElementById("hub") as HTMLSelectElement).addEventListener("change", showMarket);
+(document.getElementById("users-refresh") as HTMLButtonElement).addEventListener("click", () => void refreshUsers());
 (document.getElementById("kill-search") as HTMLInputElement).addEventListener("input", showKillList);
 (document.getElementById("kills-prev") as HTMLButtonElement).addEventListener("click", () => { if (killPage > 0) { killPage--; void refresh(); } });
 (document.getElementById("kills-next") as HTMLButtonElement).addEventListener("click", () => { if ((killPage + 1) * 30 < killTotal) { killPage++; void refresh(); } });
@@ -800,6 +863,7 @@ const pages: Record<string, { title: string; description: string; windows: strin
   relations: { title: "Standings", description: "Bot relationships and grudges.", windows: ["w-relations"] },
   follow: { title: "Follow a pilot", description: "Track a pilot's current activity.", windows: ["w-follow"] },
   control: { title: "Events and controls", description: "Simulation events and commands.", windows: ["w-control"] },
+  users: { title: "User accounts", description: "Account roles and in-game staff colours.", windows: ["w-users"] },
 };
 
 function route(): void {
@@ -818,6 +882,7 @@ function route(): void {
     link.classList.toggle("active", link.hash === (killID > 0 ? "#killboard" : `#${hash}`));
   }
   if (killID > 0) void showKill(killID);
+  if (hash === "users") void refreshUsers();
   window.scrollTo(0, 0);
 }
 window.addEventListener("hashchange", route);

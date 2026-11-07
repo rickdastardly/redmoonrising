@@ -8,6 +8,32 @@ use serde::Deserialize;
 /// ROLE_LEGIONEER, which between them open slash commands and petitions.
 pub const GM_ROLES: i64 = 8 | 16 | 256 | 262_144;
 
+/// Staff role bits used by the Blood-era client's chat colour picker.
+/// Its priority is QA (blue), GMH (red), GML (yellow), Centurion (green),
+/// Legionnaire (cyan). A plain account has none of these bits.
+pub const STAFF_ROLE_BITS: i64 = GM_ROLES | 2_048 | 8_192 | 32;
+
+pub fn staff_role(name: &str) -> Option<i64> {
+    match name {
+        "Player" => Some(0),
+        "ISD" => Some(262_144),
+        "ISD BH" => Some(2_048),
+        "BH" => Some(8),
+        "GM" => Some(GM_ROLES),
+        "CCP" => Some(GM_ROLES | 8_192 | 32),
+        _ => None,
+    }
+}
+
+pub fn staff_role_name(role: i64) -> &'static str {
+    if role & 8_192 != 0 { "CCP" }
+    else if role & 16 != 0 { "GM" }
+    else if role & 8 != 0 { "BH" }
+    else if role & 2_048 != 0 { "ISD BH" }
+    else if role & 262_144 != 0 { "ISD" }
+    else { "Player" }
+}
+
 /// Server settings: from the YAML config file (`RMR_CONFIG`, else
 /// `rmr.yml` in the working directory), with any `RMR_*` environment
 /// variable taking precedence over the file.
@@ -333,6 +359,17 @@ pub fn auto_create_accounts() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dashboard_staff_roles_have_distinct_native_chat_colours() {
+        let names = ["Player", "ISD", "ISD BH", "BH", "GM", "CCP"];
+        let roles: Vec<i64> = names.iter().map(|name| staff_role(name).unwrap()).collect();
+        for (name, role) in names.iter().zip(&roles) {
+            assert_eq!(staff_role_name(*role), *name);
+        }
+        assert_eq!(roles.len(), roles.iter().collect::<std::collections::HashSet<_>>().len());
+        assert!(staff_role("Owner").is_none());
+    }
 
     fn with_db(url: &str) -> Config {
         Config {

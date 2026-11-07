@@ -67,8 +67,9 @@ async fn create_account(db: &Client, username: &str, password: &str) -> Result<A
     Ok(Account { account_id: row.get::<_, i32>(0) as i64, name: username.to_string(), role: 0 })
 }
 
-/// Makes the config file's accounts, or brings them into line with it:
-/// password, GM roles and ban. Returns their accountIDs, in the file's order.
+/// Makes the config file's accounts, or refreshes their passwords and bans.
+/// Existing roles stay in the database so dashboard changes survive restart.
+/// Returns their accountIDs, in the file's order.
 pub async fn sync_accounts(db: &Client, accounts: &[crate::config::Account]) -> Result<Vec<i64>, tokio_postgres::Error> {
     let now = crate::bulkdata::filetime_now();
     // Accounts once made with IDs of their own leave the sequence behind.
@@ -80,7 +81,7 @@ pub async fn sync_accounts(db: &Client, accounts: &[crate::config::Account]) -> 
         let row = db
             .query_one(
                 r#"INSERT INTO "account" ("accountName", "password", "role", "banned", "createdAt") VALUES ($1, $2, $3, $4, $5)
-                   ON CONFLICT ("accountName") DO UPDATE SET "password" = $2, "passwordAlgo" = 'plain', "role" = $3, "banned" = $4
+                   ON CONFLICT ("accountName") DO UPDATE SET "password" = $2, "passwordAlgo" = 'plain', "banned" = $4
                    RETURNING "accountID""#,
                 &[&a.username, &a.password, &a.role(), &banned, &now],
             )
