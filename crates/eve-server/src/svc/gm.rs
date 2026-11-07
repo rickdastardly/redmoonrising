@@ -10,7 +10,7 @@
 //! - /giveskill <skill> [level]: trained, straight into the character;
 //! - /giveallskills: every skill type at level 5 on your character;
 //! - /setstanding <ownerID> <standing>: an NPC's standing toward you;
-//! - /maxstandings: maximum standing from every agent, faction, NPC corporation, and alliance;
+//! - /maxstandings: maximum standing from every agent, faction, and NPC corporation;
 //! - /clearspace: remove every in-space cargo container and its contents;
 //! - /spawn: a group of the system's rats, around your ship;
 //! - /tr me <station | system | celestial | character>;
@@ -371,11 +371,10 @@ async fn max_standings(ctx: &Ctx<'_>, words: &[&str]) -> Result<String, String> 
                  SELECT $1, owners.id, 10.0
                    FROM (SELECT "agentID" AS id FROM "agtAgents"
                          UNION SELECT "corporationID" FROM "crpNPCCorporations"
-                         UNION SELECT "factionID" FROM "chrFactions"
-                         UNION SELECT "allianceID" FROM alliances WHERE "deleted" = 0) owners
+                         UNION SELECT "factionID" FROM "chrFactions") owners
                  ON CONFLICT ("characterID", "fromID") DO UPDATE SET "standing" = 10.0"#;
     let count = ctx.db.execute(sql, &[&me]).await.map_err(|e| e.to_string())?;
-    Ok(format!("Maximum standing set for {count} agents, NPC corporations, factions and alliances. Log in again to refresh standings."))
+    Ok(format!("Maximum standing set for {count} agents, NPC corporations and factions. Log in again to refresh standings."))
 }
 
 fn spawn(ctx: &Ctx<'_>) -> Result<String, String> {

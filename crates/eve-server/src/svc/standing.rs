@@ -36,6 +36,9 @@ pub async fn standing(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         "GetNPCStandingsTo" => {
             ctx.rowset(&["fromID", "standing"], VISIBLE_NPC_STANDINGS, &[&(call.arg_id(0) as i32)]).await
         }
+        "GetAgentStandingsPage" => {
+            agent_standings_page(ctx, call.arg_i64(0).unwrap_or(0), call.arg_i64(1).unwrap_or(1) != 0).await
+        }
         "GetStandingCompositions" => {
             standing_compositions(ctx, call.arg_id(0), call.arg_id(1)).await
         }
@@ -57,6 +60,30 @@ pub async fn standing(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         _ => return None,
     };
     Some(Outcome::Value(value))
+}
+
+/// The old Character Sheet constructs every visible standing entry eagerly.
+/// Serve its agent section in bounded pages while keeping the ordinary
+/// standings cache small enough for login and mission conversations.
+async fn agent_standings_page(ctx: &Ctx<'_>, offset: i64, positive: bool) -> Value {
+    const HEADER: &[&str] = &["agentID", "standing"];
+    let Some(character_id) = ctx.session.char_id else {
+        return rowset(HEADER, Vec::new());
+    };
+    let polarity = if positive { ">= 0.05" } else { "<= -0.05" };
+    let sql = format!(
+        r#"SELECT a."agentID", s."standing"
+             FROM "agtAgents" a
+             JOIN "chrNPCStandings" s ON s."fromID" = a."agentID" AND s."characterID" = $1
+             JOIN "character_" c ON c."characterID" = a."agentID"
+            WHERE s."standing" {polarity}
+              AND NOT EXISTS (SELECT 1 FROM "agtCharMissions" m
+                               WHERE m."characterID" = $1 AND m."agentID" = a."agentID")
+            ORDER BY c."characterName", a."agentID"
+            LIMIT 200 OFFSET $2"#
+    );
+    let offset = offset.clamp(0, 100_000);
+    ctx.rowset(HEADER, &sql, &[&(character_id as i32), &offset]).await
 }
 
 enum Standing {

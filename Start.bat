@@ -2090,6 +2090,89 @@ def _rmr_install_moveme():
 
 uthread.new(_rmr_install_moveme)
 
+
+def _rmr_stream_agent_standings(sheet, key, generation):
+    # Build 200 entries at a time. The original Character Sheet builds every
+    # standing and every skill bonus before it shows anything, freezing at
+    # /maxstandings scale. The server keeps that old cache small and pages the
+    # complete agent relationships here.
+    try:
+        import listentry
+        blue.pyos.synchro.Sleep(10)
+        wnd = sheet.GetWnd()
+        if wnd is None or wnd.destroyed:
+            return
+        scroll = wnd.sr.scroll
+        standing = sm.StartService('standing')
+        has_header = 0
+        for node in scroll.GetNodes():
+            if getattr(node, 'label', None) == 'Agents':
+                has_header = 1
+                break
+        offset = 0
+        positive = key == 'mystandings_to_positive'
+        while 1:
+            if (getattr(sheet, '_rmr_agent_standings_generation', None) != generation or
+                    sheet.showing != key or wnd.destroyed or wnd.sr.scroll is not scroll):
+                return
+            page = eve.RemoteSvc('standing2').GetAgentStandingsPage(offset, int(positive))
+            if not page:
+                break
+            ids = [record.agentID for record in page]
+            cfg.eveowners.Prime(ids)
+            entries = []
+            if not has_header:
+                entries.append(listentry.Get('Header', {'label': 'Agents'}))
+                has_header = 1
+            for record in page:
+                # A direct +10 is already at the effective-standing cap;
+                # calculating skill bonuses for thousands of agents is wasted.
+                calculate_bonuses = record.standing < 10.0
+                entries.append(standing.GetStandingEntry(
+                    record.agentID, record.agentID, eve.session.charid,
+                    record.standing, int(calculate_bonuses)))
+            if (getattr(sheet, '_rmr_agent_standings_generation', None) != generation or
+                    sheet.showing != key or wnd.destroyed):
+                return
+            scroll.AddEntries(-1, entries, checkTabstops=0)
+            offset += len(page)
+            if len(page) < 200:
+                break
+            blue.pyos.synchro.Sleep(10)
+        _rmr_log('Character Sheet streamed %s additional agent standings.' % offset)
+    except:
+        _rmr_log('Agent standings stream failed: ' +
+                 ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+
+def _rmr_install_agent_standings():
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        sheet = sm.StartService('charactersheet')
+        cls = sheet.__class__
+        if getattr(cls, '_rmr_agent_standings_installed', False):
+            return
+        original = cls.ShowStandings
+        def show_standings(self, key):
+            generation = getattr(self, '_rmr_agent_standings_generation', 0) + 1
+            self._rmr_agent_standings_generation = generation
+            result = original(self, key)
+            if key in ('mystandings_to_positive', 'mystandings_to_negative'):
+                uthread.new(_rmr_stream_agent_standings, self, key, generation)
+            return result
+        cls.ShowStandings = show_standings
+        cls._rmr_agent_standings_installed = True
+        _rmr_log('Paged Character Sheet agent standings installed.')
+    except:
+        _rmr_log('Agent standings hook failed: ' +
+                 ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+
+uthread.new(_rmr_install_agent_standings)
+
 '@
 
 function Start-LauncherUi {
