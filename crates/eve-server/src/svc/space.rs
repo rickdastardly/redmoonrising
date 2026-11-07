@@ -79,10 +79,79 @@ pub async fn beyonce(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         }
         "GetGangState" => Value::None,
         "GetRelativity" => relativity(ctx, call),
+        // The scanner service expects a mapping even when no probes are out.
+        "GetScans" => Value::Dict(vec![
+            (Value::bytes("probes"), Value::List(Vec::new())),
+            (Value::bytes("results"), Value::List(Vec::new())),
+        ]),
+        "ConeScan" => cone_scan(ctx, call).await,
         method if is_movement(method) => return Some(movement(ctx, call).await),
         _ => return None,
     };
     Some(Outcome::Value(value))
+}
+
+/// Directional scanner: scanAngle, range in metres, and the camera's unit
+/// vector. The client reads `id`, `groupID`, and `typeID` from each result.
+async fn cone_scan(ctx: &Ctx<'_>, call: &Call) -> Value {
+    const HEADER: &[&str] = &["id", "groupID", "typeID"];
+    let Some(system_id) = ctx.session.solar_system_id else { return rowset(HEADER, Vec::new()) };
+    let Some(ship_id) = ctx.session.ship_id else { return rowset(HEADER, Vec::new()) };
+    let arg = |i: usize| call.args.get(i).and_then(Value::as_f64).unwrap_or(0.0);
+    let angle = arg(0);
+    let range = arg(1);
+    let direction = Vec3::new(arg(2), arg(3), arg(4));
+    if !range.is_finite() || range <= 0.0 || !angle.is_finite()
+        || !direction.x.is_finite() || !direction.y.is_finite() || !direction.z.is_finite() {
+        return rowset(HEADER, Vec::new());
+    }
+
+    let hits = {
+        let world = ctx.world.lock();
+        let Some(park) = world.parks.get(&system_id) else { return rowset(HEADER, Vec::new()) };
+        let Some(ego) = park.ships.get(&ship_id) else { return rowset(HEADER, Vec::new()) };
+        let mut hits = Vec::new();
+        let mut consider = |id: i64, type_id: i64, group_id: Option<i64>, pos: Vec3| {
+            if id != ship_id && within_scan(ego.pos, pos, range, angle, direction) {
+                hits.push((id, type_id, group_id));
+            }
+        };
+        for c in &park.celestials { consider(c.id, c.type_id, Some(c.group_id), c.pos); }
+        for s in park.ships.values().filter(|s| !s.in_warp()) {
+            consider(s.id, s.pilot.type_id, Some(s.pilot.group_id), s.pos);
+        }
+        for r in park.rocks.values() { consider(r.id, r.type_id, None, r.pos); }
+        for c in park.cans.values() { consider(c.id, c.type_id, None, c.pos); }
+        for s in park.structures.values() { consider(s.id, s.type_id, Some(s.group_id), s.pos); }
+        for s in park.sites.values() { consider(s.id, crate::sites::TYPE_BEACON, None, s.pos); }
+        hits
+    };
+
+    let unknown_types: Vec<i32> = hits.iter().filter(|(_, _, g)| g.is_none())
+        .filter_map(|(_, t, _)| i32::try_from(*t).ok()).collect();
+    let mut groups = BTreeMap::new();
+    if !unknown_types.is_empty() {
+        let sql = r#"SELECT "typeID", "groupID" FROM "invTypes" WHERE "typeID" = ANY($1)"#;
+        for r in ctx.query(sql, &[&unknown_types]).await {
+            if let (Ok(t), Ok(g)) = (r.try_get::<_, i32>(0), r.try_get::<_, i32>(1)) {
+                groups.insert(t as i64, g as i64);
+            }
+        }
+    }
+    rowset(HEADER, hits.into_iter().filter_map(|(id, type_id, group_id)| {
+        let group_id = group_id.or_else(|| groups.get(&type_id).copied())?;
+        Some(Value::List(vec![Value::Int(id), Value::Int(group_id), Value::Int(type_id)]))
+    }).collect())
+}
+
+fn within_scan(origin: Vec3, target: Vec3, range: f64, angle: f64, direction: Vec3) -> bool {
+    let offset = target - origin;
+    let distance = offset.len();
+    if distance > range { return false; }
+    // The 2006 client sends radians. A full 360 degree scan is a sphere.
+    if angle >= std::f64::consts::TAU || distance == 0.0 { return true; }
+    let heading = direction.unit();
+    heading.len_sq() > 0.0 && offset.dot(heading) / distance >= (angle.max(0.0) / 2.0).cos()
 }
 
 pub fn is_movement(method: &str) -> bool {
@@ -1187,5 +1256,19 @@ mod tests {
         let (at, heading) = undock_exit(Vec3::ZERO, Vec3::new(0.0, 0.0, -1.0), 20_000.0, 500.0);
         assert_eq!(heading, Vec3::new(0.0, 0.0, -1.0));
         assert_eq!(at.len(), 20_000.0 + 500.0 + UNDOCK_CLEARANCE);
+    }
+
+    #[test]
+    fn directional_scan_filters_by_range_and_camera_cone() {
+        let ahead = Vec3::new(100.0, 0.0, 0.0);
+        let behind = Vec3::new(-100.0, 0.0, 0.0);
+        let flank = Vec3::new(0.0, 100.0, 0.0);
+        let heading = Vec3::new(1.0, 0.0, 0.0);
+        let narrow = std::f64::consts::FRAC_PI_3;
+        assert!(within_scan(Vec3::ZERO, ahead, 100.0, narrow, heading));
+        assert!(!within_scan(Vec3::ZERO, ahead, 99.0, narrow, heading));
+        assert!(!within_scan(Vec3::ZERO, flank, 100.0, narrow, heading));
+        assert!(!within_scan(Vec3::ZERO, behind, 100.0, narrow, heading));
+        assert!(within_scan(Vec3::ZERO, behind, 100.0, std::f64::consts::TAU, heading));
     }
 }
