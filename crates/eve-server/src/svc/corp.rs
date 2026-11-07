@@ -170,10 +170,15 @@ const CORP_HEADER: &[&str] = &[
 
 // NPC corporations have no founder (creatorID 0, which no owner record
 // matches); their CEO stands in, so the info window shows "CEO and Founder".
+// A corporation whose CEO left can have ceoID 0. The station Offices tab
+// resolves ceoID through cfg.eveowners.Get, so use its founder as the display
+// contact when no CEO is assigned.
 const CORP_SQL: &str = r#"SELECT "corporationID","corporationName","description","tickerName",
                                  "url","taxRate","minimumJoinStanding","corporationType",
                                  "hasPlayerPersonnelManager","sendCharTerminationMessage",
-                                 COALESCE(NULLIF("creatorID", 0), "ceoID"),"ceoID","stationID","raceID","allianceID","shares",
+                                 COALESCE(NULLIF("creatorID", 0), NULLIF("ceoID", 0), "corporationID"),
+                                 COALESCE(NULLIF("ceoID", 0), NULLIF("creatorID", 0), "corporationID") AS "ceoID",
+                                 "stationID","raceID","allianceID","shares",
                                  "memberCount","memberLimit","allowedMemberRaceIDs","graphicID",
                                  "shape1","shape2","shape3","color1","color2","color3","typeface",
                                  "division1","division2","division3","division4","division5",
