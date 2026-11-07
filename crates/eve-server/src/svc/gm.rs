@@ -14,6 +14,7 @@
 //! - /clearspace: remove every in-space cargo container and its contents;
 //! - /spawn: a group of the system's rats, around your ship;
 //! - /tr me <station | system | celestial | character>;
+//! - /moveme [hub]: choose a market hub, or travel to one by name;
 //! - /bots on|off|status: the bot population; /bots event <betrayal |
 //!   merger | collapse | coalition | raid>, /bots war <a> | <b>, /bots
 //!   density <region> <factor>, /bots follow <name>: steering it;
@@ -46,7 +47,23 @@ const ATTR_SKILL_LEVEL: i32 = 280;
 const REF_GM: i32 = 25;
 const OWNER_SYSTEM: i64 = 1;
 
-const HELP: &str = "/create <type> [qty], /giveisk <amount>, /giveskill <skill> [level], /giveallskills, /setstanding <ownerID> <standing>, /maxstandings, /clearspace, /spawn, /tr me <place or pilot>, /bots on|off|status|event <kind>|war <a> | <b>|density <region> <x>|follow <name>";
+const HELP: &str = "/create <type> [qty], /giveisk <amount>, /giveskill <skill> [level], /giveallskills, /setstanding <ownerID> <standing>, /maxstandings, /clearspace, /spawn, /moveme [hub], /tr me <place or pilot>, /bots on|off|status|event <kind>|war <a> | <b>|density <region> <x>|follow <name>";
+
+// Stocked highsec stations and named nullsec destinations in the RMR map.
+// Keep the client dialog's keys in step with this allowlist.
+const MOVE_ME_HUBS: &[(&str, i64)] = &[
+    ("jita", 60000361),
+    ("amarr", 60008494),
+    ("rens", 60004588),
+    ("dodixie", 60011866),
+    ("hek", 60005686),
+    ("t22-qi", 60013417),
+    ("fd-mlj", 60013360),
+    ("x-7omu", 60012595),
+    ("vfk-iv", 60014917),
+    ("6nj8-v", 60012556),
+    ("nol-m9", 60014926),
+];
 
 pub async fn slash(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
     if call.method != "SlashCmd" {
@@ -70,6 +87,7 @@ pub async fn slash(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         "maxstandings" => max_standings(ctx, &rest).await,
         "clearspace" => clear_space(ctx, &rest).await,
         "spawn" => spawn(ctx),
+        "moveme" => move_me(ctx, &rest).await,
         "tr" => teleport(ctx, &rest).await,
         "bots" => match rest.first().copied() {
             Some("on") => {
@@ -422,6 +440,22 @@ async fn teleport(ctx: &Ctx<'_>, words: &[&str]) -> Result<String, String> {
     let w = ctx.world.lock();
     w.push_move(ctx.client_id, Move::Teleport { station_id: station, solar_system_id: system, constellation_id: constellation, region_id: region, pos: (pos.x, pos.y, pos.z) });
     Ok(format!("On your way to {name}"))
+}
+
+async fn move_me(ctx: &Ctx<'_>, words: &[&str]) -> Result<String, String> {
+    if words.is_empty() {
+        ctx.world.lock().notify(
+            &[ctx.client_id],
+            "OnRemoteMessage",
+            Value::Tuple(vec![Value::bytes("RmrMoveMe"), Value::Dict(Vec::new())]),
+        );
+        return Ok("Choose a destination in the Move Me window.".into());
+    }
+    let key = words.join(" ").to_ascii_lowercase();
+    let (_, station) = MOVE_ME_HUBS.iter().find(|(name, _)| *name == key)
+        .ok_or("Choose a listed hub in the Move Me window.")?;
+    let station_id = station.to_string();
+    teleport(ctx, &["me", &station_id]).await
 }
 
 /// `keeper` and `dungeon`: the dungeon editor and acceleration gates. There

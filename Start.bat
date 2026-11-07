@@ -2009,6 +2009,87 @@ def _rmr_install_area_doomsday():
 
 uthread.new(_rmr_install_area_doomsday)
 
+# /moveme is a GM command. The server asks this client to choose one of its
+# allowlisted stations; the selection goes back through the normal slash RPC.
+_rmr_hubs = [
+    ('HIGHSEC  |  Jita', 'jita'),
+    ('HIGHSEC  |  Amarr', 'amarr'),
+    ('HIGHSEC  |  Rens', 'rens'),
+    ('HIGHSEC  |  Dodixie', 'dodixie'),
+    ('HIGHSEC  |  Hek', 'hek'),
+    ('NULLSEC  |  T22-QI', 't22-qi'),
+    ('NULLSEC  |  FD-MLJ', 'fd-mlj'),
+    ('NULLSEC  |  X-7OMU', 'x-7omu'),
+    ('NULLSEC  |  VFK-IV', 'vfk-iv'),
+    ('NULLSEC  |  6NJ8-V', '6nj8-v'),
+    ('NULLSEC  |  NOL-M9', 'nol-m9')
+]
+
+def _rmr_moveme_key(value, depth=0):
+    if value is None or depth > 3:
+        return None
+    for label, key in _rmr_hubs:
+        if value == label or value == key:
+            return key
+    if type(value) in (types.ListType, types.TupleType):
+        for part in value:
+            key = _rmr_moveme_key(part, depth + 1)
+            if key:
+                return key
+    else:
+        for field in ('value', 'returnValue', 'itemID', 'id', 'data'):
+            try:
+                key = _rmr_moveme_key(getattr(value, field), depth + 1)
+                if key:
+                    return key
+            except:
+                sys.exc_clear()
+    return None
+
+def _rmr_show_moveme():
+    try:
+        import uix
+        choice = uix.ListWnd(_rmr_hubs, 'generic', 'Move Me - market hubs', ordered=1)
+        key = _rmr_moveme_key(choice)
+        _rmr_log('Move Me selection: ' + repr(choice) + ' -> ' + repr(key))
+        if key:
+            eve.RemoteSvc('slash').SlashCmd('/moveme ' + key)
+    except:
+        _rmr_log('Move Me dialog failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+def _rmr_install_moveme():
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        # MachoNet sends OnRemoteMessage directly to eve.Message, not to a
+        # service subscribed through sm.RegisterNotify.
+        original = eve.Message
+        def message(key, *args, **kwargs):
+            if key == 'RmrMoveMe':
+                uthread.new(_rmr_show_moveme)
+                return None
+            return original(key, *args, **kwargs)
+        try:
+            eve.Message = message
+            _rmr_log('Move Me dialog hook installed on eve.Message.')
+        except:
+            sys.exc_clear()
+            cls = eve.__class__
+            original_method = cls.Message
+            def class_message(self, key, *args, **kwargs):
+                if key == 'RmrMoveMe':
+                    uthread.new(_rmr_show_moveme)
+                    return None
+                return original_method(self, key, *args, **kwargs)
+            cls.Message = class_message
+            _rmr_log('Move Me dialog hook installed on Eve.Message.')
+    except:
+        _rmr_log('Move Me hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+uthread.new(_rmr_install_moveme)
+
 '@
 
 function Start-LauncherUi {
