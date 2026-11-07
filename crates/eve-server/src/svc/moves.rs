@@ -477,6 +477,9 @@ async fn merge(
         return refuse("Only stacks of the same kind can be merged.");
     }
     let quantity = quantity.unwrap_or(from.quantity).clamp(1, from.quantity);
+    if onto.quantity > i32::MAX as i64 - quantity {
+        return refuse("Those stacks are too large to merge.");
+    }
     if from.location_id != onto.location_id || from.flag != onto.flag {
         check_room(txn, dest, &from, quantity).await?;
     }
@@ -492,6 +495,7 @@ async fn stack_all(ctx: &Ctx<'_>, txn: &mut ItemTxn<'_>, dest: &Destination, one
         .query(
             r#"SELECT "itemID" FROM entity
                 WHERE "locationID" = $1 AND "ownerID" = $2 AND "singleton" = 0
+                  AND "quantity" > 0
                   AND ($3 = false OR "flag" = $4)
                 ORDER BY "typeID", "flag", "itemID""#,
             &[&(dest.location as i32), &(me(ctx) as i32), &one_flag, &(dest.flag as i32)],
@@ -501,7 +505,8 @@ async fn stack_all(ctx: &Ctx<'_>, txn: &mut ItemTxn<'_>, dest: &Destination, one
     let mut keep: Option<Item> = None;
     for item in txn.items(&ids).await? {
         match &mut keep {
-            Some(k) if k.type_id == item.type_id && k.flag == item.flag => {
+            Some(k) if k.type_id == item.type_id && k.flag == item.flag
+                && item.quantity > 0 && k.quantity <= i32::MAX as i64 - item.quantity => {
                 k.quantity += item.quantity;
                 txn.set_quantity(k.id, k.quantity).await?;
                 txn.destroy(item.id).await?;

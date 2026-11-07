@@ -201,7 +201,7 @@ async fn place(txn: &mut ItemTxn<'_>, fx: &mut Effects, me: i64, order: NewOrder
     if order.corp {
         return refuse("Corporation orders are not available yet.");
     }
-    if order.quantity <= 0 || !order.price.is_finite() || order.price <= 0.0 {
+    if order.quantity <= 0 || order.quantity > i32::MAX as i64 || !order.price.is_finite() || order.price <= 0.0 {
         return refuse("Enter a quantity and a price.");
     }
     let r = txn

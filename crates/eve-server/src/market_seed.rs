@@ -7,6 +7,8 @@ use tracing::info;
 
 const FIRST_PLAYER_ID: i32 = 100_000_000;
 const NPC_MARKET_CORP_ID: i32 = 1_000_002;
+const ISOTOPE_STOCK: i32 = 100_000_000;
+const ISOTOPE_TYPES: &[i32] = &[16258, 16259, 16260, 16261, 16274, 17887, 17888, 17889];
 const CATEGORIES: &[i32] = &[4, 5, 6, 7, 8, 9, 16, 17, 18, 20, 22, 23, 24, 25];
 
 pub async fn ensure(db: &mut Client) -> Result<(), Error> {
@@ -140,7 +142,18 @@ pub async fn ensure(db: &mut Client) -> Result<(), Error> {
         &[&CATEGORIES, &FIRST_PLAYER_ID, &issued, &NPC_MARKET_CORP_ID],
     ).await?;
 
+    // Capital jump and doomsday fuel must remain buyable even after a pilot
+    // empties the original one-million-unit NPC listing. Keep each regional
+    // NPC sell order stocked at startup; player orders are never changed.
+    let restocked = tx.execute(
+        r#"UPDATE market_orders SET "volRemaining" = $1,
+                  "volEntered" = greatest("volEntered", $1)
+             WHERE "typeID" = ANY($2) AND "charID" < $3 AND "bid" = 0
+               AND "orderState" = 0 AND "volRemaining" < $1"#,
+        &[&ISOTOPE_STOCK, &ISOTOPE_TYPES, &FIRST_PLAYER_ID],
+    ).await?;
+
     tx.commit().await?;
-    info!("market: published {published} requested types, categorized {categorized} types, seeded {seeded} missing regional NPC sell orders");
+    info!("market: published {published} requested types, categorized {categorized} types, seeded {seeded} missing regional NPC sell orders, restocked {restocked} isotope orders");
     Ok(())
 }

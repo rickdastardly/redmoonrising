@@ -156,7 +156,11 @@ fn trailing_number<'a>(words: &'a [&'a str]) -> (&'a [&'a str], Option<f64>) {
 async fn create(ctx: &Ctx<'_>, words: &[&str]) -> Result<String, String> {
     let me = ctx.session.char_id.unwrap_or(0);
     let (name, quantity) = trailing_number(words);
-    let quantity = quantity.unwrap_or(1.0).max(1.0) as i64;
+    let quantity = quantity.unwrap_or(1.0);
+    if !quantity.is_finite() || !(1.0..=i32::MAX as f64).contains(&quantity) {
+        return Err(format!("Enter a quantity from 1 to {}. Larger stacks overflow the EVE client.", i32::MAX));
+    }
+    let quantity = quantity as i64;
     let (type_id, type_name) = find_type(ctx.db, name, None).await.ok_or("No such type.")?;
     let (location, flag) = match (ctx.session.station_id, ctx.session.ship_id) {
         (Some(station), _) => (station, FLAG_HANGAR),

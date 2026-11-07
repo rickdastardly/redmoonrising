@@ -197,12 +197,14 @@ impl<'c> ItemTxn<'c> {
                 r#"SELECT "itemID" FROM entity
                     WHERE "ownerID" = $1 AND "locationID" = $2 AND "flag" = $3
                       AND "typeID" = $4 AND "singleton" = 0
+                      AND "quantity" > 0 AND "quantity" <= $5
                     ORDER BY "itemID" LIMIT 1"#,
                 &[
                     &(new.owner_id as i32),
                     &(new.location_id as i32),
                     &(new.flag as i32),
                     &(new.type_id as i32),
+                    &((i32::MAX as i64 - new.quantity) as i32),
                 ],
             )
             .await?;
