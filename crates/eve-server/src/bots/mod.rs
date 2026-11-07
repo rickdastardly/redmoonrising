@@ -351,6 +351,8 @@ impl Sim {
             w.bot_index = self.by_char.clone();
         }
         self.refresh_politics_figures().await;
+        // Populate Local before a player can join during the first save interval.
+        publish_counts(&self.server, &self.bots, &self.politics, &self.sieges, RUNNING.load(Ordering::Relaxed));
         let (mut next_politics, mut next_skirmish) = (POLITICS_EVERY, SKIRMISH_EVERY);
         let mut last_sync = Instant::now();
         let (mut last_flush, mut last_report, mut last_tick, mut last_balances, mut last_battle) = (Instant::now(), Instant::now(), Instant::now(), Instant::now(), Instant::now());
@@ -957,10 +959,9 @@ fn publish_counts(server: &Server, bots: &[Bot], politics: &politics::Politics, 
     w.bot_counts = counts;
     w.bot_stats = stats;
     let before = std::mem::replace(&mut w.bot_local, local);
-    // The first time, everyone is already there: nobody arrives.
-    if !before.is_empty() {
-        tell_local(&w, &before);
-    }
+    // A player may join before the first population snapshot. Announce that
+    // first roster too, or their Local window stays empty until bots move.
+    tell_local(&w, &before);
 }
 
 /// Tells everyone with a Local channel open which bots came and went there
@@ -978,6 +979,40 @@ fn tell_local(w: &crate::world::WorldState, before: &HashMap<i64, Vec<u32>>) {
                 chat::announce_counted(w, &members, count, &channel, method, &chat::bot_who(b), Vec::new());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod local_tests {
+    use super::*;
+    use crate::world::{LocalBot, Push, World};
+    use eve_marshal::Value;
+
+    #[test]
+    fn the_first_bot_snapshot_fills_an_open_local_roster() {
+        let world = World::default();
+        let mut w = world.lock();
+        let mut client = w.connect(7);
+        let local = Value::List(vec![Value::Tuple(vec![Value::bytes("solarsystemid2"), Value::Int(30002780)])]);
+        w.join_channel(&local, 7);
+        w.bot_roster = std::sync::Arc::new(vec![LocalBot {
+            char_id: 140000002,
+            corp_id: 1000002,
+            alliance_id: None,
+            name: "Bot".into(),
+            type_id: 1373,
+        }]);
+        w.bot_local.insert(30002780, vec![0]);
+
+        tell_local(&w, &HashMap::new());
+
+        let Push::Notify(notification) = client.try_recv().expect("bot joined Local") else {
+            panic!("expected a Local notification");
+        };
+        assert_eq!(notification.event, "OnLSC");
+        let Value::Tuple(args) = notification.args else { panic!("expected OnLSC arguments") };
+        assert_eq!(args[1], Value::Int(2));
+        assert_eq!(args[2], Value::bytes("JoinChannel"));
     }
 }
 

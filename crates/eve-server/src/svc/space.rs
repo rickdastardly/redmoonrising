@@ -28,9 +28,9 @@ const DEFAULT_WARP_RANGE: f64 = 15_000.0;
 const DEFAULT_FOLLOW_RANGE: f64 = 50.0;
 /// Ship overview visibility is limited to one million metres around each pilot.
 const SHIP_OVERVIEW_RANGE: f64 = 1_000_000.0;
-/// Leave room between a ship and the station on warp landing or dock approach,
-/// while keeping the ship inside the 2,500 m docking range.
-pub(crate) const STATION_DOCK_CLEARANCE: f64 = 2_000.0;
+/// A zero-range station warp otherwise stops at the exact collision boundary.
+/// This keeps the ship clear of the hull before its docking approach.
+const STATION_WARP_CLEARANCE: f64 = 2_000.0;
 
 /// `ship`: Undock is served by `conn` (it changes the session); nothing else
 /// on the ship object is implemented yet.
@@ -937,7 +937,7 @@ async fn warp_target(ctx: &Ctx<'_>, kind: &str, id: i64) -> Option<(Vec3, f64, b
 }
 
 fn warp_reach(radius: f64, range: f64, station: bool) -> f64 {
-    radius + range.max(if station { STATION_DOCK_CLEARANCE } else { 0.0 })
+    radius + range.max(if station { STATION_WARP_CLEARANCE } else { 0.0 })
 }
 
 /// Where the warp lands: `reach` (the target's radius plus the warp range)
@@ -1070,7 +1070,7 @@ mod tests {
         assert_eq!(warp_reach(43_259.0, 0.0, true), 45_259.0);
         assert_eq!(warp_reach(43_259.0, 100_000.0, true), 143_259.0);
         assert_eq!(warp_reach(1.0, 0.0, false), 1.0);
-        assert!(STATION_DOCK_CLEARANCE < 2_500.0);
+        assert!(STATION_WARP_CLEARANCE > 1_000.0);
     }
 
     #[test]

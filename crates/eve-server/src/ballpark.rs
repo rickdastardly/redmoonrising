@@ -975,14 +975,14 @@ mod tests {
         };
         let mut park = Park::new(30002780, vec![station], 0);
         park.ships.insert(1, Ship::new(1, 10, rifter(), pilot(), Vec3::ZERO, Vec3::ZERO));
-        park.command(1, Command::Follow { target: 60013417, range: 2_000.0 });
-        let eta = park.eta_within(1, 60013417, 2_500.0, 600).expect("reaches docking range");
+        park.command(1, Command::Follow { target: 60013417, range: 750.0 });
+        let eta = park.eta_within(1, 60013417, 1_000.0, 600).expect("reaches docking range");
         park.advance(eta + 1);
         let gap = park.surface_distance(1, 60013417).unwrap();
-        assert!((1_500.0..=2_500.0).contains(&gap), "docking began at {gap} m");
+        assert!((500.0..=1_000.0).contains(&gap), "docking began at {gap} m");
         park.advance(600);
         let gap = park.surface_distance(1, 60013417).unwrap();
-        assert!((gap - 2_000.0).abs() < 50.0, "settled at {gap} m");
+        assert!((gap - 750.0).abs() < 50.0, "settled at {gap} m");
     }
 
     #[test]

@@ -24,7 +24,9 @@ const RANGE_SLACK: f64 = 1.25;
 /// is gone. Their length is in the effects' models; this is a choice.
 const JUMP_OUT_TIME: Duration = Duration::from_secs(3);
 /// Close enough to a station's surface to be towed in.
-const DOCK_RANGE: f64 = 2_500.0;
+const DOCK_RANGE: f64 = 1_000.0;
+/// Stop inside docking range without driving into the station hull.
+const DOCK_APPROACH_RANGE: f64 = 750.0;
 /// The longest a docking approach may take before the request is refused.
 const DOCK_APPROACH_LIMIT: i64 = 600;
 
@@ -215,15 +217,15 @@ impl Conn {
                     park.eta_within(ship_id, station_id, DOCK_RANGE, DOCK_APPROACH_LIMIT)
                 } else {
                     let mut proposed = park.clone();
-                    proposed.command(ship_id, Command::Follow { target: station_id, range: space::STATION_DOCK_CLEARANCE });
+                    proposed.command(ship_id, Command::Follow { target: station_id, range: DOCK_APPROACH_RANGE });
                     proposed.eta_within(ship_id, station_id, DOCK_RANGE, DOCK_APPROACH_LIMIT)
                 };
                 if eta.is_some() && !in_warp {
-                    park.command(ship_id, Command::Follow { target: station_id, range: space::STATION_DOCK_CLEARANCE });
+                    park.command(ship_id, Command::Follow { target: station_id, range: DOCK_APPROACH_RANGE });
                     let course = space::entry(
                         park.tick,
                         "FollowBall",
-                        vec![Value::Int(ship_id), Value::Int(station_id), Value::Double(space::STATION_DOCK_CLEARANCE)],
+                        vec![Value::Int(ship_id), Value::Int(station_id), Value::Double(DOCK_APPROACH_RANGE)],
                     );
                     space::broadcast(&world, system_id, None, vec![course]);
                     let message = Value::Tuple(vec![Value::bytes("DockingApproach"), Value::Dict(Vec::new())]);
