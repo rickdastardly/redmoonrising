@@ -199,12 +199,21 @@ pub async fn list_station_items(
         Some(o) => o,
         None => return rowset(INVITEM_HEADER, Vec::new()),
     };
-    let mut where_sql = String::from(
-        r#"e."ownerID" = $1 AND e."flag" <> $3
-             AND (e."locationID" = $2
-                  OR e."locationID" IN (SELECT c."itemID" FROM "entity" c
-                                         WHERE c."locationID" = $2 AND c."ownerID" = $1))"#,
-    );
+    // The Assets window uses each ListStationItems row's locationID as a
+    // station ID. Nested ship and container contents must not appear there:
+    // the client calls GetStation(locationID) for every row it displays.
+    let mut where_sql = if blueprints_only {
+        // Industry blueprint queries may include blueprints in station-owned
+        // containers; the Assets window does not use this path.
+        String::from(
+            r#"e."ownerID" = $1 AND e."flag" <> $3
+               AND (e."locationID" = $2
+                    OR e."locationID" IN (SELECT c."itemID" FROM "entity" c
+                                           WHERE c."locationID" = $2 AND c."ownerID" = $1))"#,
+        )
+    } else {
+        String::from(r#"e."ownerID" = $1 AND e."flag" <> $3 AND e."locationID" = $2"#)
+    };
     let mut vals = vec![owner as i32, station_id as i32, FLAG_FACTORY_BLUEPRINT];
     if !blueprints_only {
         let sql = format!("{}{}", INVITEM_SELECT, where_sql);
