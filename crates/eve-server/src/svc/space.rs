@@ -888,7 +888,12 @@ async fn parse_order(ctx: &Ctx<'_>, call: &Call) -> Option<Order> {
             let id = call.arg_i64(1)?;
             let range = call.kwarg("minRange").and_then(|v| v.as_f64()).unwrap_or(DEFAULT_WARP_RANGE);
             let (at, radius, station) = warp_target(ctx, &kind, id).await?;
-            Order::Command(Command::Warp { target: landing_point(ctx, at, warp_reach(radius, range, station))?, range: 0.0 })
+            let coast = if station {
+                let world = ctx.world.lock();
+                let ship = world.parks.get(&ctx.session.solar_system_id?)?.ships.get(&ctx.session.ship_id?)?;
+                ship.stats.warp_exit_coast((at - ship.pos).len())
+            } else { 0.0 };
+            Order::Command(Command::Warp { target: landing_point(ctx, at, warp_reach(radius, range, station, coast))?, range: 0.0 })
         }
         _ => return None,
     })
@@ -936,8 +941,8 @@ async fn warp_target(ctx: &Ctx<'_>, kind: &str, id: i64) -> Option<(Vec3, f64, b
     }
 }
 
-fn warp_reach(radius: f64, range: f64, station: bool) -> f64 {
-    radius + range.max(if station { STATION_WARP_CLEARANCE } else { 0.0 })
+fn warp_reach(radius: f64, range: f64, station: bool, coast: f64) -> f64 {
+    radius + range.max(0.0) + if station { STATION_WARP_CLEARANCE + coast.max(0.0) } else { 0.0 }
 }
 
 /// Where the warp lands: `reach` (the target's radius plus the warp range)
@@ -1067,9 +1072,9 @@ mod tests {
 
     #[test]
     fn station_warp_keeps_a_zero_range_inside_dock_range_but_clear_of_the_hull() {
-        assert_eq!(warp_reach(43_259.0, 0.0, true), 45_259.0);
-        assert_eq!(warp_reach(43_259.0, 100_000.0, true), 143_259.0);
-        assert_eq!(warp_reach(1.0, 0.0, false), 1.0);
+        assert_eq!(warp_reach(43_259.0, 0.0, true, 3_000.0), 48_259.0);
+        assert_eq!(warp_reach(43_259.0, 100_000.0, true, 3_000.0), 148_259.0);
+        assert_eq!(warp_reach(1.0, 0.0, false, 3_000.0), 1.0);
         assert!(STATION_WARP_CLEARANCE > 1_000.0);
     }
 

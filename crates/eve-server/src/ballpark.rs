@@ -170,9 +170,24 @@ impl ShipStats {
     }
 
     /// Seconds for the velocity to close 63% of the gap to its target.
-    #[cfg(test)]
     pub fn tau(&self) -> f64 {
         self.inertia() / FRICTION
+    }
+
+    /// How far this ship will coast after its first sub-cruise warp tick.
+    /// The client keeps that exit velocity when warp changes to STOP.
+    pub fn warp_exit_coast(&self, distance: f64) -> f64 {
+        if distance <= 0.0 || self.max_velocity <= 0.0 { return 0.0; }
+        let top = (self.warp_factor as f64 * WARP_FACTOR_SPEED).min(distance * WARP_DISTANCE_SPEED);
+        let cruising = (top / 3.0).ln() / 3.0;
+        let slowing = (3.0 * distance + top * ((top / 3.0).ln() - 2.0)) / (3.0 * top);
+        for tick in (slowing.ceil() as i64)..=(slowing.ceil() as i64 + 100) {
+            let t = tick as f64;
+            let x = (distance + top * cruising) / top - t - 2.0 / 3.0;
+            let speed = x.exp() * top / 3.0;
+            if speed < self.max_velocity { return speed * self.tau(); }
+        }
+        self.max_velocity * self.tau()
     }
 }
 
@@ -474,6 +489,18 @@ impl Park {
         let mut future = self.clone();
         for t in 0..=limit {
             if future.surface_distance(ship_id, target)? <= range {
+                return Some(t);
+            }
+            future.step();
+        }
+        None
+    }
+
+    /// Seconds until a ship has finished aligning and warping.
+    pub fn eta_after_warp(&self, ship_id: i64, limit: i64) -> Option<i64> {
+        let mut future = self.clone();
+        for t in 0..=limit {
+            if !future.ships.get(&ship_id)?.warping() {
                 return Some(t);
             }
             future.step();
@@ -804,7 +831,9 @@ fn warp_along(ship: &mut Ship, exit: Vec3, back: Vec3, distance: f64, t: f64) {
     ship.vel = back * -speed;
     if t >= slowing && speed < ship.stats.max_velocity {
         ship.pos = exit;
-        ship.vel = Vec3::ZERO;
+        // Native destiny leaves warp with this sub-cruise velocity. STOP then
+        // coasts it down over tau seconds; zeroing it here desynchronises the
+        // server from the client, especially around a station collision hull.
         ship.warp = None;
         ship.command = Command::Stop;
     }
@@ -975,6 +1004,12 @@ mod tests {
         };
         let mut park = Park::new(30002780, vec![station], 0);
         park.ships.insert(1, Ship::new(1, 10, rifter(), pilot(), Vec3::ZERO, Vec3::ZERO));
+        park.set_speed_fraction(1, 0.0);
+        let mut stopped = park.clone();
+        stopped.command(1, Command::Follow { target: 60013417, range: 750.0 });
+        assert_eq!(stopped.eta_within(1, 60013417, 1_000.0, 600), None,
+            "a closed throttle must not be mistaken for an unreachable station");
+        park.set_speed_fraction(1, 1.0);
         park.command(1, Command::Follow { target: 60013417, range: 750.0 });
         let eta = park.eta_within(1, 60013417, 1_000.0, 600).expect("reaches docking range");
         park.advance(eta + 1);
@@ -983,6 +1018,58 @@ mod tests {
         park.advance(600);
         let gap = park.surface_distance(1, 60013417).unwrap();
         assert!((gap - 750.0).abs() < 50.0, "settled at {gap} m");
+    }
+
+    #[test]
+    fn a_capital_can_reach_docking_range_from_a_two_km_warp_exit() {
+        let station = Celestial {
+            id: 60013417,
+            type_id: 3869,
+            group_id: GROUP_STATION,
+            name: "Station".into(),
+            pos: Vec3::new(100_000.0, 0.0, 0.0),
+            radius: 43_259.0,
+            undock: None,
+            jump: None,
+        };
+        let mut park = Park::new(30002780, vec![station], 0);
+        // Archon base mass and agility; its fitted speed was 87.5 m/s.
+        let stats = ShipStats::new(1_650.0, 1_012_500_000.0, 0.05, 87.5, 1.0);
+        let pos = Vec3::new(100_000.0 - 43_259.0 - 1_650.0 - 2_000.0, 0.0, 0.0);
+        park.ships.insert(1, Ship::new(1, 10, stats, pilot(), pos, Vec3::ZERO));
+        park.command(1, Command::Follow { target: 60013417, range: 0.0 });
+        let eta = park.eta_within(1, 60013417, 1_000.0, 600).expect("capital reaches docking range");
+        assert!(eta < 600, "capital took {eta}s to get within 1 km");
+        park.advance(eta + 1);
+        let gap = park.surface_distance(1, 60013417).unwrap();
+        assert!(gap <= 1_000.0, "still {gap} m out at the docking time");
+        assert!(gap > 0.0, "the capital drove into the station");
+    }
+
+    #[test]
+    fn station_warp_leaves_room_for_a_capitals_exit_coast() {
+        let centre = Vec3::new(13.144 * 149_597_870_700.0, 0.0, 0.0);
+        let station = Celestial {
+            id: 60013417,
+            type_id: 3869,
+            group_id: GROUP_STATION,
+            name: "Station".into(),
+            pos: centre,
+            radius: 43_259.0,
+            undock: None,
+            jump: None,
+        };
+        let mut park = Park::new(30002780, vec![station], 0);
+        let stats = ShipStats::new(1_650.0, 1_012_500_000.0, 0.05, 87.5, 1.0);
+        let coast = stats.warp_exit_coast(centre.len());
+        let target = centre - Vec3::new(43_259.0 + stats.radius + 2_000.0 + coast, 0.0, 0.0);
+        park.ships.insert(1, Ship::new(1, 10, stats, pilot(), Vec3::ZERO, Vec3::ZERO));
+        park.command(1, Command::Warp { target, range: 0.0 });
+        park.advance(500);
+        assert!(!park.ships[&1].warping());
+        let gap = park.surface_distance(1, 60013417).unwrap();
+        assert!((1_800.0..=2_200.0).contains(&gap), "capital finished {gap} m from station after coasting {coast} m");
+        assert!(park.ships[&1].vel.len() < 0.1, "capital still moving at {} m/s", park.ships[&1].vel.len());
     }
 
     #[test]
@@ -1019,9 +1106,10 @@ mod tests {
         park.advance(400);
         let ship = &park.ships[&1];
         assert!(!ship.in_warp());
-        assert!((ship.pos - target).len() < 1.0, "warp landed {} m away", (ship.pos - target).len());
+        let coast = (ship.pos - target).len();
+        assert!(coast < rifter().max_velocity * rifter().tau(), "warp coasted {coast} m away");
         park.advance(100);
-        assert!((park.ships[&1].pos - target).len() < 1.0, "ship drifted away after landing");
+        assert!(((park.ships[&1].pos - target).len() - coast).abs() < 1.0, "ship kept drifting after landing");
     }
 
     #[test]
@@ -1036,7 +1124,7 @@ mod tests {
         assert!(matches!(park.ships[&1].command, Command::Warp { .. }));
         park.advance(100);
         assert!(!park.ships[&1].in_warp());
-        assert!((park.ships[&1].pos - target).len() < 1.0);
+        assert!((park.ships[&1].pos - target).len() < rifter().max_velocity * rifter().tau());
         assert!(park.ships[&1].vel.len() < 0.1);
     }
 

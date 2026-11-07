@@ -23,10 +23,12 @@ const RANGE_SLACK: f64 = 1.25;
 /// How long the gate's flash and the ship's jump-out play before the ship
 /// is gone. Their length is in the effects' models; this is a choice.
 const JUMP_OUT_TIME: Duration = Duration::from_secs(3);
-/// Close enough to a station's surface to be towed in.
-const DOCK_RANGE: f64 = 1_000.0;
-/// Stop inside docking range without driving into the station hull.
-const DOCK_APPROACH_RANGE: f64 = 750.0;
+/// Close enough to a station's server ball to be towed in. The legacy client
+/// already reads zero metres at about 2 km from this station's server ball.
+const DOCK_RANGE: f64 = 2_500.0;
+/// Steer toward the centre only when the ship's warp-exit coast cannot reach
+/// docking range by itself; tow it in before it reaches the collision hull.
+const DOCK_APPROACH_RANGE: f64 = 0.0;
 /// The longest a docking approach may take before the request is refused.
 const DOCK_APPROACH_LIMIT: i64 = 600;
 
@@ -199,35 +201,59 @@ impl Conn {
                 }
             }
         };
-        let gap = match gap {
+        let mut gap = match gap {
             Ok(gap) => gap,
             Err(reason) => return self.send_error(req, denied(reason)).await,
         };
 
-        // A Dock request can arrive while the client is still warping to the
-        // station. Keep that warp intact and wait for its landing. For a normal
-        // approach, prove that the ship can reach docking range before changing
-        // its live course.
+        // The client can request Dock while aligning or in warp. Preserve
+        // that course and wait for landing before beginning the short approach.
+        if !towed {
+            let eta = {
+                let world = self.server.world.lock();
+                let park = world.parks.get(&system_id).expect("checked above");
+                park.eta_after_warp(ship_id, DOCK_APPROACH_LIMIT)
+            };
+            let Some(eta) = eta else {
+                return self.send_error(req, denied("Your ship did not finish warping to the station.")).await;
+            };
+            if eta > 0 {
+                tokio::time::sleep(Duration::from_secs(eta as u64 + 1)).await;
+                gap = {
+                    let mut world = self.server.world.lock();
+                    world.parks.get_mut(&system_id).and_then(|park| {
+                        park.advance(destiny::tick_now());
+                        park.surface_distance(ship_id, station_id)
+                    })
+                }.unwrap_or(f64::INFINITY);
+            }
+        }
+
+        // Prove a normal approach can reach docking range before changing
+        // the ship's live course. FollowBall needs an open throttle after warp.
         if gap > DOCK_RANGE && !towed {
             let eta = {
                 let mut world = self.server.world.lock();
                 let park = world.parks.get_mut(&system_id).expect("checked above");
-                let in_warp = park.ships.get(&ship_id).is_some_and(|ship| ship.in_warp());
-                let eta = if in_warp {
-                    park.eta_within(ship_id, station_id, DOCK_RANGE, DOCK_APPROACH_LIMIT)
-                } else {
+                let coast_eta = park.ships.get(&ship_id)
+                    .filter(|ship| matches!(ship.command, Command::Stop))
+                    .and_then(|_| park.eta_within(ship_id, station_id, DOCK_RANGE, DOCK_APPROACH_LIMIT));
+                let eta = if coast_eta.is_some() { coast_eta } else {
                     let mut proposed = park.clone();
+                    proposed.set_speed_fraction(ship_id, 1.0);
                     proposed.command(ship_id, Command::Follow { target: station_id, range: DOCK_APPROACH_RANGE });
                     proposed.eta_within(ship_id, station_id, DOCK_RANGE, DOCK_APPROACH_LIMIT)
                 };
-                if eta.is_some() && !in_warp {
+                if eta.is_some() && coast_eta.is_none() {
+                    park.set_speed_fraction(ship_id, 1.0);
                     park.command(ship_id, Command::Follow { target: station_id, range: DOCK_APPROACH_RANGE });
                     let course = space::entry(
                         park.tick,
                         "FollowBall",
                         vec![Value::Int(ship_id), Value::Int(station_id), Value::Double(DOCK_APPROACH_RANGE)],
                     );
-                    space::broadcast(&world, system_id, None, vec![course]);
+                    let throttle = space::entry(park.tick, "SetSpeedFraction", vec![Value::Int(ship_id), Value::Double(1.0)]);
+                    space::broadcast(&world, system_id, None, vec![course, throttle]);
                     let message = Value::Tuple(vec![Value::bytes("DockingApproach"), Value::Dict(Vec::new())]);
                     world.notify(&[self.client_id], "OnRemoteMessage", message);
                 }
