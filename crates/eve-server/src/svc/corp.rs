@@ -138,6 +138,11 @@ async fn corp_registry(ctx: &Ctx<'_>, method: &str, args: &[Value]) -> Outcome {
     let out = match method {
         "GetCorporation" => corporation_row(ctx, corp).await,
         "GetOffices" => offices(ctx, corp).await,
+        "GetStations" => {
+            let sql = r#"SELECT "stationID", "stationTypeID" AS "typeID"
+                           FROM "staStations" WHERE "corporationID" = $1 ORDER BY "stationID""#;
+            ctx.rowset(&["stationID", "typeID"], sql, &[&(corp as i32)]).await
+        }
         "GetEveOwners" => eve_owners(ctx, corp).await,
         "GetMember" => member(ctx, arg0.unwrap_or(0)).await,
         "GetRoles" => {
