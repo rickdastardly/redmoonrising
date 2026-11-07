@@ -173,6 +173,25 @@ pub fn is_can(world: &World, solar_system_id: i64, item_id: i64) -> bool {
     world.lock().parks.get(&solar_system_id).is_some_and(|p| p.cans.contains_key(&item_id))
 }
 
+/// Mirror a global GM cleanup in loaded parks and each pilot's visible grid.
+pub fn forget_cans(world: &World, ids: &[i32]) {
+    let ids: std::collections::BTreeSet<i64> = ids.iter().map(|id| i64::from(*id)).collect();
+    let mut w = world.lock();
+    let mut updates = Vec::new();
+    for park in w.parks.values_mut() {
+        let gone: Vec<i64> = park.cans.keys().copied().filter(|id| ids.contains(id)).collect();
+        for id in gone {
+            park.cans.remove(&id);
+            for (client, visible) in &mut park.visible_objects {
+                if visible.remove(&id) {
+                    updates.push((*client, space::remove_ball_entries(park.tick, id).remove(0)));
+                }
+            }
+        }
+    }
+    space::notify_targeted_updates(&w, updates);
+}
+
 // ---- dropping and clearing -------------------------------------------------------------------
 
 /// Puts a can at `pos` holding `stash`, owned by `owner_id`, and shows it to

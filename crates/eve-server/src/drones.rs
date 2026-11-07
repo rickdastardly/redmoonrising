@@ -39,6 +39,7 @@ const LAUNCH_CLEARANCE: f64 = 150.0;
 const THINK_MS: i64 = 1_000;
 const FIGHTER_GROUP: i64 = 549;
 const FIGHTER_ARRIVAL_MS: i64 = 60_000;
+const CONTROLLER_GRID_RANGE: f64 = 1_000_000.0;
 
 /// drone.py's activity states (eveConstants entity*).
 pub mod activity {
@@ -85,6 +86,22 @@ pub struct Transit {
 
 pub fn in_transit(ship: &Ship) -> bool {
     ship.drone.as_ref().is_some_and(|d| d.transit.is_some())
+}
+
+/// Deployed ordinary drones are not restored as distant-space actors after a
+/// restart. Put older stranded inventory items back in their owner's active
+/// ship, leaving fighters in space for their follow behaviour.
+pub async fn recover_stale_nonfighters(db: &Client) -> Result<u64, tokio_postgres::Error> {
+    db.execute(r#"
+        UPDATE entity AS drone SET "locationID" = c."shipID", "flag" = 87
+          FROM character_ c, "invTypes" t, "invGroups" g, "mapSolarSystems" sys
+         WHERE drone."ownerID" = c."characterID"
+           AND drone."typeID" = t."typeID" AND t."groupID" = g."groupID"
+           AND g."categoryID" = 18 AND g."groupID" <> 549
+           AND drone."locationID" = sys."solarSystemID"
+           AND EXISTS (SELECT 1 FROM entity AS ship
+                        WHERE ship."itemID" = c."shipID" AND ship."ownerID" = c."characterID")
+    "#, &[]).await
 }
 
 /// Rows for SetState's droneState rowset:
@@ -419,6 +436,7 @@ pub fn think(park: &mut Park, now: i64, out: &mut Out) {
 /// pursuing its attack target keeps that order; one following its controller
 /// returns to idle. Its delayed arrival is scheduled from the landing tick.
 pub fn on_warp_entered(park: &mut Park, warped: i64, now: i64, out: &mut Out) {
+    recover_nonfighters_for_controller(park, warped, now, out);
     let followers: Vec<(i64, bool)> = park.ships.values().filter_map(|ship| {
         let d = ship.drone.as_ref()?;
         if ship.pilot.group_id != FIGHTER_GROUP { return None; }
@@ -441,6 +459,29 @@ pub fn on_warp_entered(park: &mut Park, warped: i64, now: i64, out: &mut Out) {
             }
         }
     }
+}
+
+/// Ordinary drones cannot follow a warp. Keep them out of the distant-space
+/// fighter group by returning them to their controller's bay as it leaves.
+pub fn recover_nonfighters_for_controller(park: &mut Park, controller: i64, now: i64, out: &mut Out) {
+    let ids: Vec<i64> = park.ships.values().filter(|s| {
+        s.pilot.group_id != FIGHTER_GROUP
+            && s.drone.as_ref().is_some_and(|d| d.controller == Some(controller))
+    }).map(|s| s.id).collect();
+    for id in ids { dock(park, id, controller, now, out); }
+}
+
+/// Also cover a controller moved between grids by a jump or a corrected
+/// position, without a normal warp entry notification.
+pub fn recover_distant_nonfighters(park: &mut Park, now: i64, out: &mut Out) {
+    let distant: Vec<(i64, i64)> = park.ships.values().filter_map(|s| {
+        let d = s.drone.as_ref()?;
+        if s.pilot.group_id == FIGHTER_GROUP { return None; }
+        let controller = d.controller?;
+        let at = park.ships.get(&controller)?.pos;
+        ((s.pos - at).len() > CONTROLLER_GRID_RANGE).then_some((s.id, controller))
+    }).collect();
+    for (id, controller) in distant { dock(park, id, controller, now, out); }
 }
 
 pub fn on_warp_landed(park: &mut Park, landed: i64, now: i64) {
@@ -711,6 +752,27 @@ pub async fn lost(server: &Server, db: &mut Client, client_id: Option<i64>, dron
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordinary_drone_returns_to_bay_while_fighter_follows_warp() {
+        let mut park = Park::new(30000001, Vec::new(), 0);
+        let stats = ShipStats::new(50.0, 1_000_000.0, 1.0, 300.0, 1.0);
+        let pilot = |type_id, group_id| Pilot { type_id, group_id, name: "Drone".into(),
+            char_id: 200, corp_id: 2, alliance_id: None, security: 0.0, bounty: 0.0 };
+        park.ships.insert(30, Ship::new(30, 2, stats, pilot(587, 25), Vec3::ZERO, Vec3::ZERO));
+        for (id, group) in [(20, 100), (21, FIGHTER_GROUP)] {
+            let mut ship = Ship::new(id, 2, stats, pilot(23055, group), Vec3::new(1_000.0, 0.0, 0.0), Vec3::ZERO);
+            ship.drone = Some(Drone { owner: 200, client_id: 2, controller: Some(30), order: Order::Idle,
+                activity: activity::IDLE, weapons: Vec::new(), miner: None, mined: false,
+                orbit: 1_000.0, next_think_ms: 0, transit: None });
+            park.ships.insert(id, ship);
+        }
+        let mut out = Out::default();
+        on_warp_entered(&mut park, 30, 0, &mut out);
+        assert!(!park.ships.contains_key(&20));
+        assert!(out.jobs.iter().any(|job| matches!(job, Job::DroneHome { drone_id: 20, ship_id: 30, .. })));
+        assert!(in_transit(&park.ships[&21]));
+    }
 
     #[test]
     fn fighter_reaches_warping_enemy_after_a_minute_and_keeps_engaging() {

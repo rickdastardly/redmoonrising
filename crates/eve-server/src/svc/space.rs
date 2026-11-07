@@ -28,6 +28,9 @@ const DEFAULT_WARP_RANGE: f64 = 15_000.0;
 const DEFAULT_FOLLOW_RANGE: f64 = 50.0;
 /// Ship overview visibility is limited to one million metres around each pilot.
 const SHIP_OVERVIEW_RANGE: f64 = 1_000_000.0;
+/// Leave room between a ship and the station on warp landing or dock approach,
+/// while keeping the ship inside the 2,500 m docking range.
+pub(crate) const STATION_DOCK_CLEARANCE: f64 = 2_000.0;
 
 /// `ship`: Undock is served by `conn` (it changes the session); nothing else
 /// on the ship object is implemented yet.
@@ -116,9 +119,11 @@ pub async fn ensure_park(ctx: &Ctx<'_>, solar_system_id: i64) {
             Default::default()
         }
     };
+    let owners = station_owners(ctx, solar_system_id).await;
     let mut world = ctx.world.lock();
     world.parks.entry(solar_system_id).or_insert_with(|| {
         let mut park = Park::new(solar_system_id, celestials, destiny::tick_now());
+        park.station_owners = owners;
         park.wildlife = std::sync::Arc::new(wildlife);
         crate::npc::populate(&mut park);
         park.cans = cans.into_iter().map(|c| (c.id, c)).collect();
@@ -385,7 +390,7 @@ pub fn set_state_entries(park: &Park, ego: i64, station_owners: &[(i64, i64)], c
     entries
 }
 
-fn visible_ship_ids(park: &Park, ego: i64) -> BTreeSet<i64> {
+pub(crate) fn visible_ship_ids(park: &Park, ego: i64) -> BTreeSet<i64> {
     park.ships
         .values()
         .filter(|ship| !crate::drones::in_transit(ship) && (ship.id == ego || within_overview_range(park, ego, ship.id)))
@@ -418,7 +423,7 @@ fn object_positions(park: &Park) -> BTreeMap<i64, Vec3> {
     positions
 }
 
-fn visible_object_ids(park: &Park, ego: i64) -> BTreeSet<i64> {
+pub(crate) fn visible_object_ids(park: &Park, ego: i64) -> BTreeSet<i64> {
     visible_object_ids_at(park, ego, &object_positions(park))
 }
 
@@ -699,6 +704,7 @@ pub fn remove_ship(world: &mut WorldState, system: i64, ship_id: i64) -> Option<
     let mut out = crate::heartbeat::Out::default();
     let now = crate::combat::now_ms();
     crate::fight::stand_down(park, ship_id, now, &mut out);
+    crate::drones::recover_nonfighters_for_controller(park, ship_id, now, &mut out);
     let ship = crate::fight::detach(park, ship_id, now, &mut out)?;
     for visible in park.visible_ships.values_mut() {
         visible.remove(&ship_id);
@@ -707,7 +713,8 @@ pub fn remove_ship(world: &mut WorldState, system: i64, ship_id: i64) -> Option<
         park.visible_ships.remove(&ship.client_id);
     }
     let entries = remove_ball_entries(park.tick, ship_id);
-    out.deliver(world);
+    let jobs = out.deliver(world);
+    world.pending_jobs.extend(jobs);
     let others: Vec<i64> = world.in_space(system).into_iter().filter(|c| *c != ship.client_id).collect();
     let args = Value::Tuple(vec![Value::List(entries), Value::Int(0)]);
     world.notify(&others, "DoDestinyUpdate", args);
@@ -880,8 +887,8 @@ async fn parse_order(ctx: &Ctx<'_>, call: &Call) -> Option<Order> {
             let kind = call.arg_text(0)?;
             let id = call.arg_i64(1)?;
             let range = call.kwarg("minRange").and_then(|v| v.as_f64()).unwrap_or(DEFAULT_WARP_RANGE);
-            let (at, radius) = warp_target(ctx, &kind, id).await?;
-            Order::Command(Command::Warp { target: landing_point(ctx, at, radius + range.max(0.0))?, range: 0.0 })
+            let (at, radius, station) = warp_target(ctx, &kind, id).await?;
+            Order::Command(Command::Warp { target: landing_point(ctx, at, warp_reach(radius, range, station))?, range: 0.0 })
         }
         _ => return None,
     })
@@ -889,21 +896,23 @@ async fn parse_order(ctx: &Ctx<'_>, call: &Call) -> Option<Order> {
 
 /// What WarpToStuff(kind, id) goes to, as its centre and radius: an item in
 /// the system, a bookmark, or another character's ship.
-async fn warp_target(ctx: &Ctx<'_>, kind: &str, id: i64) -> Option<(Vec3, f64)> {
+async fn warp_target(ctx: &Ctx<'_>, kind: &str, id: i64) -> Option<(Vec3, f64, bool)> {
     let point = |r: &tokio_postgres::Row, i: usize| {
         Some(Vec3::new(float(r, i)?, float(r, i + 1)?, float(r, i + 2)?))
     };
     match kind {
         "item" => {
-            if let Some(ball) = ctx.world.lock().parks.get(&ctx.session.solar_system_id?).and_then(|p| p.ball(id)) {
+            if let Some(ball) = ctx.world.lock().parks.get(&ctx.session.solar_system_id?).and_then(|p| {
+                p.ball(id).map(|(at, radius)| (at, radius, is_station(p, id)))
+            }) {
                 return Some(ball);
             }
-            let sql = r#"SELECT "x","y","z", COALESCE("radius", 0) FROM "mapDenormalize" WHERE "itemID" = $1"#;
+            let sql = r#"SELECT "x","y","z", COALESCE("radius", 0), "groupID" FROM "mapDenormalize" WHERE "itemID" = $1"#;
             let r = ctx.query_one(sql, &[&(id as i32)]).await?;
-            Some((point(&r, 0)?, float(&r, 3).unwrap_or(0.0)))
+            Some((point(&r, 0)?, float(&r, 3).unwrap_or(0.0), int(&r, 4) == Some(GROUP_STATION)))
         }
         "bookmark" => {
-            let sql = r#"SELECT b."x", b."y", b."z", d."x", d."y", d."z", COALESCE(d."radius", 0)
+            let sql = r#"SELECT b."x", b."y", b."z", d."x", d."y", d."z", COALESCE(d."radius", 0), d."groupID"
                            FROM bookmarks b
                            LEFT JOIN "mapDenormalize" d ON d."itemID" = b."itemID"
                           WHERE b."bookmarkID" = $1 AND b."ownerID" = $2"#;
@@ -911,20 +920,24 @@ async fn warp_target(ctx: &Ctx<'_>, kind: &str, id: i64) -> Option<(Vec3, f64)> 
             let r = ctx.query_one(sql, &[&(id as i32), &owner]).await?;
             // A bookmark of a celestial carries the celestial's position.
             match point(&r, 3) {
-                Some(at) => Some((at, float(&r, 6).unwrap_or(0.0))),
-                None => Some((point(&r, 0)?, 0.0)),
+                Some(at) => Some((at, float(&r, 6).unwrap_or(0.0), int(&r, 7) == Some(GROUP_STATION))),
+                None => Some((point(&r, 0)?, 0.0, false)),
             }
         }
         "char" => {
             let world = ctx.world.lock();
             let park = world.parks.get(&ctx.session.solar_system_id?)?;
-            park.ships.values().find(|s| s.pilot.char_id == id).map(|s| (s.pos, s.stats.radius))
+            park.ships.values().find(|s| s.pilot.char_id == id).map(|s| (s.pos, s.stats.radius, false))
         }
         _ => {
             warn!("WarpToStuff to a {kind:?} is not supported");
             None
         }
     }
+}
+
+fn warp_reach(radius: f64, range: f64, station: bool) -> f64 {
+    radius + range.max(if station { STATION_DOCK_CLEARANCE } else { 0.0 })
 }
 
 /// Where the warp lands: `reach` (the target's radius plus the warp range)
@@ -1051,6 +1064,14 @@ pub fn is_station(park: &Park, id: i64) -> bool {
 mod tests {
     use super::*;
     use crate::ballpark::{Pilot, ShipStats};
+
+    #[test]
+    fn station_warp_keeps_a_zero_range_inside_dock_range_but_clear_of_the_hull() {
+        assert_eq!(warp_reach(43_259.0, 0.0, true), 45_259.0);
+        assert_eq!(warp_reach(43_259.0, 100_000.0, true), 143_259.0);
+        assert_eq!(warp_reach(1.0, 0.0, false), 1.0);
+        assert!(STATION_DOCK_CLEARANCE < 2_500.0);
+    }
 
     #[test]
     fn a_destiny_entry_is_stamp_then_opcode_then_args() {

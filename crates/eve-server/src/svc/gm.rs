@@ -11,6 +11,7 @@
 //! - /giveallskills: every skill type at level 5 on your character;
 //! - /setstanding <ownerID> <standing>: an NPC's standing toward you;
 //! - /maxstandings: maximum standing from every agent, faction, NPC corporation, and alliance;
+//! - /clearspace: remove every in-space cargo container and its contents;
 //! - /spawn: a group of the system's rats, around your ship;
 //! - /tr me <station | system | celestial | character>;
 //! - /bots on|off|status: the bot population; /bots event <betrayal |
@@ -45,7 +46,7 @@ const ATTR_SKILL_LEVEL: i32 = 280;
 const REF_GM: i32 = 25;
 const OWNER_SYSTEM: i64 = 1;
 
-const HELP: &str = "/create <type> [qty], /giveisk <amount>, /giveskill <skill> [level], /giveallskills, /setstanding <ownerID> <standing>, /maxstandings, /spawn, /tr me <place or pilot>, /bots on|off|status|event <kind>|war <a> | <b>|density <region> <x>|follow <name>";
+const HELP: &str = "/create <type> [qty], /giveisk <amount>, /giveskill <skill> [level], /giveallskills, /setstanding <ownerID> <standing>, /maxstandings, /clearspace, /spawn, /tr me <place or pilot>, /bots on|off|status|event <kind>|war <a> | <b>|density <region> <x>|follow <name>";
 
 pub async fn slash(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
     if call.method != "SlashCmd" {
@@ -67,6 +68,7 @@ pub async fn slash(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         "giveallskills" => give_all_skills(ctx, &rest).await,
         "setstanding" => set_standing(ctx, &rest).await,
         "maxstandings" => max_standings(ctx, &rest).await,
+        "clearspace" => clear_space(ctx, &rest).await,
         "spawn" => spawn(ctx),
         "tr" => teleport(ctx, &rest).await,
         "bots" => match rest.first().copied() {
@@ -88,6 +90,44 @@ pub async fn slash(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         Ok(reply) => Outcome::Value(Value::text(reply)),
         Err(why) => Outcome::custom(why),
     })
+}
+
+/// Remove cargo containers in solar-system space, including their contents,
+/// in one transaction. Station hangars, ships, and other inventory locations
+/// are outside the selected roots. Then remove the loaded balls from every
+/// active park so clients stop displaying them immediately.
+async fn clear_space(ctx: &Ctx<'_>, words: &[&str]) -> Result<String, String> {
+    if !words.is_empty() { return Err("Usage: /clearspace".into()); }
+    let mut db = crate::db::connect(ctx.db_url).await.map_err(|e| e.to_string())?;
+    let tx = db.transaction().await.map_err(|e| e.to_string())?;
+    let roots: Vec<i32> = tx.query(r#"
+        SELECT e."itemID" FROM entity e
+          JOIN "invTypes" t ON t."typeID" = e."typeID"
+          JOIN "mapSolarSystems" s ON s."solarSystemID" = e."locationID"
+         WHERE t."groupID" = 12
+         FOR UPDATE OF e
+    "#, &[]).await.map_err(|e| e.to_string())?
+        .iter().map(|row| row.get(0)).collect();
+    if roots.is_empty() { return Ok("Space contains no cargo containers.".into()); }
+    let items: Vec<i32> = tx.query(r#"
+        WITH RECURSIVE contents("itemID", depth) AS (
+            SELECT unnest($1::int[]), 0
+            UNION ALL
+            SELECT e."itemID", contents.depth + 1
+              FROM entity e JOIN contents ON e."locationID" = contents."itemID"
+             WHERE contents.depth < 32
+        )
+        SELECT DISTINCT "itemID" FROM contents
+    "#, &[&roots]).await.map_err(|e| e.to_string())?
+        .iter().map(|row| row.get(0)).collect();
+    tx.execute(r#"DELETE FROM entity_attributes WHERE "itemID" = ANY($1)"#, &[&items])
+        .await.map_err(|e| e.to_string())?;
+    tx.execute(r#"DELETE FROM entity WHERE "itemID" = ANY($1)"#, &[&items])
+        .await.map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+    crate::loot::forget_cans(ctx.world, &roots);
+    Ok(format!("Cleared {} cargo containers and {} contained items from space in all systems.",
+        roots.len(), items.len().saturating_sub(roots.len())))
 }
 
 /// A type by ID, or by its name (exactly, else the first that starts so).

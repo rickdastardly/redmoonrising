@@ -161,6 +161,11 @@ pub async fn run(server: Arc<Server>) {
             }
         }
     };
+    match crate::drones::recover_stale_nonfighters(&db).await {
+        Ok(count) if count > 0 => info!("returned {count} stranded non-fighter drones to their owners' active ships"),
+        Err(e) => error!("recovering stranded drones: {}", crate::logging::chain(&e)),
+        _ => {}
+    }
     crate::svc::pvptrade::recover(&db).await;
     if let Err(e) = ensure_security_history(&db).await {
         error!("security history setup: {}", crate::logging::chain(&e));
@@ -197,7 +202,9 @@ pub async fn run(server: Arc<Server>) {
 fn pulse(world: &World, now: i64) -> Vec<Job> {
     let mut w = world.lock();
     let mut out = Out::default();
+    out.jobs.append(&mut w.pending_jobs);
     let tick = crate::destiny::tick_now();
+    let mut landed_pilots = Vec::new();
     for park in w.parks.values_mut() {
         crate::pos::step(park, &mut out);
         if park.players().next().is_none() {
@@ -206,6 +213,7 @@ fn pulse(world: &World, now: i64) -> Vec<Job> {
             continue;
         }
         park.advance(tick);
+        crate::drones::recover_distant_nonfighters(park, now, &mut out);
         let entered_warp = std::mem::take(&mut park.entered_warp);
         for ship_id in entered_warp {
             let effect = space::warp_fx(park.tick, ship_id, true);
@@ -224,16 +232,24 @@ fn pulse(world: &World, now: i64) -> Vec<Job> {
             if !park.ships.get(&ship_id).is_some_and(|ship| !ship.in_warp()) {
                 continue;
             }
+            // The server has stopped the warp. Tell the client's destiny
+            // simulation too; ending the visual effect alone leaves its warp
+            // motion running and can strand the ego far from this landing.
+            let stop = park.ships.get(&ship_id)
+                .filter(|ship| matches!(ship.command, crate::ballpark::Command::Stop))
+                .map(|ship| space::command_entry(ship, park.tick));
             let effect = space::warp_fx(park.tick, ship_id, false);
             let mut viewers = space::ship_viewers(park, ship_id);
             if let Some(ship) = park.ships.get(&ship_id).filter(|ship| ship.is_player()) {
                 if !viewers.contains(&ship.client_id) { viewers.push(ship.client_id); }
+                landed_pilots.push((park.solar_system_id, ship.id, ship.client_id));
                 let nearest = park.belts.iter().map(|belt| (belt.id, (ship.pos - belt.pos).len()))
                     .min_by(|a, b| a.1.total_cmp(&b.1));
                 let rocks = park.rocks.values().filter(|rock| (ship.pos - rock.pos).len() <= 1_000_000.0).count();
                 info!("player warp landing: ship {ship_id} at {:?}, nearest belt {nearest:?}, {rocks} nearby asteroid(s), {} viewer(s)", ship.pos, viewers.len());
             }
             for client in viewers {
+                if let Some(stop) = &stop { out.destiny_to(park.solar_system_id, client, stop.clone()); }
                 out.destiny_to(park.solar_system_id, client, effect.clone());
             }
             for (client, entry) in space::landed_ship_entries(park, ship_id) {
@@ -248,6 +264,26 @@ fn pulse(world: &World, now: i64) -> Vec<Job> {
         }
         for (client, entry) in space::sync_object_visibility(park) {
             out.destiny_to(park.solar_system_id, client, entry);
+        }
+    }
+    // A warp effect/Stop alone does not put the pilot's native ball at the
+    // server landing point. The client can still coast through a station at
+    // warp speed and see the previous belt grid. Reset its complete ballpark
+    // after this pulse's visibility updates, then track exactly that view.
+    for (system, ship_id, client_id) in landed_pilots {
+        let Some(park) = w.parks.get(&system) else { continue };
+        if !park.ships.get(&ship_id).is_some_and(|ship| ship.is_player() && ship.client_id == client_id) {
+            continue;
+        }
+        let pilots: Vec<i64> = park.ships.values().map(|ship| ship.pilot.char_id).filter(|id| *id != 0).collect();
+        let gangs = w.gangs.memberships(pilots);
+        let entries = space::set_state_entries(park, ship_id, &park.station_owners, &gangs);
+        let visible = space::visible_ship_ids(park, ship_id);
+        let objects = space::visible_object_ids(park, ship_id);
+        for entry in entries { out.destiny_to(system, client_id, entry); }
+        if let Some(park) = w.parks.get_mut(&system) {
+            park.visible_ships.insert(client_id, visible);
+            park.visible_objects.insert(client_id, objects);
         }
     }
     out.deliver(&w)
@@ -451,6 +487,61 @@ pub fn fmt_isk(amount: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ship_departure_jobs_survive_until_the_next_pulse() {
+        let world = World::default();
+        world.lock().pending_jobs.push(Job::DroneHome { client_id: 7, drone_id: 20, ship_id: 30 });
+        let jobs = pulse(&world, combat::now_ms());
+        assert!(matches!(jobs.as_slice(), [Job::DroneHome { drone_id: 20, ship_id: 30, .. }]));
+        assert!(world.lock().pending_jobs.is_empty());
+    }
+
+    #[test]
+    fn warp_landing_resets_the_pilots_client_destiny() {
+        use crate::ballpark::{Command, Park, Pilot, Ship, ShipStats};
+        use crate::world::{Presence, Push};
+
+        let world = World::default();
+        let mut rx = {
+            let mut state = world.lock();
+            let rx = state.connect(7);
+            state.set_presence(7, Some(Presence { char_id: 100, corp_id: 2, solar_system_id: 30000001,
+                docked: false, station_id: None, role: 0 }));
+            state.sees(7, 30000001);
+            let tick = crate::destiny::tick_now();
+            let mut park = Park::new(30000001, Vec::new(), tick - 100);
+            let stats = ShipStats::new(37.0, 1_100_000.0, 3.1, 320.0, 2.0);
+            let pilot = Pilot { type_id: 587, group_id: 25, name: "Rifter".into(), char_id: 100,
+                corp_id: 2, alliance_id: None, security: 0.0, bounty: 0.0 };
+            park.ships.insert(10, Ship::new(10, 7, stats, pilot, Vec3::ZERO, Vec3::ZERO));
+            park.visible_ships.insert(7, [10].into());
+            park.command(10, Command::Warp { target: Vec3::new(5.0e12, 0.0, 0.0), range: 0.0 });
+            park.advance(tick - 1);
+            assert_eq!(park.landed, vec![10]);
+            park.entered_warp.clear();
+            state.parks.insert(30000001, park);
+            rx
+        };
+        pulse(&world, combat::now_ms());
+        let mut opcodes = Vec::new();
+        while let Ok(Push::Notify(note)) = rx.try_recv() {
+            if note.event != "DoDestinyUpdate" { continue; }
+            if let Some(entries) = note.args.seq().and_then(|args| args.first()).and_then(Value::seq) {
+                for update in entries {
+                    if let Some(opcode) = update.seq().and_then(|parts| parts.get(1))
+                        .and_then(Value::seq).and_then(|parts| parts.first()) {
+                        opcodes.push(opcode.clone());
+                    }
+                }
+            }
+        }
+        assert!(opcodes.contains(&Value::bytes("Stop")) && opcodes.contains(&Value::bytes("OnSpecialFX")),
+            "warp landing sent no Stop with its effect: {opcodes:?}");
+        assert_eq!(opcodes.last(), Some(&Value::bytes("SetState")),
+            "the final landing update must replace the pilot's moving ball: {opcodes:?}");
+        assert!(world.lock().parks[&30000001].visible_ships[&7].contains(&10));
+    }
 
     #[test]
     fn isk_is_grouped_in_thousands() {

@@ -89,6 +89,8 @@ struct Channel {
 
 #[derive(Default)]
 pub struct WorldState {
+    /// Database work produced while a ship leaves the park between pulses.
+    pub pending_jobs: Vec<crate::heartbeat::Job>,
     clients: HashMap<i64, Client>,
     /// Open chat channels, by `channel_key`.
     channels: HashMap<String, Channel>,

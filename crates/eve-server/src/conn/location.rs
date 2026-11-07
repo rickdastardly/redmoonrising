@@ -202,21 +202,33 @@ impl Conn {
             Err(reason) => return self.send_error(req, denied(reason)).await,
         };
 
-        // Too far: set course for the station and wait for the ship to get there.
+        // A Dock request can arrive while the client is still warping to the
+        // station. Keep that warp intact and wait for its landing. For a normal
+        // approach, prove that the ship can reach docking range before changing
+        // its live course.
         if gap > DOCK_RANGE && !towed {
             let eta = {
                 let mut world = self.server.world.lock();
                 let park = world.parks.get_mut(&system_id).expect("checked above");
-                park.command(ship_id, Command::Follow { target: station_id, range: 0.0 });
-                let eta = park.eta_within(ship_id, station_id, DOCK_RANGE, DOCK_APPROACH_LIMIT);
-                let course = space::entry(
-                    park.tick,
-                    "FollowBall",
-                    vec![Value::Int(ship_id), Value::Int(station_id), Value::Double(0.0)],
-                );
-                space::broadcast(&world, system_id, None, vec![course]);
-                let message = Value::Tuple(vec![Value::bytes("DockingApproach"), Value::Dict(Vec::new())]);
-                world.notify(&[self.client_id], "OnRemoteMessage", message);
+                let in_warp = park.ships.get(&ship_id).is_some_and(|ship| ship.in_warp());
+                let eta = if in_warp {
+                    park.eta_within(ship_id, station_id, DOCK_RANGE, DOCK_APPROACH_LIMIT)
+                } else {
+                    let mut proposed = park.clone();
+                    proposed.command(ship_id, Command::Follow { target: station_id, range: space::STATION_DOCK_CLEARANCE });
+                    proposed.eta_within(ship_id, station_id, DOCK_RANGE, DOCK_APPROACH_LIMIT)
+                };
+                if eta.is_some() && !in_warp {
+                    park.command(ship_id, Command::Follow { target: station_id, range: space::STATION_DOCK_CLEARANCE });
+                    let course = space::entry(
+                        park.tick,
+                        "FollowBall",
+                        vec![Value::Int(ship_id), Value::Int(station_id), Value::Double(space::STATION_DOCK_CLEARANCE)],
+                    );
+                    space::broadcast(&world, system_id, None, vec![course]);
+                    let message = Value::Tuple(vec![Value::bytes("DockingApproach"), Value::Dict(Vec::new())]);
+                    world.notify(&[self.client_id], "OnRemoteMessage", message);
+                }
                 eta
             };
             let Some(eta) = eta else {
@@ -225,6 +237,16 @@ impl Conn {
             };
             info!("approaching station {station_id} from {gap:.0} m, docking in ~{eta}s");
             tokio::time::sleep(Duration::from_secs(eta as u64 + 1)).await;
+            let gap = {
+                let mut world = self.server.world.lock();
+                world.parks.get_mut(&system_id).and_then(|park| {
+                    park.advance(destiny::tick_now());
+                    park.surface_distance(ship_id, station_id)
+                })
+            };
+            if !gap.is_some_and(|gap| gap <= DOCK_RANGE) {
+                return self.send_error(req, denied("The ship did not reach docking range.")).await;
+            }
         }
 
         // Towed in: out of space, into the station.

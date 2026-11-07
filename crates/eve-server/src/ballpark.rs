@@ -311,6 +311,8 @@ pub struct Park {
     /// The tick the ships' state is valid for.
     pub tick: i64,
     pub celestials: Vec<Celestial>,
+    /// Station corporation IDs for a complete ego SetState after warp landing.
+    pub station_owners: Vec<(i64, i64)>,
     pub ships: BTreeMap<i64, Ship>,
     /// Ships each connected pilot currently has in its ballpark, keyed by client.
     pub visible_ships: BTreeMap<i64, BTreeSet<i64>>,
@@ -362,6 +364,7 @@ impl Park {
             solar_system_id,
             tick,
             celestials,
+            station_owners: Vec::new(),
             ships: BTreeMap::new(),
             visible_ships: BTreeMap::new(),
             visible_objects: BTreeMap::new(),
@@ -432,6 +435,9 @@ impl Park {
     /// FollowBall, Orbit, GotoPoint, GotoDirection, WarpTo and Stop take it.
     pub fn command(&mut self, ship_id: i64, command: Command) {
         let Some(ship) = self.ships.get_mut(&ship_id) else { return };
+        // Destiny ignores course changes during warp. Clearing warp here also
+        // leaves its AU/s velocity on a normal ball, launching it across space.
+        if ship.in_warp() { return; }
         let command = match command {
             // Stop on a stopped ship changes nothing (0x10017800).
             Command::Stop if ship.command == Command::Stop && ship.warp.is_none() => return,
@@ -483,9 +489,14 @@ impl Park {
         let bounce = self.bounces(&thrust);
         let mut landed = Vec::new();
         for ship in self.ships.values_mut() {
+            let old_pos = ship.pos;
             let was_in_warp = ship.in_warp();
             let push = thrust.get(&ship.id).copied().unwrap_or(Vec3::ZERO) + bounce.get(&ship.id).copied().unwrap_or(Vec3::ZERO);
             move_ship(ship, push, now);
+            if ship.is_player() && !was_in_warp && (ship.pos - old_pos).len() > 100_000.0 {
+                tracing::warn!("player ship {} moved {:.0} m in one non-warp tick at {:?}, command {:?}",
+                    ship.id, (ship.pos - old_pos).len(), old_pos, ship.command);
+            }
             if was_in_warp && !ship.in_warp() {
                 landed.push(ship.id);
             }
@@ -538,7 +549,17 @@ impl Park {
                         warped = true;
                         Vec3::ZERO
                     }
-                    Some(WarpState::Aligning) => steer(ship, ship.goal),
+                    Some(WarpState::Aligning) => {
+                        if ship.is_player() && now % 10 == 0 {
+                            let to = (ship.goal - ship.pos).unit();
+                            let speed = ship.vel.len();
+                            let alignment = to.dot(ship.vel.unit());
+                            tracing::info!("player warp aligning: ship {} speed {:.2}/{:.2} m/s, heading {:.5}, remaining {:.3} AU, position {:?}, velocity {:?}",
+                                ship.id, speed, ship.stats.max_velocity, alignment,
+                                (ship.goal - ship.pos).len() / 149_597_870_700.0, ship.pos, ship.vel);
+                        }
+                        steer(ship, ship.goal)
+                    }
                     _ => Vec3::ZERO,
                 },
             };
@@ -941,6 +962,30 @@ mod tests {
     }
 
     #[test]
+    fn docking_approach_stops_clear_of_a_station() {
+        let station = Celestial {
+            id: 60013417,
+            type_id: 3869,
+            group_id: GROUP_STATION,
+            name: "Station".into(),
+            pos: Vec3::new(100_000.0, 0.0, 0.0),
+            radius: 43_259.0,
+            undock: None,
+            jump: None,
+        };
+        let mut park = Park::new(30002780, vec![station], 0);
+        park.ships.insert(1, Ship::new(1, 10, rifter(), pilot(), Vec3::ZERO, Vec3::ZERO));
+        park.command(1, Command::Follow { target: 60013417, range: 2_000.0 });
+        let eta = park.eta_within(1, 60013417, 2_500.0, 600).expect("reaches docking range");
+        park.advance(eta + 1);
+        let gap = park.surface_distance(1, 60013417).unwrap();
+        assert!((1_500.0..=2_500.0).contains(&gap), "docking began at {gap} m");
+        park.advance(600);
+        let gap = park.surface_distance(1, 60013417).unwrap();
+        assert!((gap - 2_000.0).abs() < 50.0, "settled at {gap} m");
+    }
+
+    #[test]
     fn a_warp_aligns_then_lands_short_of_the_target() {
         let mut park = park_with_ship(Vec3::ZERO);
         // ~33 AU: several seconds in warp for a Rifter.
@@ -977,6 +1022,22 @@ mod tests {
         assert!((ship.pos - target).len() < 1.0, "warp landed {} m away", (ship.pos - target).len());
         park.advance(100);
         assert!((park.ships[&1].pos - target).len() < 1.0, "ship drifted away after landing");
+    }
+
+    #[test]
+    fn a_dock_approach_cannot_interrupt_warp_or_keep_its_warp_velocity() {
+        let mut park = park_with_ship(Vec3::ZERO);
+        let target = Vec3::new(5.0e12, 0.0, 0.0);
+        park.command(1, Command::Warp { target, range: 0.0 });
+        park.advance(7);
+        assert!(park.ships[&1].in_warp());
+        park.command(1, Command::Follow { target: 50000001, range: 0.0 });
+        assert!(park.ships[&1].in_warp());
+        assert!(matches!(park.ships[&1].command, Command::Warp { .. }));
+        park.advance(100);
+        assert!(!park.ships[&1].in_warp());
+        assert!((park.ships[&1].pos - target).len() < 1.0);
+        assert!(park.ships[&1].vel.len() < 0.1);
     }
 
     #[test]

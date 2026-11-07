@@ -639,7 +639,19 @@ function Start-RmrWorker {
         catch { Write-Host 'RMR is already running from this folder. Use its launcher window.'; return 2 }
         # Native PostgreSQL subprocesses and compiler tools receive short ASCII
         # paths even when the checkout lives under Unicode names or a UNC share.
-        $checkoutAlias = New-NativePathAlias -Path $SourceRoot
+        try {
+            $checkoutAlias = New-NativePathAlias -Path $SourceRoot
+        } catch {
+            # A short local ASCII checkout already works with these native
+            # tools. QueryDosDevice can be denied by a restricted Windows
+            # session; keep the launcher usable without touching drive maps.
+            if ($SourceRoot.Length -gt 120 -or $SourceRoot -cnotmatch '^[A-Za-z]:\\[\x20-\x7E]+$') { throw }
+            Write-Log "Temporary drive alias unavailable; using the local checkout path: $SourceRoot"
+            $checkoutAlias = [pscustomobject]@{
+                Root = $SourceRoot; Drive = $null; Target = $null
+                SourcePath = $SourceRoot; Mutex = $null; Created = $false; Removed = $false
+            }
+        }
         $script:Root = $checkoutAlias.Root
         $script:Runtime = Join-Path $Root '.rmr'
         $script:Logs = Join-Path $Root 'logs'
