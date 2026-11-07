@@ -324,7 +324,11 @@ pub async fn get_capacity(ctx: &Ctx<'_>, container: Container, flag: Option<i64>
                                   (SELECT COALESCE(a."valueFloat", a."valueInt"::float8)
                                      FROM "dgmTypeAttributes" a
                                     WHERE a."typeID" = e."typeID" AND a."attributeID" = 912)
-                                    AS "corporateHangarCapacity"
+                                    AS "corporateHangarCapacity",
+                                  (SELECT COALESCE(a."valueFloat", a."valueInt"::float8)
+                                     FROM "dgmTypeAttributes" a
+                                    WHERE a."typeID" = e."typeID" AND a."attributeID" = 283)
+                                    AS "droneCapacity"
                            FROM "entity" e
                            JOIN "invTypes" t ON t."typeID" = e."typeID"
                           WHERE e."itemID" = $1"#;
@@ -335,6 +339,8 @@ pub async fn get_capacity(ctx: &Ctx<'_>, container: Container, flag: Option<i64>
                         if flag.is_some_and(|f| f == crate::svc::moves::FLAG_CAPITAL_CORP_HANGAR
                             || (crate::svc::moves::FLAG_CORP_HANGAR_FIRST..=crate::svc::moves::FLAG_CORP_HANGAR_LAST).contains(&f)) {
                             r.try_get::<_, Option<f64>>(1).ok().flatten().unwrap_or(0.0)
+                        } else if flag == Some(crate::svc::moves::FLAG_DRONE_BAY) {
+                            r.try_get::<_, Option<f64>>(2).ok().flatten().unwrap_or(0.0)
                         } else {
                             r.try_get::<_, Option<f64>>(0).ok().flatten().unwrap_or(0.0)
                         }
