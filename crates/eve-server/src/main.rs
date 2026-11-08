@@ -100,6 +100,7 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     svc::bookmark::ensure_coordinate_format(&mut client).await.map_err(|e| format!("repairing coordinate bookmarks: {}", logging::chain(&e)))?;
     losses::ensure_kill_items(&client).await.map_err(|e| format!("preparing kill item records: {}", logging::chain(&e)))?;
     web::ensure_storage(&client).await.map_err(|e| format!("preparing dashboard news and downtime: {}", logging::chain(&e)))?;
+    svc::alliance::ensure_logo_storage(&client).await.map_err(|e| format!("preparing alliance logos: {}", logging::chain(&e)))?;
 
     let started = Instant::now();
     let bulk =

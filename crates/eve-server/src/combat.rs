@@ -527,6 +527,8 @@ pub struct Active {
     pub effect_id: i64,
     pub guid: String,
     pub offensive: bool,
+    /// The fitted effect can run in warp (`dgmEffects.isWarpSafe`).
+    pub warp_safe: bool,
     pub action: Action,
     pub target: Option<i64>,
     pub ammo: Option<Ammo>,

@@ -75,6 +75,7 @@ pub struct Conn {
     session: Session,
     authenticated: bool,
     pending_session_change: Option<MachoPacket>,
+    pending_dock: Option<location::PendingDock>,
     /// Calls made on the client, by call ID, waiting for its answer.
     client_calls: std::collections::HashMap<i64, tokio::sync::oneshot::Sender<Option<Value>>>,
     next_call_id: i64,
@@ -100,6 +101,7 @@ impl Conn {
             session: Session::new(seq),
             authenticated: false,
             pending_session_change: None,
+            pending_dock: None,
             client_calls: std::collections::HashMap::new(),
             next_call_id: 0,
         }
@@ -125,9 +127,11 @@ impl Conn {
 
     async fn serve(&mut self, mut notifications: UnboundedReceiver<Push>) -> Result {
         self.handshake().await?;
+        let mut dock_checks = tokio::time::interval(std::time::Duration::from_millis(250));
+        dock_checks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            // Both branches are cancellation-safe: a read that loses the race has
-            // not consumed any bytes, and recv() loses nothing.
+            // These branches are cancellation-safe: a read that loses the race has
+            // not consumed any bytes, and recv() and tick() lose nothing.
             let frame = tokio::select! {
                 frame = self.read_frame() => match frame? {
                     Some(frame) => frame,
@@ -139,6 +143,10 @@ impl Conn {
                         Push::Move(m) => self.forced_move(m).await?,
                         Push::Call(c) => self.call_client(c).await?,
                     }
+                    continue;
+                }
+                _ = dock_checks.tick(), if self.pending_dock.is_some() => {
+                    self.poll_dock().await?;
                     continue;
                 }
             };
@@ -243,6 +251,12 @@ impl Conn {
             return self.select_character(req, arg(0)).await;
         }
         if bound::owns(&call.service, "beyonce") {
+            if space::is_movement(&call.method) {
+                // A movement packet can have been sent just before docking finished.
+                if self.session.station_id.is_some() || self.handle_dock_movement(&call).await? {
+                    return self.reply(req, &Value::None).await;
+                }
+            }
             match call.method.as_str() {
                 "Dock" => return self.dock(req, arg(0), false).await,
                 // The GM shortcut: docks from anywhere in the system.
@@ -461,6 +475,10 @@ impl Conn {
     /// A broadcast-style notification narrowcast to this client: the client
     /// routes it by event name (`Do*` sent, `Process*` chained, else scattered).
     async fn send_notification(&mut self, n: &Notification) -> Result {
+        // A heartbeat update may still be queued when docking ends the park.
+        if n.event == "DoDestinyUpdate" && self.session.solar_system_id.is_none() {
+            return Ok(());
+        }
         trace!(event = n.event, "notify");
         let inner = Value::Tuple(vec![Value::Int(0), Value::Tuple(vec![Value::Int(1), n.args.clone()])]);
         let blob = eve_marshal::save(&inner, &self.server.table)?;

@@ -398,6 +398,7 @@ struct EffectRow {
     category: i16,
     guid: String,
     offensive: bool,
+    warp_safe: bool,
     duration_attr: Option<i32>,
     discharge_attr: Option<i32>,
     range_attr: Option<i32>,
@@ -407,7 +408,7 @@ struct EffectRow {
 async fn effect_by_name(ctx: &Ctx<'_>, name: &str) -> Option<EffectRow> {
     let sql = r#"SELECT "effectID", "effectName", COALESCE("effectCategory", 0)::int2, COALESCE(guid, ''),
                         COALESCE("isOffensive", 0)::int, "durationAttributeID", "dischargeAttributeID",
-                        "rangeAttributeID", "falloffAttributeID"
+                        "rangeAttributeID", "falloffAttributeID", COALESCE("isWarpSafe", 0) <> 0
                    FROM "dgmEffects" WHERE "effectName" = $1"#;
     let r = ctx.query_one(sql, &[&name]).await?;
     Some(EffectRow {
@@ -420,6 +421,7 @@ async fn effect_by_name(ctx: &Ctx<'_>, name: &str) -> Option<EffectRow> {
         discharge_attr: r.get::<_, Option<i32>>(6),
         range_attr: r.get::<_, Option<i32>>(7),
         falloff_attr: r.get::<_, Option<i32>>(8),
+        warp_safe: r.get(9),
     })
 }
 
@@ -483,6 +485,9 @@ async fn activate(ctx: &Ctx<'_>, call: &Call) -> Outcome {
         let mut world = ctx.world.lock();
         let Some(park) = world.parks.get_mut(&system) else { return Outcome::custom("Your ship is not in space.") };
         let tick = park.tick;
+        if !module.warp_safe && park.ships.get(&ship_id).is_some_and(|ship| ship.in_warp()) {
+            return Outcome::custom("That module cannot be activated during warp.");
+        }
         let check = check_target(park, ship_id, &module);
         let Some(fight) = park.ships.get_mut(&ship_id).and_then(|s| s.fight.as_mut()) else {
             return Outcome::custom("Your ship is not in space.");
@@ -685,6 +690,7 @@ fn plan(loadout: &Loadout<'_>, item_id: i64, effect: &EffectRow, target: Option<
         effect_id: effect.id,
         guid,
         offensive: effect.offensive,
+        warp_safe: effect.warp_safe,
         action,
         target: if targeted { target } else { None },
         ammo: None,

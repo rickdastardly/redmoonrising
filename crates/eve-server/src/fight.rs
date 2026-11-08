@@ -200,7 +200,7 @@ fn doomsday(park: &mut Park, ship_id: i64, weapon: &Active, now: i64, out: &mut 
 fn stop_reason(park: &Park, ship_id: i64, m: &Active) -> Option<Option<(String, Value)>> {
     let ship = park.ships.get(&ship_id)?;
     let fight = ship.fight.as_ref()?;
-    if m.stopping || ship.in_warp() {
+    if m.stopping || (ship.in_warp() && !m.warp_safe) {
         return Some(None);
     }
     if m.repeat < REPEAT_FOREVER && m.cycles > m.repeat {

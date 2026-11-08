@@ -327,8 +327,6 @@ pub struct Park {
     /// The tick the ships' state is valid for.
     pub tick: i64,
     pub celestials: Vec<Celestial>,
-    /// Station corporation IDs for a complete ego SetState after warp landing.
-    pub station_owners: Vec<(i64, i64)>,
     pub ships: BTreeMap<i64, Ship>,
     /// Ships each connected pilot currently has in its ballpark, keyed by client.
     pub visible_ships: BTreeMap<i64, BTreeSet<i64>>,
@@ -380,7 +378,6 @@ impl Park {
             solar_system_id,
             tick,
             celestials,
-            station_owners: Vec::new(),
             ships: BTreeMap::new(),
             visible_ships: BTreeMap::new(),
             visible_objects: BTreeMap::new(),
@@ -486,22 +483,11 @@ impl Park {
 
     /// Seconds until `ship_id` is within `range` of `target`'s surface, if that
     /// happens within `limit` seconds on its current course.
+    #[cfg(test)]
     pub fn eta_within(&self, ship_id: i64, target: i64, range: f64, limit: i64) -> Option<i64> {
         let mut future = self.clone();
         for t in 0..=limit {
             if future.surface_distance(ship_id, target)? <= range {
-                return Some(t);
-            }
-            future.step();
-        }
-        None
-    }
-
-    /// Seconds until a ship has finished aligning and warping.
-    pub fn eta_after_warp(&self, ship_id: i64, limit: i64) -> Option<i64> {
-        let mut future = self.clone();
-        for t in 0..=limit {
-            if !future.ships.get(&ship_id)?.warping() {
                 return Some(t);
             }
             future.step();

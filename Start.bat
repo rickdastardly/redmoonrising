@@ -2000,34 +2000,341 @@ def _rmr_install_self_info():
 import uthread
 uthread.new(_rmr_install_self_info)
 
-def _rmr_install_bookmark_shortcut():
+def _rmr_install_alliance_logos():
     while not getattr(eve.session, 'charid', None):
         blue.pyos.synchro.Sleep(1000)
     try:
-        cmd = sm.StartService('cmd')
-        cls = cmd.__class__
-        if not getattr(cls, '_rmr_bookmark_shortcut_installed', False):
-            original_reload = cls.ReloadcommandsByFunc
-            def bookmark_current_location(self):
-                return eve.LocalSvc('addressbook').BookmarkCurrentLocation()
-            def reload_with_bookmark(self):
-                result = original_reload(self)
-                key = (1, 0, 0, 'b')
-                self.defaultcmds['CmdBookmarkCurrentLocation'] = key
-                if 'CmdBookmarkCurrentLocation' not in self.commandsByFunc:
-                    self.LoadCmd('CmdBookmarkCurrentLocation',
-                                 self.GetCustomCmd('CmdBookmarkCurrentLocation') or key)
-                return result
-            cls.CmdBookmarkCurrentLocation = bookmark_current_location
-            cls.ReloadcommandsByFunc = reload_with_bookmark
-            cls._rmr_bookmark_shortcut_installed = True
-        cmd.ReloadcommandsByFunc()
-        _rmr_log('Ctrl+B bookmark shortcut registered in Escape shortcuts.')
+        import uix
+        import zlib
+        cls = form.AlliancesHome
+        if getattr(cls, '_rmr_alliance_logos', None):
+            return
+        original_logo = uix.GetAllianceLogo
+        cached = {}
+
+        class AllianceLogoUpdates:
+            __notifyevents__ = ['OnAllianceLogoChanged']
+
+            def OnAllianceLogoChanged(self, allianceID):
+                cached.pop(allianceID, None)
+
+        def get_logo(allianceID, *args, **kwargs):
+            logo = original_logo(allianceID, *args, **kwargs)
+            if not eve.session.charid:
+                return logo
+            try:
+                if allianceID not in cached:
+                    data = eve.RemoteSvc('allianceRegistry').GetAllianceLogoImage(allianceID)
+                    path = None
+                    if data:
+                        name = 'rmr-alliance-%d-%08x.png' % (allianceID, zlib.crc32(data) & 4294967295)
+                        handle = file(blue.os.cachepath + name, 'wb')
+                        try:
+                            handle.write(data)
+                        finally:
+                            handle.close()
+                        path = 'cache:/' + name
+                    cached[allianceID] = path
+                path = cached[allianceID]
+                if path:
+                    # Use the alpha-blended UI pass for the RGBA logo.
+                    logo.tripass = eve.rot.GetInstance('res:/ui/pass/linear.blue')
+                    logo.texture.pixels = path
+                    logo.rectLeft = logo.rectTop = 0
+                    logo.rectWidth = logo.rectHeight = 128
+            except:
+                _rmr_log('Alliance logo load failed: ' + str(sys.exc_info()[1]))
+                sys.exc_clear()
+            return logo
+
+        def edit_alliance(self, *args):
+            alliance = eve.LocalSvc('alliance').GetAlliance()
+            registry = eve.RemoteSvc('allianceRegistry')
+            current = registry.GetAllianceLogoUrl() or ''
+            fields = [
+                {'type': 'btline'},
+                {'type': 'push', 'frame': 1},
+                {'type': 'edit', 'key': 'url', 'label': 'URL', 'labelwidth': 104,
+                 'setvalue': alliance.url or '', 'frame': 1, 'maxLength': 2048},
+                {'type': 'push', 'frame': 1},
+                {'type': 'edit', 'key': 'logoUrl', 'label': 'Logo Image URL', 'labelwidth': 104,
+                 'setvalue': current, 'frame': 1, 'maxLength': 2048},
+                {'type': 'push', 'frame': 1},
+                {'type': 'textedit', 'key': 'description', 'label': 'Description',
+                 'setvalue': alliance.description or '', 'frame': 1, 'maxLength': 5000},
+                {'type': 'push', 'frame': 1},
+                {'type': 'bbline'}]
+            desktop = eve.triapp.uilib.desktop
+            pos = [(desktop.width - 500) // 2, (desktop.height - 400) // 2]
+            result = uix.HybridWnd(fields, 'Update Alliance', 1, None, uix.OKCANCEL, pos, 500, 190)
+            if result is not None:
+                logo_url = result['logoUrl'].strip()
+                if logo_url != current:
+                    registry.UpdateAlliance(result['description'], result['url'], logo_url)
+                    cached.pop(alliance.allianceID, None)
+                else:
+                    eve.LocalSvc('alliance').UpdateAlliance(result['description'], result['url'])
+
+        updates = AllianceLogoUpdates()
+        sm.RegisterNotify(updates)
+        uix.GetAllianceLogo = get_logo
+        cls.EditAllianceForm = edit_alliance
+        cls._rmr_alliance_logos = updates
     except:
-        _rmr_log('Bookmark shortcut setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        _rmr_log('Alliance logo setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
         sys.exc_clear()
 
-uthread.new(_rmr_install_bookmark_shortcut)
+uthread.new(_rmr_install_alliance_logos)
+
+def _rmr_install_directional_scan(cmd_class):
+    import listentry
+    import state as state_flags
+    import trinity
+    import uix
+    import util
+    import xtriui
+
+    max_km = 2109329976
+    scanner = xtriui.SystemScanner
+    nav = form.InflightNav
+    state_class = sm.StartService('state').__class__
+    original_startup = scanner.Startup
+    original_mouse_up = nav._OnMouseUp
+    original_set_state = state_class.SetState
+    armed = [None]
+
+    def start_scanner(self, *args):
+        result = original_startup(self, *args)
+        if not self.destroyed and hasattr(self, 'dir_rangeinput'):
+            self.dir_rangeinput.IntMode(1, max_km)
+            saved = settings.user.ui.Get('dir_scanrange', max_km)
+            self.dir_rangeinput.SetValue(min(max_km, max(1, int(saved))))
+        return result
+
+    def space_camera():
+        scene = eve.triapp.tridev.scene
+        return getattr(scene, 'camera', None)
+
+    def scan(self, direction=None):
+        if self.destroyed or self.searching or not eve.session.solarsystemid:
+            return
+        if direction is None:
+            camera = space_camera()
+            if not hasattr(camera, 'rotationAroundParent'):
+                return
+            direction = trinity.TriVector(0, 0, 1)
+            direction.TransformQuaternion(camera.rotationAroundParent)
+            direction.Normalize()
+        park = eve.LocalSvc('michelle').GetRemotePark()
+        if not park:
+            return
+        window = uix.GetWindowAbove(self)
+        self.searching = True
+        try:
+            window.ShowLoad()
+            km = min(max_km, max(1, self.dir_rangeinput.GetValue()))
+            angle = self.sr.scanangle
+            records = park.ConeScan(angle, float(km) * 1000.0, direction.x, direction.y, direction.z)
+            if self.destroyed:
+                return
+            settings.user.ui.Set('dir_scanrange', km)
+            groups = None
+            if self.sr.useoverview.checked:
+                groups = eve.LocalSvc('tactical').GetGroups()
+            entries = []
+            for rec in records:
+                if groups is not None and rec.groupID not in groups:
+                    continue
+                type_name = cfg.invtypes.Get(rec.typeID).name
+                name = rec.name or type_name
+                distance = util.FmtDist(rec.distance, maxdemicals=1)
+                data = util.KeyVal()
+                data.name = data.sort_name = data.hint = name
+                data.sort_dist = rec.distance
+                data.sort_type = type_name
+                data.label = '%s<t>%s<t>%s' % (name, type_name, distance)
+                data.itemID = rec.id
+                data.typeID = rec.typeID
+                entries.append(listentry.Get('Generic', data=data))
+            self.listtype = 'location'
+            if entries:
+                self.SetHint()
+            else:
+                self.SetHint('Nothing found')
+            self.sr.dirscroll.Load(fixedEntryHeight=18, contentList=entries, headers=['name', 'type', 'dist'])
+        finally:
+            self.searching = False
+            if not window.destroyed:
+                window.HideLoad()
+
+    def direction_search(self, *args):
+        scan(self)
+
+    def context():
+        return (eve.session.solarsystemid, eve.session.shipid)
+
+    def awaiting_click():
+        pending = armed[0]
+        return pending and pending[0] == context() and blue.os.GetTime() < pending[1]
+
+    def toward(item_id):
+        park = eve.LocalSvc('michelle').GetBallpark()
+        if not park:
+            return None
+        ship = park.GetBall(eve.session.shipid)
+        item = park.GetBall(item_id)
+        if ship is not None and item is not None:
+            return trinity.TriVector(item.x - ship.x, item.y - ship.y, item.z - ship.z)
+
+    def aim_and_scan(direction, expected):
+        if expected != context() or not direction.Length():
+            return
+        direction.Normalize()
+        camera = space_camera()
+        if not hasattr(camera, 'rotationAroundParent'):
+            return
+        camera.rotationOfInterest.SetIdentity()
+        rotation = camera.rotationAroundParent
+        if direction.z < -0.999999:
+            rotation.SetYawPitchRoll(3.141592653589793, 0, 0)
+        else:
+            rotation.SetRotationArc(trinity.TriVector(0, 0, 1), direction)
+        windows = eve.LocalSvc('window')
+        window = windows.GetWindow('scanner')
+        if window is None or window.destroyed:
+            eve.LocalSvc('cmd').OpenScanner()
+            window = windows.GetWindow('scanner')
+        if window is not None and not window.destroyed and expected == context():
+            window.Maximize()
+            if window.sr.tabs.GetSelectedArgs() != 'system':
+                window.sr.tabs.SelectByIdx(0, False)
+            scan(window.sr.systemscanner, direction)
+
+    def queue_scan(direction):
+        if direction is not None and direction.Length():
+            armed[0] = None
+            uthread.new(aim_and_scan, direction, context())
+
+    def select_object(self, item_id, flag, value, *args):
+        result = original_set_state(self, item_id, flag, value, *args)
+        if value and flag == state_flags.selected and awaiting_click():
+            queue_scan(toward(item_id))
+        return result
+
+    def click_space(self, button, *args):
+        direction = None
+        if button == 0 and awaiting_click() and (self.GetMouseTravel() or 0) <= 5:
+            lib = eve.triapp.uilib
+            scene = eve.triapp.tridev.scene
+            if not lib.rightbtn and scene and scene.camera:
+                _, picked = self.GetPick()
+                curve = getattr(picked, 'translationCurve', None)
+                item_id = getattr(curve, 'id', None)
+                if item_id is not None:
+                    direction = toward(item_id)
+                if direction is None or not direction.Length():
+                    direction = scene.PickInfinity(lib.x, lib.y, scene.camera.projection, scene.camera.view)
+        if direction is not None:
+            armed[0] = None
+        result = original_mouse_up(self, button, *args)
+        queue_scan(direction)
+        return result
+
+    def directional_scan(self):
+        if not eve.session.solarsystemid or not eve.session.shipid:
+            return
+        focus = eve.LocalSvc('ui').GetFocus()
+        if isinstance(focus, (xtriui.SingleLineEdit, xtriui.VirtualEdit)) and not getattr(focus, 'readonly', False):
+            return
+        armed[0] = (context(), blue.os.GetTime() + 100000000)
+
+    scanner.Startup = start_scanner
+    scanner.DirectionSearch = direction_search
+    nav._OnMouseUp = click_space
+    state_class.SetState = select_object
+    cmd_class.CmdDirectionalScan = directional_scan
+
+
+def _rmr_install_shortcuts():
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        import xtriui
+        cmd = sm.StartService('cmd')
+        cls = cmd.__class__
+        if not getattr(cls, '_rmr_shortcuts_installed', False):
+            original_reload = cls.ReloadcommandsByFunc
+
+            def bookmark_current_location(self):
+                return eve.LocalSvc('addressbook').BookmarkCurrentLocation()
+
+            def order_drones(engage):
+                session = eve.session
+                if not session.solarsystemid or not session.shipid:
+                    return
+                focus = eve.LocalSvc('ui').GetFocus()
+                if isinstance(focus, (xtriui.SingleLineEdit, xtriui.VirtualEdit)) and not getattr(focus, 'readonly', False):
+                    return
+                michelle = eve.LocalSvc('michelle')
+                park = michelle.GetBallpark()
+                drones = michelle.GetDrones()
+                if park is None or not drones:
+                    return
+                ids = []
+                for drone_id in drones:
+                    drone = drones[drone_id]
+                    if drone.ownerID != session.charid or drone.controllerID != session.shipid:
+                        continue
+                    if engage:
+                        item = park.slimItems.get(drone_id)
+                        if item is None or item.groupID in (const.groupMiningDrone, const.groupUnanchoringDrone):
+                            continue
+                    ids.append(drone_id)
+                if ids:
+                    menu = eve.LocalSvc('menu')
+                    if engage:
+                        menu.EngageTarget(ids)
+                    else:
+                        menu.ReturnToDroneBay(ids)
+
+            def drones_engage(self):
+                return order_drones(True)
+
+            def return_drones(self):
+                return order_drones(False)
+
+            def reload_shortcuts(self):
+                result = original_reload(self)
+                shortcuts = (('CmdBookmarkCurrentLocation', (1, 0, 0, 'b')),
+                             ('CmdDronesEngage', (0, 0, 0, 'f')),
+                             ('CmdReturnDrones', (0, 0, 1, 'r')),
+                             ('CmdDirectionalScan', (0, 0, 0, 'v')))
+                for name, key in shortcuts:
+                    if not hasattr(self, name):
+                        continue
+                    self.defaultcmds[name] = key
+                    if name not in self.commandsByFunc:
+                        self.LoadCmd(name, self.GetCustomCmd(name) or key)
+                return result
+
+            cls.CmdBookmarkCurrentLocation = bookmark_current_location
+            cls.CmdDronesEngage = drones_engage
+            cls.CmdReturnDrones = return_drones
+            cls.ReloadcommandsByFunc = reload_shortcuts
+            cls._rmr_shortcuts_installed = True
+        if not getattr(cls, 'CmdDirectionalScan', None):
+            try:
+                _rmr_install_directional_scan(cls)
+            except:
+                _rmr_log('Directional scanner setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+                sys.exc_clear()
+        cmd.ReloadcommandsByFunc()
+        _rmr_log('RMR shortcuts registered in Escape shortcuts.')
+    except:
+        _rmr_log('Shortcut setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+uthread.new(_rmr_install_shortcuts)
 
 def _rmr_install_bookmark_warp_menu():
     while not getattr(eve.session, 'charid', None):
@@ -2091,6 +2398,86 @@ def _rmr_install_bookmark_warp_menu():
         sys.exc_clear()
 
 uthread.new(_rmr_install_bookmark_warp_menu)
+
+def _rmr_install_warp_distance():
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        cls = sm.StartService('space').__class__
+        if getattr(cls, '_rmr_warp_distance_installed', False):
+            return
+        original_call = cls.OnBallparkCall
+        original_confirm = cls.ConfirmWarpDestination
+
+        def own_warp_destination(self, name, args):
+            # Keep the native movement for other ships without changing our HUD.
+            if name == 'WarpTo' and args[0] != eve.session.shipid:
+                return
+            return original_call(self, name, args)
+
+        def confirm_landing_point(self):
+            original_confirm(self)
+            # Use the actual WarpTo coordinates, including the selected range.
+            self.warpDestinationCache[4] = self.warpDestinationCache[3]
+
+        cls.OnBallparkCall = own_warp_destination
+        cls.ConfirmWarpDestination = confirm_landing_point
+        cls._rmr_warp_distance_installed = True
+    except:
+        _rmr_log('Warp distance setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+uthread.new(_rmr_install_warp_distance)
+
+class _RmrSpaceQueue:
+    def __init__(self, broker, queue):
+        self.broker = broker
+        self.queue = queue
+
+    def put(self, stop):
+        # Michelle.Stop uses this to pass its None sentinel.
+        return self.queue.put(stop)
+
+    def non_blocking_put(self, work):
+        return self.queue.non_blocking_put((self.broker._Michelle__bp, work))
+
+    def get(self):
+        while True:
+            queued = self.queue.get()
+            if queued is None:
+                return None
+            if len(queued) == 5:
+                # The dispatcher's wake-up or work queued during setup.
+                park, work = self.broker._Michelle__bp, queued
+            else:
+                park, work = queued
+            if park is None or park is not self.broker._Michelle__bp:
+                continue
+            owners, corps, alliances, balls, new_state = work
+            # These lookups can yield while docking tears down the park.
+            if owners:
+                cfg.eveowners.Prime(owners)
+            if corps:
+                cfg.corptickernames.Prime(corps)
+            if alliances:
+                cfg.allianceshortnames.Prime(alliances)
+            if park is self.broker._Michelle__bp:
+                return (None, None, None, balls, new_state)
+
+
+def _rmr_install_space_queue():
+    try:
+        broker = sm.StartService('michelle')
+        queue = broker.ballQueue
+        if not isinstance(queue, _RmrSpaceQueue):
+            broker.ballQueue = _RmrSpaceQueue(broker, queue)
+            # Wake the native dispatcher if it is already waiting on get().
+            queue.non_blocking_put((None, None, None, (), None))
+    except:
+        _rmr_log('Space update queue setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+uthread.new(_rmr_install_space_queue)
 
 def _rmr_install_mission_agent_contacts():
     while not getattr(eve.session, 'charid', None):

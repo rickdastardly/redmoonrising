@@ -9,12 +9,13 @@ use eve_proto::MachoPacket;
 use tracing::{error, info, warn};
 
 use super::{Conn, Result};
-use crate::ballpark::{Command, Vec3};
+use crate::ballpark::{Command, Park, Vec3};
 use crate::destiny;
 use crate::exceptions::{custom_error, user_error};
+use crate::services::Call;
 use crate::svc::inventory::FLAG_HANGAR;
 use crate::svc::{bound, inflight, space};
-use crate::world::Move;
+use crate::world::{Move, Notification};
 
 /// const.maxStargateJumpingDistance.
 const JUMP_RANGE: f64 = 2_500.0;
@@ -23,14 +24,103 @@ const RANGE_SLACK: f64 = 1.25;
 /// How long the gate's flash and the ship's jump-out play before the ship
 /// is gone. Their length is in the effects' models; this is a choice.
 const JUMP_OUT_TIME: Duration = Duration::from_secs(3);
-/// Close enough to a station's server ball to be towed in. The legacy client
-/// already reads zero metres at about 2 km from this station's server ball.
-const DOCK_RANGE: f64 = 2_500.0;
-/// Steer toward the centre only when the ship's warp-exit coast cannot reach
-/// docking range by itself; tow it in before it reaches the collision hull.
-const DOCK_APPROACH_RANGE: f64 = 0.0;
-/// The longest a docking approach may take before the request is refused.
-const DOCK_APPROACH_LIMIT: i64 = 600;
+/// Maximum distance between the ship and station surfaces for regular docking.
+const DOCK_RANGE: f64 = 1_000.0;
+/// Dock may be called directly from outside the station's grid.
+const DOCK_WARP_DISTANCE: f64 = 1_000_000.0;
+/// Time allowed to finish an active warp before reporting a failed warp.
+const DOCK_WARP_LIMIT: i64 = 600;
+
+/// Keep the Dock RPC open while the connection continues to deliver flight
+/// updates and receive commands.
+pub(super) struct PendingDock {
+    request: MachoPacket,
+    system_id: i64,
+    ship_id: i64,
+    station_id: i64,
+    warp_deadline: i64,
+    approaching: bool,
+}
+
+#[derive(Debug, PartialEq)]
+enum DockStep {
+    Wait,
+    Approach { gap: f64 },
+    Warp,
+    Arrived,
+}
+
+impl PendingDock {
+    fn continues_toward_station(&self, park: &Park, call: &Call) -> bool {
+        if call.method == "FollowBall" {
+            return call.arg_i64(0) == Some(self.station_id)
+                && call.args.get(1).and_then(Value::as_f64).is_none_or(|range| range <= DOCK_RANGE);
+        }
+        let Some(ship) = park.ships.get(&self.ship_id) else { return false };
+        let Some((station, radius)) = park.ball(self.station_id) else { return false };
+        let component = |i: usize| call.args.get(i).and_then(Value::as_f64);
+        let (Some(x), Some(y), Some(z)) = (component(0), component(1), component(2)) else { return false };
+        let point = Vec3::new(x, y, z);
+        let direction = match call.method.as_str() {
+            "GotoDirection" => point.unit(),
+            "GotoPoint" => (point - ship.pos).unit(),
+            _ => return false,
+        };
+        let to_station = station - ship.pos;
+        let along = to_station.dot(direction);
+        let reach = radius + ship.stats.radius + DOCK_RANGE;
+        along > 0.0 && (to_station - direction * along).len_sq() <= reach * reach
+    }
+
+    fn step(&mut self, park: &mut Park, towed: bool) -> std::result::Result<DockStep, &'static str> {
+        if !space::is_station(park, self.station_id) {
+            return Err("That station is not in this solar system.");
+        }
+        let ship = park.ships.get(&self.ship_id).ok_or("Your ship is no longer in space.")?;
+        if towed {
+            return Ok(DockStep::Arrived);
+        }
+        // Let the heartbeat send the warp exit and reset the client's
+        // ballpark before sending a sublight command.
+        if ship.warping() || park.landed.contains(&self.ship_id) {
+            return if park.tick < self.warp_deadline {
+                Ok(DockStep::Wait)
+            } else {
+                Err("Your ship did not finish warping to the station.")
+            };
+        }
+
+        let (at, radius) = park.ball(self.station_id).ok_or("The station is unavailable.")?;
+        let offset = ship.pos - at;
+        let gap = (offset.len() - radius - ship.stats.radius).max(0.0);
+        if gap <= DOCK_RANGE {
+            return Ok(DockStep::Arrived);
+        }
+        if self.approaching {
+            return Ok(DockStep::Wait);
+        }
+
+        if gap > DOCK_WARP_DISTANCE {
+            if ship.fight.as_ref().is_some_and(|fight| fight.afflictions.scrambled >= 1.0) {
+                return Err("Your ship cannot warp to the station while warp scrambled.");
+            }
+            let target = space::station_warp_point(ship, at, radius, 0.0);
+            park.set_speed_fraction(self.ship_id, 1.0);
+            park.command(self.ship_id, Command::Warp { target, range: 0.0 });
+            self.warp_deadline = park.tick + DOCK_WARP_LIMIT;
+            return Ok(DockStep::Warp);
+        }
+
+        // Aim the ship's centre at the near side of the station hull. A
+        // FollowBall goal at the docking perimeter eases thrust much too
+        // early on large hulls. The range check intercepts this course at 1 km.
+        let course = Command::Point(at + offset.unit() * radius);
+        park.set_speed_fraction(self.ship_id, 1.0);
+        park.command(self.ship_id, course);
+        self.approaching = true;
+        Ok(DockStep::Approach { gap })
+    }
+}
 
 impl Conn {
     pub(super) async fn select_character(&mut self, req: &MachoPacket, char_id: i64) -> Result {
@@ -180,127 +270,119 @@ impl Conn {
     }
 
     pub(super) async fn dock(&mut self, req: &MachoPacket, station_id: i64, towed: bool) -> Result {
-        let denied = |reason: &str| user_error("DockingRequestDenied", &[("reason", Value::bytes(reason))]);
         let (Some(system_id), Some(ship_id)) = (self.session.solar_system_id, self.session.ship_id) else {
-            warn!("dock while not in space");
-            return self.send_error(req, denied("You are not in space.")).await;
+            return self.refuse_dock(req, "You are not in space.").await;
         };
+        if let Some(pending) = &self.pending_dock {
+            if pending.station_id == station_id && !towed {
+                return self.reply(req, &Value::None).await;
+            }
+            return self.refuse_dock(req, "A docking request is already in progress.").await;
+        }
+        let pending = PendingDock {
+            request: req.clone(),
+            system_id,
+            ship_id,
+            station_id,
+            warp_deadline: destiny::tick_now() + DOCK_WARP_LIMIT,
+            approaching: false,
+        };
+        self.advance_dock(pending, towed).await
+    }
 
-        // Where is the ship relative to the station? (Decided under the lock,
-        // answered after it is released.)
-        let gap = {
+    pub(super) async fn poll_dock(&mut self) -> Result {
+        if let Some(pending) = self.pending_dock.take() {
+            self.advance_dock(pending, false).await?;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn handle_dock_movement(&mut self, call: &Call) -> Result<bool> {
+        let Some(pending) = &self.pending_dock else { return Ok(false) };
+        let keep_course = {
             let mut world = self.server.world.lock();
-            match world.parks.get_mut(&system_id) {
-                None => Err("You are not in space."),
-                Some(park) => {
-                    park.advance(destiny::tick_now());
-                    if !space::is_station(park, station_id) {
-                        warn!("dock at {station_id}, which is not a station in {system_id}");
-                        Err("That station is not in this solar system.")
-                    } else {
-                        park.surface_distance(ship_id, station_id).ok_or("Your ship is not in space.")
+            world.parks.get_mut(&pending.system_id).is_some_and(|park| {
+                park.advance(destiny::tick_now());
+                park.ships.get(&pending.ship_id).is_some_and(|ship| ship.in_warp())
+                    || pending.continues_toward_station(park, call)
+            })
+        };
+        // A warp ignores new courses, and a manual click toward the same
+        // station is already covered by the queued approach.
+        if keep_course {
+            return Ok(true);
+        }
+        if call.method != "SetSpeedFraction"
+            || call.args.first().and_then(Value::as_f64).is_some_and(|speed| speed <= 0.0)
+        {
+            self.cancel_dock("Docking cancelled by a new flight command.").await?;
+        }
+        Ok(false)
+    }
+
+    pub(super) async fn cancel_dock(&mut self, reason: &str) -> Result {
+        if let Some(pending) = self.pending_dock.take() {
+            self.refuse_dock(&pending.request, reason).await?;
+        }
+        Ok(())
+    }
+
+    async fn refuse_dock(&mut self, req: &MachoPacket, reason: &str) -> Result {
+        self.send_error(req, user_error("DockingRequestDenied", &[("reason", Value::bytes(reason))])).await
+    }
+
+    async fn advance_dock(&mut self, mut pending: PendingDock, towed: bool) -> Result {
+        let (system_id, ship_id, station_id) = (pending.system_id, pending.ship_id, pending.station_id);
+        if self.session.solar_system_id != Some(system_id) || self.session.ship_id != Some(ship_id) {
+            return self.refuse_dock(&pending.request, "Your ship has left the docking approach.").await;
+        }
+        // Check range and take the ship out of space under the same world lock.
+        let result = (|| {
+            let mut world = self.server.world.lock();
+            let park = world.parks.get_mut(&system_id).ok_or("You are not in space.")?;
+            park.advance(destiny::tick_now());
+            match pending.step(park, towed)? {
+                DockStep::Wait => Ok(None),
+                step @ (DockStep::Approach { .. } | DockStep::Warp) => {
+                    let ship = &park.ships[&ship_id];
+                    let course = space::course_entries(ship, park.tick);
+                    let mut viewers = space::ship_viewers(park, ship_id);
+                    if step == DockStep::Warp {
+                        viewers.retain(|&client| client != self.client_id);
+                        let mut own_course = Vec::from(space::ship_motion_entries(ship, park.tick));
+                        own_course.extend(course.iter().cloned());
+                        space::broadcast(&world, system_id, Some(self.client_id), own_course);
+                    } else if !viewers.contains(&self.client_id) {
+                        viewers.push(self.client_id);
                     }
+                    world.notify(&viewers, "DoDestinyUpdate", Value::Tuple(vec![Value::List(course), Value::Int(0)]));
+                    if let DockStep::Approach { gap } = step {
+                        let message = Value::Tuple(vec![Value::bytes("DockingApproach"), Value::Dict(Vec::new())]);
+                        world.notify(&[self.client_id], "OnRemoteMessage", message);
+                        info!("approaching station {station_id} from {gap:.0} m");
+                    }
+                    Ok(None)
+                }
+                DockStep::Arrived => {
+                    let start = park.ships[&ship_id].pos;
+                    let end = park.ball(station_id).map_or(start, |(pos, _)| pos);
+                    let ship = space::remove_ship(&mut world, system_id, ship_id)
+                        .ok_or("Your ship is no longer in space.")?;
+                    Ok(Some((start, end, ship)))
                 }
             }
-        };
-        let mut gap = match gap {
-            Ok(gap) => gap,
-            Err(reason) => return self.send_error(req, denied(reason)).await,
-        };
-
-        // The client can request Dock while aligning or in warp. Preserve
-        // that course and wait for landing before beginning the short approach.
-        if !towed {
-            let eta = {
-                let world = self.server.world.lock();
-                let park = world.parks.get(&system_id).expect("checked above");
-                park.eta_after_warp(ship_id, DOCK_APPROACH_LIMIT)
-            };
-            let Some(eta) = eta else {
-                return self.send_error(req, denied("Your ship did not finish warping to the station.")).await;
-            };
-            if eta > 0 {
-                tokio::time::sleep(Duration::from_secs(eta as u64 + 1)).await;
-                gap = {
-                    let mut world = self.server.world.lock();
-                    world.parks.get_mut(&system_id).and_then(|park| {
-                        park.advance(destiny::tick_now());
-                        park.surface_distance(ship_id, station_id)
-                    })
-                }.unwrap_or(f64::INFINITY);
+        })();
+        let (start, end, ship) = match result {
+            Ok(Some(arrival)) => arrival,
+            Ok(None) => {
+                self.pending_dock = Some(pending);
+                return Ok(());
             }
-        }
-
-        // Prove a normal approach can reach docking range before changing
-        // the ship's live course. FollowBall needs an open throttle after warp.
-        if gap > DOCK_RANGE && !towed {
-            let eta = {
-                let mut world = self.server.world.lock();
-                let park = world.parks.get_mut(&system_id).expect("checked above");
-                let coast_eta = park.ships.get(&ship_id)
-                    .filter(|ship| matches!(ship.command, Command::Stop))
-                    .and_then(|_| park.eta_within(ship_id, station_id, DOCK_RANGE, DOCK_APPROACH_LIMIT));
-                let eta = if coast_eta.is_some() { coast_eta } else {
-                    let mut proposed = park.clone();
-                    proposed.set_speed_fraction(ship_id, 1.0);
-                    proposed.command(ship_id, Command::Follow { target: station_id, range: DOCK_APPROACH_RANGE });
-                    proposed.eta_within(ship_id, station_id, DOCK_RANGE, DOCK_APPROACH_LIMIT)
-                };
-                if eta.is_some() && coast_eta.is_none() {
-                    park.set_speed_fraction(ship_id, 1.0);
-                    park.command(ship_id, Command::Follow { target: station_id, range: DOCK_APPROACH_RANGE });
-                    let course = space::entry(
-                        park.tick,
-                        "FollowBall",
-                        vec![Value::Int(ship_id), Value::Int(station_id), Value::Double(DOCK_APPROACH_RANGE)],
-                    );
-                    let throttle = space::entry(park.tick, "SetSpeedFraction", vec![Value::Int(ship_id), Value::Double(1.0)]);
-                    space::broadcast(&world, system_id, None, vec![course, throttle]);
-                    let message = Value::Tuple(vec![Value::bytes("DockingApproach"), Value::Dict(Vec::new())]);
-                    world.notify(&[self.client_id], "OnRemoteMessage", message);
-                }
-                eta
-            };
-            let Some(eta) = eta else {
-                warn!("dock at {station_id}: {gap:.0} m away, too far to approach");
-                return self.send_error(req, denied("The station is too far away.")).await;
-            };
-            info!("approaching station {station_id} from {gap:.0} m, docking in ~{eta}s");
-            tokio::time::sleep(Duration::from_secs(eta as u64 + 1)).await;
-            let gap = {
-                let mut world = self.server.world.lock();
-                world.parks.get_mut(&system_id).and_then(|park| {
-                    park.advance(destiny::tick_now());
-                    park.surface_distance(ship_id, station_id)
-                })
-            };
-            if !gap.is_some_and(|gap| gap <= DOCK_RANGE) {
-                return self.send_error(req, denied("The ship did not reach docking range.")).await;
-            }
-        }
-
-        // Towed in: out of space, into the station.
-        let (start, end, ship) = {
-            let mut world = self.server.world.lock();
-            let start = world
-                .parks
-                .get(&system_id)
-                .and_then(|p| p.ships.get(&ship_id))
-                .map_or(Vec3::ZERO, |s| s.pos);
-            let end = world.parks.get(&system_id).and_then(|p| p.ball(station_id)).map_or(start, |(p, _)| p);
-            (start, end, space::remove_ship(&mut world, system_id, ship_id))
-        };
-        // Destroyed on the way in.
-        let Some(ship) = ship else {
-            warn!("dock at {station_id}: ship {ship_id} is no longer in space");
-            return self.send_error(req, denied("Your ship is no longer in space.")).await;
+            Err(reason) => return self.refuse_dock(&pending.request, reason).await,
         };
         if let Some(fight) = &ship.fight {
             inflight::save_vitals(&self.server.db, ship_id, fight, true).await;
         }
-        let point = |v: Vec3| Value::Tuple(vec![Value::Double(v.x), Value::Double(v.y), Value::Double(v.z)]);
-        let accepted = Value::Tuple(vec![point(start), point(end), Value::Int(station_id)]);
-        self.server.world.lock().notify(&[self.client_id], "OnDockingAccepted", accepted);
 
         let before = self.session.clone();
         self.session.station_id = Some(station_id);
@@ -309,10 +391,15 @@ impl Conn {
         if let Some(char_id) = self.session.char_id {
             self.session.ship_id = self.store_docked(char_id, ship_id, station_id).await;
         }
+        let point = |v: Vec3| Value::Tuple(vec![Value::Double(v.x), Value::Double(v.y), Value::Double(v.z)]);
+        self.send_notification(&Notification {
+            event: "OnDockingAccepted",
+            args: Value::Tuple(vec![point(start), point(end), Value::Int(station_id)]),
+        }).await?;
         self.send_session_change_from(&before).await?;
 
         info!(ship = ?self.session.ship_id, "docked at station {station_id}");
-        self.reply(req, &Value::None).await
+        self.reply(&pending.request, &Value::None).await
     }
 
     pub(super) async fn stargate_jump(&mut self, req: &MachoPacket, from_gate: i64, to_gate: i64) -> Result {
@@ -593,5 +680,127 @@ impl Conn {
                 None
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ballpark::{Celestial, Pilot, Ship, ShipStats};
+    use eve_proto::MessageType;
+
+    fn station_and_ship(stats: ShipStats, pos: Vec3) -> (Park, PendingDock) {
+        let station = Celestial {
+            id: 60_013_417,
+            type_id: 3869,
+            group_id: 15,
+            name: "Station".into(),
+            pos: Vec3::ZERO,
+            radius: 43_259.0,
+            undock: None,
+            jump: None,
+        };
+        let dock = PendingDock {
+            request: MachoPacket::new(MessageType::CallReq, Vec::new()),
+            system_id: 30_003_287,
+            ship_id: 1,
+            station_id: station.id,
+            warp_deadline: DOCK_WARP_LIMIT,
+            approaching: false,
+        };
+        let mut park = Park::new(dock.system_id, vec![station], 0);
+        let pilot = Pilot {
+            type_id: 587,
+            group_id: 25,
+            name: "Pilot".into(),
+            char_id: 2,
+            corp_id: 3,
+            alliance_id: None,
+            security: 0.0,
+            bounty: 0.0,
+        };
+        let ship = Ship::new(dock.ship_id, 10, stats, pilot, pos, Vec3::ZERO);
+        park.ships.insert(dock.ship_id, ship);
+        (park, dock)
+    }
+
+    #[test]
+    fn docking_waits_for_warp_then_approaches_from_seventeen_km() {
+        let stats = ShipStats::new(37.0, 1_100_000.0, 3.1, 320.0, 2.0);
+        let (mut park, mut dock) = station_and_ship(stats, Vec3::new(149_597_870_700.0, 0.0, 0.0));
+        let exit = Vec3::new(43_259.0 + stats.radius + 17_000.0, 0.0, 0.0);
+        let warp = Command::Warp { target: exit, range: 0.0 };
+        park.command(dock.ship_id, warp.clone());
+        finish_warp(&mut dock, &mut park);
+        park.set_speed_fraction(dock.ship_id, 0.0);
+        let Ok(DockStep::Approach { gap }) = dock.step(&mut park, false) else {
+            panic!("Dock should start a sublight approach after landing");
+        };
+        assert!((16_000.0..=18_000.0).contains(&gap));
+        assert_eq!(park.ships[&dock.ship_id].speed_fraction, 1.0);
+        let mut click = Call {
+            service: "beyonce".into(),
+            method: "GotoDirection".into(),
+            args: vec![Value::Double(-1.0), Value::Double(0.0), Value::Double(0.0)],
+            kwargs: Vec::new(),
+        };
+        assert!(dock.continues_toward_station(&park, &click));
+        click.args[0] = Value::Double(1.0);
+        assert!(!dock.continues_toward_station(&park, &click));
+        assert!(finish_approach(&mut dock, &mut park, 120) > 1);
+    }
+
+    #[test]
+    fn docking_keeps_a_large_ship_approaching_past_the_old_timeout() {
+        let stats = ShipStats::new(9_000.0, 1_800_000_000.0, 0.05, 87.5, 1.0);
+        let pos = Vec3::new(43_259.0 + stats.radius + 100_000.0, 0.0, 0.0);
+        let (mut park, mut dock) = station_and_ship(stats, pos);
+        assert_eq!(dock.step(&mut park, false), Ok(DockStep::Approach { gap: 100_000.0 }));
+        assert!(finish_approach(&mut dock, &mut park, 2_000) > 600);
+    }
+
+    #[test]
+    fn distant_dock_warps_before_the_sublight_approach() {
+        let stats = ShipStats::new(37.0, 1_100_000.0, 3.1, 320.0, 2.0);
+        let (mut park, mut dock) = station_and_ship(stats, Vec3::new(149_597_870_700.0, 0.0, 0.0));
+        assert_eq!(dock.step(&mut park, false), Ok(DockStep::Warp));
+        assert!(park.ships[&dock.ship_id].warping());
+        finish_warp(&mut dock, &mut park);
+        let Ok(DockStep::Approach { gap }) = dock.step(&mut park, false) else {
+            panic!("Dock should approach automatically after the station warp");
+        };
+        assert!((1_000.0..10_000.0).contains(&gap));
+        finish_approach(&mut dock, &mut park, 120);
+    }
+
+    fn finish_warp(dock: &mut PendingDock, park: &mut Park) {
+        let warp = park.ships[&dock.ship_id].command.clone();
+        for tick in park.tick + 1..=park.tick + DOCK_WARP_LIMIT {
+            assert_eq!(dock.step(park, false), Ok(DockStep::Wait));
+            assert_eq!(park.ships[&dock.ship_id].command, warp);
+            park.advance(tick);
+            if !park.ships[&dock.ship_id].warping() {
+                break;
+            }
+        }
+        assert!(!park.ships[&dock.ship_id].warping());
+        assert!(park.landed.contains(&dock.ship_id));
+        assert_eq!(dock.step(park, false), Ok(DockStep::Wait));
+        park.landed.clear(); // The heartbeat delivers the landing state.
+    }
+
+    fn finish_approach(dock: &mut PendingDock, park: &mut Park, max_ticks: i64) -> i64 {
+        let start = park.tick;
+        for tick in start + 1..=start + max_ticks {
+            park.advance(tick);
+            let gap = park.surface_distance(dock.ship_id, dock.station_id).unwrap();
+            let step = dock.step(park, false).unwrap();
+            if step == DockStep::Arrived {
+                assert!(gap > 0.0 && gap <= 1_000.0, "arrived at {gap} m from the station");
+                return tick - start;
+            }
+            assert!(gap > 1_000.0 && step == DockStep::Wait, "unexpected docking step {step:?} at {gap} m");
+        }
+        panic!("ship did not reach the station within {max_ticks}s");
     }
 }

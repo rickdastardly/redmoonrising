@@ -824,6 +824,7 @@ pub fn entity_module(t: &NpcType, module_id: i64, effect_id: i64, guid: &str, ac
         effect_id,
         guid: guid.to_string(),
         offensive: true,
+        warp_safe: false,
         action,
         target: None,
         ammo: None,
@@ -1282,6 +1283,7 @@ mod tests {
             effect_id: 34,
             guid: "effects.ProjectileFired".into(),
             offensive: true,
+            warp_safe: false,
             action: Action::Turret {
                 damage: [0.0, 0.0, 400.0, 0.0],
                 gun: Gun { optimal: 1.0e6, falloff: 1.0, tracking: 100.0, optimal_sig: 1.0 },
@@ -1335,6 +1337,7 @@ mod tests {
             effect_id: 586,
             guid: "effects.ModifyTargetSpeed".into(),
             offensive: true,
+            warp_safe: false,
             action,
             target: Some(target),
             ammo: None,
@@ -1358,6 +1361,56 @@ mod tests {
         other.pilot.char_id = PLAYER + 10;
         park.ships.insert(other.id, other);
         PLAYER + 11
+    }
+
+    #[test]
+    fn warp_safe_modules_keep_cycling_through_warp() {
+        let mut park = Park::new(30_000_001, Vec::new(), 0);
+        let mut ship = player_ship(Vec3::ZERO);
+        let ship_id = ship.id;
+        let fight = ship.fight.as_mut().unwrap();
+        fight.vitals.armor_damage = 60.0;
+        let repair = Active {
+            name: "Armor Repairer".into(),
+            effect_id: 27,
+            offensive: false,
+            warp_safe: true,
+            target: None,
+            reach: None,
+            cap_need: 10.0,
+            ..running(1, Action::ArmorRepair(20.0), 0, 0.0)
+        };
+        let hardener = Active {
+            module_id: 2,
+            name: "Armor Hardener".into(),
+            effect_id: 2098,
+            action: Action::Passive,
+            ..repair.clone()
+        };
+        let afterburner = Active {
+            module_id: 3,
+            name: "Afterburner".into(),
+            effect_id: 1253,
+            warp_safe: false,
+            ..hardener.clone()
+        };
+        fight.modules.extend([repair, hardener, afterburner]);
+        park.ships.insert(ship_id, ship);
+        crate::fight::step(&mut park, 0, &mut Out::default());
+        park.command(ship_id, Command::Warp { target: Vec3::new(5.0e12, 0.0, 0.0), range: 0.0 });
+        park.advance(6);
+        let ship = &park.ships[&ship_id];
+        assert!(ship.in_warp());
+        let capacitor = ship.fight.as_ref().unwrap().vitals.capacitor.at(6_000);
+
+        crate::fight::step(&mut park, 6_000, &mut Out::default());
+        let fight = park.ships[&ship_id].fight.as_ref().unwrap();
+        assert_eq!(fight.module(1).unwrap().cycles, 2);
+        assert_eq!(fight.module(2).unwrap().cycles, 2);
+        assert!(fight.module(3).is_none());
+        assert_eq!(fight.vitals.armor_damage, 20.0);
+        let spent = capacitor - fight.vitals.capacitor.at(6_000);
+        assert!((spent - 20.0).abs() < 1e-9, "expected 20 GJ spent, got {spent}");
     }
 
     #[test]

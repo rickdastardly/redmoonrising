@@ -28,6 +28,8 @@ const DEFAULT_WARP_RANGE: f64 = 15_000.0;
 const DEFAULT_FOLLOW_RANGE: f64 = 50.0;
 /// Ship overview visibility is limited to one million metres around each pilot.
 const SHIP_OVERVIEW_RANGE: f64 = 1_000_000.0;
+/// 14.1 AU in metres. The legacy scanner's input displays kilometres.
+const MAX_SCAN_RANGE: f64 = 2_109_329_976_870.0;
 /// A zero-range station warp otherwise stops at the exact collision boundary.
 /// This keeps the ship clear of the hull before its docking approach.
 const STATION_WARP_CLEARANCE: f64 = 2_000.0;
@@ -92,9 +94,9 @@ pub async fn beyonce(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
 }
 
 /// Directional scanner: scanAngle, range in metres, and the camera's unit
-/// vector. The client reads `id`, `groupID`, and `typeID` from each result.
+/// vector. Names and distances are supplied even for balls outside the overview.
 async fn cone_scan(ctx: &Ctx<'_>, call: &Call) -> Value {
-    const HEADER: &[&str] = &["id", "groupID", "typeID"];
+    const HEADER: &[&str] = &["id", "groupID", "typeID", "name", "distance"];
     let Some(system_id) = ctx.session.solar_system_id else { return rowset(HEADER, Vec::new()) };
     let Some(ship_id) = ctx.session.ship_id else { return rowset(HEADER, Vec::new()) };
     let arg = |i: usize| call.args.get(i).and_then(Value::as_f64).unwrap_or(0.0);
@@ -110,48 +112,49 @@ async fn cone_scan(ctx: &Ctx<'_>, call: &Call) -> Value {
         let world = ctx.world.lock();
         let Some(park) = world.parks.get(&system_id) else { return rowset(HEADER, Vec::new()) };
         let Some(ego) = park.ships.get(&ship_id) else { return rowset(HEADER, Vec::new()) };
-        let mut hits = Vec::new();
-        let mut consider = |id: i64, type_id: i64, group_id: Option<i64>, pos: Vec3| {
-            if id != ship_id && within_scan(ego.pos, pos, range, angle, direction) {
-                hits.push((id, type_id, group_id));
+        let heading = direction.unit();
+        let half_angle_cos = (angle.clamp(0.0, std::f64::consts::TAU) / 2.0).cos();
+        let mut hits = BTreeMap::new();
+        let mut consider = |id: i64, type_id: i64, group_id: Option<i64>, name: &str, pos: Vec3| {
+            let offset = pos - ego.pos;
+            if id != ship_id && within_scan(offset, range, half_angle_cos, heading) {
+                hits.entry(id).or_insert_with(|| (type_id, group_id, name.to_owned(), offset.len()));
             }
         };
-        for c in &park.celestials { consider(c.id, c.type_id, Some(c.group_id), c.pos); }
-        for s in park.ships.values().filter(|s| !s.in_warp()) {
-            consider(s.id, s.pilot.type_id, Some(s.pilot.group_id), s.pos);
+        for c in &park.celestials { consider(c.id, c.type_id, Some(c.group_id), &c.name, c.pos); }
+        for s in park.ships.values().filter(|s| !s.in_warp() && !crate::drones::in_transit(s)) {
+            consider(s.id, s.pilot.type_id, Some(s.pilot.group_id), &s.pilot.name, s.pos);
         }
-        for r in park.rocks.values() { consider(r.id, r.type_id, None, r.pos); }
-        for c in park.cans.values() { consider(c.id, c.type_id, None, c.pos); }
-        for s in park.structures.values() { consider(s.id, s.type_id, Some(s.group_id), s.pos); }
-        for s in park.sites.values() { consider(s.id, crate::sites::TYPE_BEACON, None, s.pos); }
+        for r in park.rocks.values() { consider(r.id, r.type_id, None, &r.name, r.pos); }
+        for c in park.cans.values() { consider(c.id, c.type_id, None, &c.name, c.pos); }
+        for s in park.structures.values() { consider(s.id, s.type_id, Some(s.group_id), &s.name, s.pos); }
+        for s in park.sites.values() { consider(s.id, crate::sites::TYPE_BEACON, None, &s.name, s.pos); }
         hits
     };
 
-    let unknown_types: Vec<i32> = hits.iter().filter(|(_, _, g)| g.is_none())
-        .filter_map(|(_, t, _)| i32::try_from(*t).ok()).collect();
+    let unknown_types: BTreeSet<i32> = hits.values().filter(|(_, group, _, _)| group.is_none())
+        .filter_map(|(type_id, _, _, _)| i32::try_from(*type_id).ok()).collect();
     let mut groups = BTreeMap::new();
     if !unknown_types.is_empty() {
         let sql = r#"SELECT "typeID", "groupID" FROM "invTypes" WHERE "typeID" = ANY($1)"#;
-        for r in ctx.query(sql, &[&unknown_types]).await {
+        for r in ctx.query(sql, &[&unknown_types.into_iter().collect::<Vec<_>>()]).await {
             if let (Ok(t), Ok(g)) = (r.try_get::<_, i32>(0), r.try_get::<_, i32>(1)) {
                 groups.insert(t as i64, g as i64);
             }
         }
     }
-    rowset(HEADER, hits.into_iter().filter_map(|(id, type_id, group_id)| {
+    rowset(HEADER, hits.into_iter().filter_map(|(id, (type_id, group_id, name, distance))| {
         let group_id = group_id.or_else(|| groups.get(&type_id).copied())?;
-        Some(Value::List(vec![Value::Int(id), Value::Int(group_id), Value::Int(type_id)]))
+        Some(Value::List(vec![Value::Int(id), Value::Int(group_id), Value::Int(type_id), Value::text(name), Value::Double(distance)]))
     }).collect())
 }
 
-fn within_scan(origin: Vec3, target: Vec3, range: f64, angle: f64, direction: Vec3) -> bool {
-    let offset = target - origin;
+fn within_scan(offset: Vec3, range: f64, half_angle_cos: f64, heading: Vec3) -> bool {
     let distance = offset.len();
-    if distance > range { return false; }
+    if distance > range.min(MAX_SCAN_RANGE) { return false; }
     // The 2006 client sends radians. A full 360 degree scan is a sphere.
-    if angle >= std::f64::consts::TAU || distance == 0.0 { return true; }
-    let heading = direction.unit();
-    heading.len_sq() > 0.0 && offset.dot(heading) / distance >= (angle.max(0.0) / 2.0).cos()
+    if half_angle_cos <= -1.0 || distance == 0.0 { return true; }
+    heading.len_sq() > 0.0 && offset.dot(heading) / distance >= half_angle_cos
 }
 
 pub fn is_movement(method: &str) -> bool {
@@ -188,11 +191,9 @@ pub async fn ensure_park(ctx: &Ctx<'_>, solar_system_id: i64) {
             Default::default()
         }
     };
-    let owners = station_owners(ctx, solar_system_id).await;
     let mut world = ctx.world.lock();
     world.parks.entry(solar_system_id).or_insert_with(|| {
         let mut park = Park::new(solar_system_id, celestials, destiny::tick_now());
-        park.station_owners = owners;
         park.wildlife = std::sync::Arc::new(wildlife);
         crate::npc::populate(&mut park);
         park.cans = cans.into_iter().map(|c| (c.id, c)).collect();
@@ -383,6 +384,24 @@ pub fn course_entries(ship: &Ship, tick: i64) -> Vec<Value> {
     if ship.in_warp() {
         entries.push(warp_fx(tick, ship.id, true));
     }
+    entries
+}
+
+/// Synchronize an existing ball with the server's position and velocity.
+pub fn ship_motion_entries(ship: &Ship, tick: i64) -> [Value; 2] {
+    [("SetBallPosition", ship.pos), ("SetBallVelocity", ship.vel)].map(|(opcode, v)| {
+        entry(tick, opcode, vec![Value::Int(ship.id), Value::Double(v.x), Value::Double(v.y), Value::Double(v.z)])
+    })
+}
+
+/// Leave native warp and restore the ball's sublight motion in one update.
+/// Replacing the whole park makes build 3913 append the scenery to its overview.
+pub fn warp_landing_entries(ship: &Ship, tick: i64) -> Vec<Value> {
+    let mut entries = vec![entry(tick, "Stop", vec![Value::Int(ship.id)])];
+    entries.extend(ship_motion_entries(ship, tick));
+    entries.push(entry(tick, "SetBallMassive", vec![Value::Int(ship.id), Value::Int(1)]));
+    entries.push(warp_fx(tick, ship.id, false));
+    entries.extend(course_entries(ship, tick));
     entries
 }
 
@@ -612,23 +631,6 @@ pub fn add_ball_entries_for_nearby(park: &mut Park, ship_id: i64) -> Vec<(i64, V
         updates.extend(entries.iter().cloned().map(|entry| (client, entry)));
     }
     updates
-}
-
-/// Re-add a ship after warp ends so clients refresh its in-warp ball flag.
-pub fn landed_ship_entries(park: &Park, ship_id: i64) -> Vec<(i64, Value)> {
-    let Some(ship) = park.ships.get(&ship_id) else { return Vec::new() };
-    let mut entries = remove_ball_entries(park.tick, ship_id);
-    entries.extend(add_ball_entries(park, ship_id));
-    park.visible_ships
-        .iter()
-        .filter(|(client, visible)| {
-            !(ship.is_player() && **client == ship.client_id)
-                && visible.contains(&ship_id)
-                && park.ships.values().find(|s| s.is_player() && s.client_id == **client)
-                    .is_some_and(|viewer| within_overview_range(park, viewer.id, ship_id))
-        })
-        .flat_map(|(client, _)| entries.iter().cloned().map(|entry| (*client, entry)))
-        .collect()
 }
 
 pub fn notify_targeted_updates(world: &WorldState, updates: Vec<(i64, Value)>) {
@@ -912,6 +914,7 @@ fn steer(ctx: &Ctx<'_>, system: i64, ship_id: i64, order: Order, method: &str) -
         }
         Some(_) => {}
     }
+    let warp_order = matches!(order, Order::Command(Command::Warp { .. }));
     let (entries, what) = match order {
         Order::SpeedFraction(f) => {
             park.set_speed_fraction(ship_id, f);
@@ -933,7 +936,16 @@ fn steer(ctx: &Ctx<'_>, system: i64, ship_id: i64, order: Order, method: &str) -
         }
     };
     debug!("ship {ship_id}: {what}");
-    let updates = ship_viewers(park, ship_id).into_iter().flat_map(|client| entries.iter().cloned().map(move |entry| (client, entry))).collect();
+    let ship = &park.ships[&ship_id];
+    let mut updates = Vec::new();
+    if warp_order && ship.warping() {
+        updates.extend(ship_motion_entries(ship, tick).map(|entry| (ctx.client_id, entry)));
+    }
+    let mut viewers = ship_viewers(park, ship_id);
+    if !viewers.contains(&ctx.client_id) {
+        viewers.push(ctx.client_id);
+    }
+    updates.extend(viewers.into_iter().flat_map(|client| entries.iter().cloned().map(move |entry| (client, entry))));
     notify_targeted_updates(&world, updates);
     Outcome::Value(Value::None)
 }
@@ -957,12 +969,14 @@ async fn parse_order(ctx: &Ctx<'_>, call: &Call) -> Option<Order> {
             let id = call.arg_i64(1)?;
             let range = call.kwarg("minRange").and_then(|v| v.as_f64()).unwrap_or(DEFAULT_WARP_RANGE);
             let (at, radius, station) = warp_target(ctx, &kind, id).await?;
-            let coast = if station {
+            let target = if station {
                 let world = ctx.world.lock();
                 let ship = world.parks.get(&ctx.session.solar_system_id?)?.ships.get(&ctx.session.ship_id?)?;
-                ship.stats.warp_exit_coast((at - ship.pos).len())
-            } else { 0.0 };
-            Order::Command(Command::Warp { target: landing_point(ctx, at, warp_reach(radius, range, station, coast))?, range: 0.0 })
+                station_warp_point(ship, at, radius, range)
+            } else {
+                landing_point(ctx, at, warp_reach(radius, range, false, 0.0))?
+            };
+            Order::Command(Command::Warp { target, range: 0.0 })
         }
         _ => return None,
     })
@@ -1014,6 +1028,13 @@ async fn warp_target(ctx: &Ctx<'_>, kind: &str, id: i64) -> Option<(Vec3, f64, b
 
 fn warp_reach(radius: f64, range: f64, station: bool, coast: f64) -> f64 {
     radius + range.max(0.0) + if station { STATION_WARP_CLEARANCE + coast.max(0.0) } else { 0.0 }
+}
+
+/// The normal station landing point, including clearance for the exit coast.
+pub(crate) fn station_warp_point(ship: &Ship, at: Vec3, radius: f64, range: f64) -> Vec3 {
+    let offset = ship.pos - at;
+    let coast = ship.stats.warp_exit_coast(offset.len());
+    at + offset.unit() * (warp_reach(radius, range, true, coast) + ship.stats.radius)
 }
 
 /// Where the warp lands: `reach` (the target's radius plus the warp range)
@@ -1266,11 +1287,14 @@ mod tests {
         let behind = Vec3::new(-100.0, 0.0, 0.0);
         let flank = Vec3::new(0.0, 100.0, 0.0);
         let heading = Vec3::new(1.0, 0.0, 0.0);
-        let narrow = std::f64::consts::FRAC_PI_3;
-        assert!(within_scan(Vec3::ZERO, ahead, 100.0, narrow, heading));
-        assert!(!within_scan(Vec3::ZERO, ahead, 99.0, narrow, heading));
-        assert!(!within_scan(Vec3::ZERO, flank, 100.0, narrow, heading));
-        assert!(!within_scan(Vec3::ZERO, behind, 100.0, narrow, heading));
-        assert!(within_scan(Vec3::ZERO, behind, 100.0, std::f64::consts::TAU, heading));
+        let narrow = std::f64::consts::FRAC_PI_6.cos();
+        assert!(within_scan(ahead, 100.0, narrow, heading));
+        assert!(!within_scan(ahead, 99.0, narrow, heading));
+        assert!(!within_scan(flank, 100.0, narrow, heading));
+        assert!(!within_scan(behind, 100.0, narrow, heading));
+        assert!(within_scan(behind, 100.0, -1.0, heading));
+        let edge = Vec3::new(MAX_SCAN_RANGE, 0.0, 0.0);
+        assert!(within_scan(edge, MAX_SCAN_RANGE * 2.0, narrow, heading));
+        assert!(!within_scan(edge + heading, MAX_SCAN_RANGE * 2.0, -1.0, heading));
     }
 }

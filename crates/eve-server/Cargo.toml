@@ -19,6 +19,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "chrono"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
+image = { version = "0.24.9", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 
 [target.'cfg(windows)'.dependencies]
 nu-ansi-term = "0.50"
+reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
+
+[target.'cfg(not(windows))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

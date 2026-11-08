@@ -2,6 +2,7 @@ pub mod agent_missions;
 pub mod agents;
 pub mod alert;
 pub mod alliance;
+mod alliance_logo;
 pub mod bookmark;
 pub mod bound;
 pub mod charcreation;

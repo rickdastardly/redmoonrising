@@ -99,7 +99,9 @@ pub async fn alliance_registry(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         }
         "DeclareExecutorSupport" => declare_support(ctx, subject.unwrap_or(0), call.arg_id(0)).await,
         "DeleteMember" => delete_member(ctx, subject.unwrap_or(0), call.arg_id(0)).await,
-        "UpdateAlliance" => update_alliance(ctx, subject.unwrap_or(0), &text_arg(0), &text_arg(1)).await,
+        "UpdateAlliance" => update_alliance(ctx, subject.unwrap_or(0), &text_arg(0), &text_arg(1), call.arg_text(2).as_deref()).await,
+        "GetAllianceLogoUrl" => logo_url(ctx, subject.unwrap_or(0)).await,
+        "GetAllianceLogoImage" => logo_image(ctx, call.arg_id(0)).await,
         "GetRelationships" => Ok(keyed(ctx, RELATIONSHIP_HEADER, RELATIONSHIP_SELECT, "fromID", subject.unwrap_or(0), 1).await),
         "SetRelationship" => set_relationship(ctx, subject.unwrap_or(0), call.arg_i64(0).unwrap_or(0), call.arg_id(1)).await,
         "DeleteRelationship" => delete_relationship(ctx, subject.unwrap_or(0), call.arg_id(0)).await,
@@ -239,20 +241,59 @@ async fn delete_member(ctx: &Ctx<'_>, alliance_id: i64, corp_id: i64) -> Refused
     Ok(Value::None)
 }
 
-/// UpdateAlliance(description, url), by the executor's directors.
-async fn update_alliance(ctx: &Ctx<'_>, alliance_id: i64, description: &str, url: &str) -> Refused<Value> {
+pub async fn ensure_logo_storage(db: &Client) -> Result<(), tokio_postgres::Error> {
+    db.batch_execute(r#"ALTER TABLE alliances ADD COLUMN IF NOT EXISTS "logoUrl" text,
+                                                ADD COLUMN IF NOT EXISTS "logoImage" bytea"#).await
+}
+
+async fn logo_url(ctx: &Ctx<'_>, alliance_id: i64) -> Refused<Value> {
     require_executor_director(ctx, alliance_id).await?;
+    let row = ctx.db.query_opt(r#"SELECT "logoUrl" FROM alliances WHERE "allianceID" = $1 AND "deleted" = 0"#, &[&(alliance_id as i32)])
+        .await.map_err(|e| db_failed("reading the alliance logo URL", e))?;
+    Ok(row.and_then(|r| r.get::<_, Option<String>>(0)).map_or(Value::None, Value::text))
+}
+
+async fn logo_image(ctx: &Ctx<'_>, alliance_id: i64) -> Refused<Value> {
+    let Ok(id) = i32::try_from(alliance_id) else { return Ok(Value::None) };
+    let row = ctx.db.query_opt(r#"SELECT "logoImage" FROM alliances WHERE "allianceID" = $1 AND "deleted" = 0"#, &[&id])
+        .await.map_err(|e| db_failed("reading the alliance logo", e))?;
+    Ok(row.and_then(|r| r.get::<_, Option<Vec<u8>>>(0)).map_or(Value::None, Value::Bytes))
+}
+
+/// UpdateAlliance(description, url[, logoUrl]), by the executor's directors.
+/// An omitted logo URL leaves the existing image alone, and an empty one clears it.
+async fn update_alliance(ctx: &Ctx<'_>, alliance_id: i64, description: &str, url: &str, logo_url: Option<&str>) -> Refused<Value> {
+    let executor = require_executor_director(ctx, alliance_id).await?;
+    let update_logo = logo_url.is_some();
+    let logo_url = logo_url.map(str::trim).filter(|url| !url.is_empty());
+    let image = match logo_url {
+        Some(url) => Some(super::alliance_logo::import(url).await.map_err(Outcome::custom)?),
+        None => None,
+    };
     let old = alliance_line(ctx.db, alliance_id).await?.ok_or_else(|| message("AllianceNotFound"))?;
-    ctx.db
-        .execute(r#"UPDATE alliances SET "description" = $2, "url" = $3 WHERE "allianceID" = $1"#, &[&(alliance_id as i32), &description, &url])
+    let changed = ctx.db
+        .execute(r#"UPDATE alliances SET "description" = $2, "url" = $3,
+                      "logoUrl" = CASE WHEN $4 THEN $5 ELSE "logoUrl" END,
+                      "logoImage" = CASE WHEN $4 THEN $6 ELSE "logoImage" END
+                    WHERE "allianceID" = $1 AND "executorCorpID" = $7 AND "deleted" = 0"#,
+                 &[&(alliance_id as i32), &description, &url, &update_logo, &logo_url, &image, &(executor as i32)])
         .await
         .map_err(|e| db_failed("updating the alliance", e))?;
+    if changed == 0 {
+        return Err(access_denied("only directors of the executor corporation may do that"));
+    }
     let mut new = old.clone();
     new[3] = Value::text(description);
     new[4] = Value::text(url);
-    let members = member_corps(ctx.db, alliance_id).await?;
-    let event = Value::Tuple(vec![Value::Int(alliance_id), change(ALLIANCE_HEADER, Some(&old), Some(&new))]);
-    tell(ctx.world, &members, "OnAllianceChanged", event);
+    if old != new {
+        let members = member_corps(ctx.db, alliance_id).await?;
+        let event = Value::Tuple(vec![Value::Int(alliance_id), change(ALLIANCE_HEADER, Some(&old), Some(&new))]);
+        tell(ctx.world, &members, "OnAllianceChanged", event);
+    }
+    if update_logo {
+        let world = ctx.world.lock();
+        world.notify(&world.all_clients(), "OnAllianceLogoChanged", Value::Tuple(vec![Value::Int(alliance_id)]));
+    }
     Ok(Value::None)
 }
 

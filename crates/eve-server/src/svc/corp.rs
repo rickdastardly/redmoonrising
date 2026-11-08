@@ -2,11 +2,16 @@ use eve_marshal::Value;
 use tracing::{error, info};
 
 use crate::services::{Call, Ctx, Outcome};
-use crate::svc::bound;
+use crate::session::CORP_ROLE_DIRECTOR;
 use crate::svc::inventory::{FLAG_CORP_MARKET, INVITEM_HEADER, INVITEM_SELECT};
-use crate::svc::rows::{cell, index_rowset, int, line, lines, row, rowset};
+use crate::svc::membership::{Refused, access_denied, db_failed, transfer_refused};
+use crate::svc::rows::{cell, change, index_rowset, int, line, lines, row, rowset, text};
+use crate::svc::{bound, wallet};
 
 pub async fn registry(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
+    if call.method == "UpdateLogo" {
+        return Some(update_logo(ctx, call).await.map_or_else(|refusal| refusal, Outcome::Value));
+    }
     Some(corp_registry(ctx, &call.method, &call.args).await)
 }
 
@@ -162,6 +167,85 @@ async fn corp_registry(ctx: &Ctx<'_>, method: &str, args: &[Value]) -> Outcome {
         _ => return Outcome::Unknown(format!("corpRegistry::{method}")),
     };
     Outcome::Value(out)
+}
+
+const LOGO_COLUMNS: &[&str] = &["shape1", "shape2", "shape3", "color1", "color2", "color3", "typeface"];
+/// eveConstants corpLogoChangeCost and refCorporationLogoChangeCost.
+const LOGO_CHANGE_COST: f64 = 100.0;
+const REF_LOGO_CHANGE_COST: i32 = 40;
+
+/// UpdateLogo(shape1..3, color1..3, typeface), from Edit Corp Details.
+async fn update_logo(ctx: &Ctx<'_>, call: &Call) -> Refused<Value> {
+    let denied = || access_denied("only the CEO or a director can change their corporation's logo");
+    let char_id = ctx.session.char_id.ok_or_else(denied)?;
+    let corp_id = ctx.session.corp_id.filter(|&id| id >= FIRST_PLAYER_ID).ok_or_else(denied)?;
+    if bound::parse(&call.service).and_then(|b| b.params.first().copied()).is_some_and(|id| id != corp_id) {
+        return Err(denied());
+    }
+
+    let invalid = || Outcome::custom("The corporation logo contains an invalid shape or colour.");
+    if call.args.len() != LOGO_COLUMNS.len() {
+        return Err(invalid());
+    }
+    let mut layers = [None; 6];
+    for (index, layer) in layers.iter_mut().enumerate() {
+        if call.args[index] == Value::None {
+            continue;
+        }
+        // The paintshop graphics are grouped by shape and colour. Keep the
+        // complete asset ranges so logos made by older editors can be edited.
+        let graphics = if index < 3 { 415..=670 } else { 671..=702 };
+        let id = call.arg_i64(index).filter(|id| *id == 0 || graphics.contains(id)).ok_or_else(invalid)?;
+        *layer = Some(id as i32);
+    }
+    let typeface = match &call.args[6] {
+        Value::None => None,
+        value => Some(value.as_string().ok_or_else(|| Outcome::custom("The logo typeface is invalid."))?),
+    };
+
+    let mut db = crate::db::connect(ctx.db_url).await.map_err(|e| db_failed("opening a logo update", e))?;
+    let tx = db.transaction().await.map_err(|e| db_failed("starting a logo update", e))?;
+    let corp = corp_id as i32;
+    let sql = r#"SELECT co.shape1, co.shape2, co.shape3, co.color1, co.color2, co.color3, co.typeface
+                   FROM "corporation" co JOIN "character_" c ON c."corporationID" = co."corporationID"
+                   LEFT JOIN "chrCorporationRoles" r ON r."characterID" = c."characterID"
+                  WHERE co."corporationID" = $1 AND c."characterID" = $2 AND co.deleted = 0
+                    AND (co."ceoID" = $2 OR (COALESCE(r."rolesAtAll", 0) & $3) <> 0)
+                  FOR UPDATE OF co"#;
+    let old = tx.query_opt(sql, &[&corp, &(char_id as i32), &CORP_ROLE_DIRECTOR]).await
+        .map_err(|e| db_failed("reading the corporation logo", e))?.ok_or_else(denied)?;
+    // The legacy editor always sends None for the typeface it cannot edit.
+    let typeface = typeface.or_else(|| text(&old, 6));
+    let mut new: Vec<Value> = layers.iter().map(|id| Value::int_or_none(id.map(i64::from))).collect();
+    new.push(typeface.as_deref().map_or(Value::None, Value::text));
+    let Value::Dict(mut changes) = change(LOGO_COLUMNS, Some(&line(&old)), Some(&new)) else { unreachable!() };
+    if changes.is_empty() {
+        return Ok(Value::None);
+    }
+
+    let entry = wallet::Entry { ref_type: REF_LOGO_CHANGE_COST, payer: corp_id, payee: 0, arg_id1: "", reason: "" };
+    let balance = wallet::post(&tx, corp_id, -LOGO_CHANGE_COST, &entry).await.map_err(transfer_refused)?;
+    tx.execute(
+        r#"UPDATE "corporation" SET shape1 = $2, shape2 = $3, shape3 = $4,
+                                    color1 = $5, color2 = $6, color3 = $7, typeface = $8
+             WHERE "corporationID" = $1"#,
+        &[&corp, &layers[0], &layers[1], &layers[2], &layers[3], &layers[4], &layers[5], &typeface],
+    ).await.map_err(|e| db_failed("saving the corporation logo", e))?;
+    tx.commit().await.map_err(|e| db_failed("committing the logo update", e))?;
+
+    // An unchanged ID marks this as a row update even when all the old (or
+    // new) logo layers are NULL. The client then reloads its visible logo.
+    changes.push((Value::bytes("corporationID"), Value::Tuple(vec![Value::Int(corp_id), Value::Int(corp_id)])));
+    let world = ctx.world.lock();
+    let mut clients = world.corp_members(corp_id);
+    if !clients.contains(&ctx.client_id) {
+        clients.push(ctx.client_id);
+    }
+    world.notify(&clients, "OnCorporationChanged", Value::Tuple(vec![Value::Int(corp_id), Value::Dict(changes)]));
+    let cash = Value::Tuple(vec![Value::bytes("cash"), Value::Int(corp_id), Value::Double(balance)]);
+    world.notify(&[ctx.client_id], "OnAccountChange", cash);
+    info!("corporation {corp_id} logo updated by {char_id}");
+    Ok(Value::None)
 }
 
 const CORP_HEADER: &[&str] = &[
