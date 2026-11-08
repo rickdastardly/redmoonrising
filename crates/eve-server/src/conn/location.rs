@@ -85,7 +85,9 @@ impl Conn {
             "entered the game as {:?} ({char_id})",
             self.session.char_name
         );
-        self.reply(req, &Value::None).await
+        self.reply(req, &Value::None).await?;
+        crate::web::notify_joined(&self.server, self.client_id).await;
+        Ok(())
     }
 
     pub(super) async fn undock(&mut self, req: &MachoPacket, bind_params: Option<Vec<i64>>) -> Result {

@@ -943,7 +943,14 @@ function Start-RmrWorker {
             # The launcher keeps the server alive until stopped.
             while (-not $server.Process.HasExited) { Assert-Running; Read-NativeOutput $server; Start-Sleep -Milliseconds 100 }
             Read-NativeOutput $server
-            throw "Server exited unexpectedly with code $($server.Process.ExitCode). See logs/server.log."
+            $scheduledDowntime = $server.Process.ExitCode -eq 0 -and $env:RMR_SHUTDOWN_FILE -and
+                [IO.File]::Exists($env:RMR_SHUTDOWN_FILE) -and
+                [IO.File]::ReadAllText($env:RMR_SHUTDOWN_FILE).Trim() -eq 'downtime'
+            if ($scheduledDowntime) {
+                Write-Log 'Scheduled downtime completed; game state saved.'
+            } else {
+                throw "Server exited unexpectedly with code $($server.Process.ExitCode). See logs/server.log."
+            }
         }
 
     } catch [OperationCanceledException] { Write-Log $_.Exception.Message }
@@ -1923,6 +1930,20 @@ _rmr_install_windowed(_rmr_device, _rmr_device_state)
 _rmr_log('Session-wide presentation pacing installed.')
 _rmr_log('Start.bat login scaling hook loaded.')
 try:
+    # Character selection's OpenNews uses this exact historical URL. Redirect
+    # only that request; other in-game browser pages retain their normal URLs.
+    import xtriui
+    _rmr_original_news_goto = xtriui.VirtualEdit.GoTo
+    def _rmr_news_goto(self, url, *args, **kwargs):
+        if url == 'http://myeve.eve-online.com/mb/news.asp':
+            url = 'http://127.0.0.1:18080/client-news'
+        return _rmr_original_news_goto(self, url, *args, **kwargs)
+    xtriui.VirtualEdit.GoTo = _rmr_news_goto
+    _rmr_log('Character selection news uses the local dashboard.')
+except:
+    _rmr_log('Local news hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+    sys.exc_clear()
+try:
     # cfg.const is read-only; override only this lookup in its Python class.
     _rmr_const_class = const.__class__
     _rmr_original_const_getattr = _rmr_const_class.__getattr__
@@ -1978,6 +1999,66 @@ def _rmr_install_self_info():
 
 import uthread
 uthread.new(_rmr_install_self_info)
+
+def _rmr_install_bookmark_shortcut():
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        cmd = sm.StartService('cmd')
+        cls = cmd.__class__
+        if not getattr(cls, '_rmr_bookmark_shortcut_installed', False):
+            original_reload = cls.ReloadcommandsByFunc
+            def bookmark_current_location(self):
+                return eve.LocalSvc('addressbook').BookmarkCurrentLocation()
+            def reload_with_bookmark(self):
+                result = original_reload(self)
+                key = (1, 0, 0, 'b')
+                self.defaultcmds['CmdBookmarkCurrentLocation'] = key
+                if 'CmdBookmarkCurrentLocation' not in self.commandsByFunc:
+                    self.LoadCmd('CmdBookmarkCurrentLocation',
+                                 self.GetCustomCmd('CmdBookmarkCurrentLocation') or key)
+                return result
+            cls.CmdBookmarkCurrentLocation = bookmark_current_location
+            cls.ReloadcommandsByFunc = reload_with_bookmark
+            cls._rmr_bookmark_shortcut_installed = True
+        cmd.ReloadcommandsByFunc()
+        _rmr_log('Ctrl+B bookmark shortcut registered in Escape shortcuts.')
+    except:
+        _rmr_log('Bookmark shortcut setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+uthread.new(_rmr_install_bookmark_shortcut)
+
+def _rmr_install_mission_agent_contacts():
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        chat = sm.StartService('LSC')
+        cls = chat.__class__
+        if getattr(cls, '_rmr_mission_agents_installed', False):
+            return
+        original_buddies = cls.GetBuddies
+        def buddies_with_mission_agents(self):
+            buddies = original_buddies(self)
+            try:
+                missions = eve.LocalSvc('journal').GetMyAgentJournalDetails()[0]
+                for mission in missions:
+                    agent_id = mission[4]
+                    if agent_id not in buddies:
+                        buddies.append(agent_id)
+            except:
+                _rmr_log('Mission agent contact refresh failed: ' +
+                         ''.join(traceback.format_exception(*sys.exc_info())))
+                sys.exc_clear()
+            return buddies
+        cls.GetBuddies = buddies_with_mission_agents
+        cls._rmr_mission_agents_installed = True
+        _rmr_log('Active mission agents appear in People and Places.')
+    except:
+        _rmr_log('Mission agent contact setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+uthread.new(_rmr_install_mission_agent_contacts)
 
 def _rmr_install_area_doomsday():
     # An area doomsday has no targetID. The old confirmation path tries to

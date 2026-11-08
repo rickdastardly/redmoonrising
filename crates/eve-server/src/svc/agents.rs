@@ -30,9 +30,13 @@ pub async fn agent_mgr(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         // (locationType, locationNumber, warpRange, gang) (menusvc.py:1663).
         "WarpToLocation" => {
             let range = call.args.get(2).and_then(|v| v.as_f64()).unwrap_or(15_000.0);
-            return Some(agent_missions::go_to(ctx, call.arg_id(1), range, false).await);
+            let location_type = call.arg_text(0).unwrap_or_default();
+            return Some(agent_missions::go_to(ctx, &location_type, call.arg_id(1), range, false).await);
         }
-        "GotoLocation" => return Some(agent_missions::go_to(ctx, call.arg_id(1), 0.0, true).await),
+        "GotoLocation" => {
+            let location_type = call.arg_text(0).unwrap_or_default();
+            return Some(agent_missions::go_to(ctx, &location_type, call.arg_id(1), 0.0, true).await);
+        }
         _ => return None,
     };
     Some(Outcome::Value(value))

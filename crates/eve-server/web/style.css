@@ -438,3 +438,56 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid #7cc4ff; ou
   .fitting-icon { width: 30px; height: 30px; }
   .desktop { padding: 12px; }
 }
+
+/* Public killboard records and server notices. */
+.pilot-link { color: #91c9ff; text-decoration: none; font-weight: 700; }
+.pilot-link:hover, .pilot-link:focus-visible { color: #fff; text-decoration: underline; }
+.final-pilot { display: flex; justify-content: space-between; gap: 12px; padding: 12px 16px; }
+#w-killboard .killboard-search, #w-killboard .search-results { grid-column: 1 / -1; }
+#w-killboard .table-heading:first-of-type, #w-killboard .featured-kills { grid-column: 1 / -1; }
+.featured-kills { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.featured-kill { display: flex; flex-direction: column; gap: 5px; padding: 12px; min-width: 0; border: 1px solid #d6a34a35; border-radius: 8px; background: #1b2634; cursor: pointer; }
+.featured-kill:hover, .featured-kill:focus-visible { border-color: #efcf88; background: #263547; outline: none; }
+.featured-kill > img { width: 100%; height: 120px; object-fit: contain; background: radial-gradient(circle, #394456, #121b27); border-radius: 5px; }
+.featured-ship { font-size: 14px; font-weight: 700; color: #fff; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.featured-value { color: #78dda3; font-weight: 700; }
+.killboard-search { display: flex; gap: 8px; max-width: 580px; margin: 0 0 8px; }
+.killboard-search input { flex: 1; min-width: 170px; font-size: 14px; }
+.search-results { display: grid; gap: 4px; }
+.search-result { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 9px 12px; background: #ffffff08; border: 1px solid #ffffff0d; border-radius: 6px; }
+#w-killboard .caption, #w-kills .caption { border-bottom: 2px solid #d6a34a; }
+#w-killboard .stat-tile { background: linear-gradient(145deg, #30313b, #202938); border-color: #d6a34a36; }
+#w-killboard .stat-number { color: #ffe2a0; }
+#w-pilot-profile { background: transparent; border: 0; box-shadow: none; }
+#w-pilot-profile .caption { border: 1px solid var(--glass-edge); border-radius: 10px; }
+.pilot-hero { display: flex; align-items: center; gap: 20px; padding: 22px; border: 1px solid #ffffff1c; border-radius: 10px; background: linear-gradient(115deg, #27384c, #151d2b); }
+.pilot-avatar { display: grid; place-items: center; width: 76px; height: 76px; border-radius: 11px; background: #d6a34a24; border: 1px solid #d6a34a72; color: #ffd58e; font-size: 38px; font-weight: 700; }
+.pilot-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 10px; }
+.pilot-hero h2 { margin: 2px 0 4px; font-size: clamp(24px, 3vw, 36px); }
+.pilot-hero > .sec { margin-left: auto; font-size: 20px; font-weight: 700; }
+.profile-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 16px 0; }
+.profile-layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(250px, 1fr); gap: 16px; align-items: start; }
+#profile-kills img, #profile-ships img { width: 26px; height: 26px; vertical-align: middle; margin-right: 7px; object-fit: contain; }
+#profile-kills td, #profile-ships td { height: 38px; }
+#w-pilot-profile .body { padding: 18px 0 !important; }
+.articles { display: grid; gap: 12px; }
+.news-article { padding: 18px 20px; background: #202c3a; border: 1px solid #ffffff1a; border-left: 3px solid #d6a34a; border-radius: 8px; }
+.news-article h3 { margin: 5px 0 8px; color: #fff; font-size: 19px; }
+.news-article time { color: #dfb777; font-size: 11px; letter-spacing: .04em; }
+.news-article p { white-space: pre-line; margin: 0; color: #cbd7e5; line-height: 1.6; }
+.article-form, .downtime-form { display: flex; flex-direction: column; gap: 9px; margin-top: 22px; padding: 18px; border: 1px solid #ffffff1a; border-radius: 9px; background: #172333; }
+.article-form h3 { margin: 0; }
+.article-form .note { margin: 0 0 4px; }
+.article-form input, .article-form textarea, .downtime-form textarea { width: 100%; background: #0d1725; }
+.article-form button { align-self: start; }
+textarea { font: inherit; color: var(--text); border: 1px solid #ffffff2b; border-radius: 6px; padding: 10px; resize: vertical; }
+textarea:focus { outline: 2px solid #7cc4ff; }
+.downtime-body > .note { margin: 0 0 16px; }
+.downtime-clock { padding: 22px; border: 1px solid #ffffff24; border-radius: 9px; background: #202c3a; color: #b3c4d7; font-size: 25px; font-variant-numeric: tabular-nums; font-weight: 700; text-align: center; }
+.downtime-clock.running { color: #ffe2a0; border-color: #d6a34a77; background: #d6a34a12; }
+.downtime-form { margin-top: 14px; }
+.downtime-form .toolbar { margin: 0; }
+.danger-button { background: #772b35; color: #fff; }
+@media (max-width: 800px) { .profile-layout { grid-template-columns: 1fr; } }
+@media (max-width: 800px) { .featured-kills { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 540px) { .profile-stats, .featured-kills { grid-template-columns: 1fr; } .pilot-hero { flex-wrap: wrap; } }

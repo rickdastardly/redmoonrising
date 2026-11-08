@@ -13,6 +13,16 @@ async function get(path) {
     }
     return (await response.json());
 }
+async function postAdmin(path, data) {
+    const response = await fetch(path, {
+        method: "POST", headers: { "Content-Type": "application/json", "X-RMR-Admin": "1" },
+        body: JSON.stringify(data), cache: "no-store",
+    });
+    const result = (await response.json());
+    if (!response.ok)
+        throw new Error(result.error ?? `HTTP ${response.status}`);
+    return result;
+}
 const STAFF_ROLES = ["Player", "ISD", "ISD BH", "BH", "GM", "CCP"];
 async function refreshUsers() {
     const reply = document.getElementById("users-reply");
@@ -68,11 +78,102 @@ async function saveUserRole(account, select) {
         select.disabled = false;
     }
 }
+async function refreshArticles() {
+    const out = document.getElementById("articles");
+    try {
+        const articles = await get("/api/articles");
+        out.replaceChildren(...articles.map((article) => {
+            const item = document.createElement("article");
+            item.className = "news-article";
+            const title = document.createElement("h3");
+            title.textContent = article.title;
+            const time = document.createElement("time");
+            time.textContent = `${eveTime(article.time)} EVE`;
+            const body = document.createElement("p");
+            body.textContent = article.body;
+            item.append(time, title, body);
+            return item;
+        }));
+        if (!articles.length)
+            out.replaceChildren(span("No articles published yet.", "dim"));
+    }
+    catch (e) {
+        out.replaceChildren(span(`Could not load news: ${String(e)}`, "hostile"));
+    }
+}
+async function publishArticle(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const reply = document.getElementById("article-reply");
+    const fields = new FormData(form);
+    try {
+        const result = await postAdmin("/api/articles", { title: fields.get("title"), body: fields.get("body") });
+        reply.textContent = result.ok ?? "Published.";
+        reply.className = "dropped";
+        form.reset();
+        await refreshArticles();
+    }
+    catch (e) {
+        reply.textContent = String(e);
+        reply.className = "hostile";
+    }
+}
+let downtimeState = null;
+let downtimeOffset = 0;
+function renderDowntime() {
+    const clock = document.getElementById("downtime-clock");
+    if (!downtimeState?.active || !downtimeState.deadline) {
+        clock.textContent = "No downtime scheduled";
+        clock.classList.remove("running");
+        return;
+    }
+    const seconds = Math.max(0, Math.ceil((downtimeState.deadline - Date.now() - downtimeOffset) / 1000));
+    clock.classList.add("running");
+    clock.textContent = `${pad(Math.floor(seconds / 60))}:${pad(seconds % 60)} until shutdown`;
+}
+async function refreshDowntime() {
+    try {
+        const state = await get("/api/downtime");
+        downtimeOffset = state.now - Date.now();
+        downtimeState = state;
+        renderDowntime();
+    }
+    catch {
+        if (downtimeState?.active)
+            setText("downtime-reply", "Server connection closed after the countdown.");
+    }
+}
+async function changeDowntime(action) {
+    const reply = document.getElementById("downtime-reply");
+    if (action === "now" && !window.confirm("Shut down the server now? Connected players will disconnect."))
+        return;
+    const message = document.getElementById("downtime-message").value;
+    try {
+        const result = await postAdmin("/api/downtime", { action, message });
+        reply.textContent = result.ok ?? "Saved.";
+        reply.className = "note dropped";
+        await refreshDowntime();
+    }
+    catch (e) {
+        reply.textContent = String(e);
+        reply.className = "note hostile";
+    }
+}
 function span(text, className) {
     const e = document.createElement("span");
     e.textContent = text;
     e.className = className;
     return e;
+}
+function pilotLink(id, name) {
+    if (!id || id <= 0)
+        return span(name || "Unknown pilot", "pilot-name");
+    const a = document.createElement("a");
+    a.href = `#pilot-${id}`;
+    a.className = "pilot-link";
+    a.textContent = name || "Unknown pilot";
+    a.addEventListener("click", (event) => event.stopPropagation());
+    return a;
 }
 const corpTicker = (t) => span(t ? ` [${t}]` : "", "tick");
 const allianceTicker = (t) => span(t ? ` <${t}>` : "", "tick");
@@ -142,7 +243,7 @@ function draw(id) {
     }
     for (const item of items) {
         const tr = body.insertRow();
-        if (id === "kills") {
+        if (id === "kills" || id === "profile-kills") {
             tr.className = "selectable-kill";
             tr.tabIndex = 0;
             tr.setAttribute("role", "link");
@@ -256,12 +357,15 @@ async function showKill(id) {
         main.append(card(`Items destroyed & dropped (${detail.items?.length ?? 0})`, itemTable));
         const victim = document.createElement("div");
         victim.className = "victim-name";
-        victim.append(typeImage(k.shipTypeID, "icon", 64), span(k.victim, ""));
+        victim.append(typeImage(k.shipTypeID, "icon", 64), pilotLink(k.victimID, k.victim));
         side.append(card("Victim", victim, detailLine("Corporation", k.victimCorporation || "Unknown"), detailLine("Alliance", k.victimAlliance || "—")));
         side.append(card("Kill details", detailLine("System", `${k.system} (${k.security.toFixed(1)})`), detailLine("Region", k.region), detailLine("Time", `${eveTime(k.time)} EVE`), detailLine("Total damage", numbers.format(k.damage))));
         side.append(card("Estimated hull value", detailLine("Base price", k.hullValue > 0 ? isk(k.hullValue) : "Unavailable"), span("Historical kill values require prices that were not recorded at the time.", "dim small")));
         const finalBlow = detail.participants?.find((p) => p.finalBlow);
-        side.append(card("Final blow", detailLine("Pilot", finalBlow?.pilot || "Unknown"), detailLine("Ship", finalBlow?.ship || "—"), detailLine("Weapon", finalBlow?.weapon || "—")));
+        const finalPilot = document.createElement("div");
+        finalPilot.className = "final-pilot";
+        finalPilot.append(pilotLink(finalBlow?.id, finalBlow?.pilot), span(finalBlow?.ship || "—", "dim"));
+        side.append(card("Final blow", finalPilot, detailLine("Weapon", finalBlow?.weapon || "—")));
         const partyList = document.createElement("div");
         partyList.className = "party-list";
         for (const p of detail.participants ?? []) {
@@ -270,7 +374,7 @@ async function showKill(id) {
             if (p.shipTypeID)
                 party.append(typeImage(p.shipTypeID, "icon", 64));
             const names = document.createElement("div");
-            names.append(span(p.pilot, "party-name"), span([p.corporation, p.alliance].filter(Boolean).join(" · "), "dim"));
+            names.append(pilotLink(p.id, p.pilot), span([p.corporation, p.alliance].filter(Boolean).join(" · "), "dim"));
             party.append(names, span(`${numbers.format(p.damage)}${p.finalBlow ? " · FINAL BLOW" : ""}`, p.finalBlow ? "hostile" : "dim"));
             partyList.append(party);
         }
@@ -280,6 +384,81 @@ async function showKill(id) {
     }
     catch (e) {
         output.replaceChildren(span(`Could not load report: ${String(e)}`, "hostile"));
+    }
+}
+async function showPilot(id) {
+    const out = document.getElementById("pilot-profile");
+    out.replaceChildren(span("Loading pilot record…", "dim"));
+    try {
+        const profile = await get(`/api/pilot?id=${id}`);
+        if (!profile.pilot) {
+            out.replaceChildren(span(profile.error || "Pilot unavailable", "hostile"));
+            return;
+        }
+        const p = profile.pilot;
+        const hero = document.createElement("div");
+        hero.className = "pilot-hero";
+        const avatar = span(p.name.slice(0, 1).toUpperCase(), "pilot-avatar");
+        const portrait = document.createElement("img");
+        portrait.src = `https://images.evetech.net/characters/${p.id}/portrait?size=128`;
+        portrait.alt = p.name;
+        portrait.addEventListener("load", () => avatar.replaceChildren(portrait));
+        const identity = document.createElement("div");
+        const heading = document.createElement("h2");
+        heading.textContent = p.name;
+        identity.append(span("CAPSULEER RECORD", "eyebrow"), heading, span([p.corporation, p.ticker ? `[${p.ticker}]` : "", p.alliance].filter(Boolean).join(" · "), "dim"));
+        hero.append(avatar, identity, security(p.security));
+        const stats = document.createElement("div");
+        stats.className = "profile-stats";
+        for (const [label, value] of [["Kills involved", profile.kills], ["Final blows", profile.finalBlows], ["Losses", profile.losses]]) {
+            const tile = document.createElement("div");
+            tile.className = "stat-tile";
+            tile.append(span(label, "eyebrow"), span(numbers.format(value), "stat-number"));
+            stats.append(tile);
+        }
+        const layout = document.createElement("div");
+        layout.className = "profile-layout";
+        const activity = card("Recent activity", document.createElement("table"));
+        activity.querySelector("table").id = "profile-kills";
+        const side = card("Most used ships", document.createElement("table"));
+        side.querySelector("table").id = "profile-ships";
+        layout.append(activity, side);
+        out.replaceChildren(hero, stats, layout);
+        list("profile-kills", [
+            { title: "Result", key: (k) => k.loss ? 1 : 0, cell: (k) => [span(k.loss ? "LOSS" : "KILL", k.loss ? "hostile" : "dropped")] },
+            { title: "Ship", key: (k) => k.ship, cell: (k) => [typeImage(k.shipTypeID, "icon", 64), span(k.ship, "ship-name")] },
+            { title: "Victim", key: (k) => k.victim, cell: (k) => [pilotLink(k.victimID, k.victim)] },
+            { title: "System", key: (k) => k.system, cell: (k) => [k.system] },
+            { title: "Time", key: (k) => k.time, cell: (k) => [eveTime(k.time)] },
+        ], profile.recent, "No recorded kills or losses.", 4, true);
+        list("profile-ships", [
+            { title: "Ship", key: (s) => s.ship, cell: (s) => [typeImage(s.typeID, "icon", 64), s.ship] },
+            { title: "Kills", num: true, key: (s) => s.kills, cell: (s) => count(s.kills) },
+        ], profile.ships, "No ships recorded in kills.", 1, true);
+    }
+    catch (e) {
+        out.replaceChildren(span(`Could not load pilot: ${String(e)}`, "hostile"));
+    }
+}
+async function searchKillboardPilots() {
+    const query = document.getElementById("killboard-search").value.trim();
+    const out = document.getElementById("killboard-search-results");
+    if (query.length < 2)
+        return;
+    out.replaceChildren(span("Searching pilots…", "dim"));
+    try {
+        const found = await get(`/api/pilot-search?q=${encodeURIComponent(query)}`);
+        out.replaceChildren(...found.map((p) => {
+            const row = document.createElement("div");
+            row.className = "search-result";
+            row.append(pilotLink(p.id, p.name), span([p.corporation, p.alliance].filter(Boolean).join(" · "), "dim"));
+            return row;
+        }));
+        if (!found.length)
+            out.replaceChildren(span("No pilot found. Try a shorter name.", "dim"));
+    }
+    catch (e) {
+        out.replaceChildren(span(`Search failed: ${String(e)}`, "hostile"));
     }
 }
 const count = (n) => [numbers.format(n)];
@@ -342,7 +521,7 @@ async function refresh() {
             { title: "Type", key: (w) => (w.mutual ? 1 : 0), cell: (w) => [span(w.bots ? "mutual (simulated)" : w.mutual ? "mutual" : "declared", "dim")] },
         ], wars, "There are no wars.", 3, true);
         list("players", [
-            { title: "Name", key: (p) => p.name, cell: (p) => [p.name] },
+            { title: "Name", key: (p) => p.name, cell: (p) => [pilotLink(p.id, p.name)] },
             { title: "Corporation", key: (p) => p.ticker ?? "", cell: (p) => [corpTicker(p.ticker), p.alliance ? span(` ${p.alliance}`, "dim") : ""] },
             { title: "Location", key: (p) => p.system ?? "", cell: (p) => [security(p.systemSecurity ?? 0), ` ${p.system ?? ""}`, p.docked ? span(" (docked)", "dim") : ""] },
             { title: "Ship", key: (p) => p.ship ?? "", cell: (p) => [p.ship ?? ""] },
@@ -405,8 +584,8 @@ function showKillList() {
                 cell.append(labels);
                 return [cell];
             } },
-        { title: "Victim", key: (k) => k.victim ?? "", cell: (k) => [span(k.victim ?? "Unknown", "pilot-name"), span(k.victimCorporation ?? "", "subline")] },
-        { title: "Final blow", key: (k) => k.finalBlow ?? "", cell: (k) => [span(k.finalBlow ?? "Unknown", "pilot-name")] },
+        { title: "Victim", key: (k) => k.victim ?? "", cell: (k) => [pilotLink(k.victimID, k.victim), span(k.victimCorporation ?? "", "subline")] },
+        { title: "Final blow", key: (k) => k.finalBlow ?? "", cell: (k) => [pilotLink(k.finalBlowID, k.finalBlow)] },
         { title: "Location", key: (k) => k.system ?? "", cell: (k) => [k.system ?? "Unknown"] },
         { title: "Hull base value", num: true, key: (k) => k.hullValue ?? 0, cell: (k) => [k.hullValue ? isk(k.hullValue) : "—"] },
         { title: "Time", key: (k) => k.time ?? 0, cell: (k) => [eveTime(k.time)] },
@@ -438,8 +617,26 @@ async function refreshBots() {
         item.append(span(label, "eyebrow"), span(numbers.format(value), "stat-number"));
         return item;
     }));
+    const featured = document.getElementById("killboard-featured");
+    featured.replaceChildren(...board.featured.map((kill) => {
+        const item = document.createElement("article");
+        item.className = "featured-kill";
+        item.tabIndex = 0;
+        item.addEventListener("click", () => openKill(kill.id));
+        item.addEventListener("keydown", (e) => { if (e.key === "Enter")
+            openKill(kill.id); });
+        const image = typeImage(kill.shipTypeID, "render", 256);
+        const ship = span(kill.ship, "featured-ship");
+        const name = pilotLink(kill.victimID, kill.victim);
+        const value = span(isk(kill.hullValue), "featured-value");
+        const location = span(`${kill.system} · ${eveTime(kill.time)} EVE`, "dim small");
+        item.append(image, ship, name, value, location);
+        return item;
+    }));
+    if (!board.featured.length)
+        featured.replaceChildren(span("No valued kills in the last seven days.", "dim"));
     list("killboard-pilots", [
-        { title: "Pilot", key: (p) => p.name, cell: (p) => [p.name, corpTicker(p.corporation)] },
+        { title: "Pilot", key: (p) => p.name, cell: (p) => [pilotLink(p.id, p.name), corpTicker(p.corporation)] },
         { title: "Final blows", num: true, key: (p) => p.kills, cell: (p) => count(p.kills) },
     ], board.pilots, "No kills in the last day.", 1, true);
     list("killboard", [
@@ -605,6 +802,11 @@ function searchPilots() {
 }
 document.getElementById("hub").addEventListener("change", showMarket);
 document.getElementById("users-refresh").addEventListener("click", () => void refreshUsers());
+document.getElementById("article-form").addEventListener("submit", (e) => void publishArticle(e));
+document.getElementById("downtime-form").addEventListener("submit", (e) => { e.preventDefault(); void changeDowntime("schedule"); });
+document.getElementById("downtime-cancel").addEventListener("click", () => void changeDowntime("cancel"));
+document.getElementById("downtime-now").addEventListener("click", () => void changeDowntime("now"));
+document.getElementById("killboard-search-form").addEventListener("submit", (e) => { e.preventDefault(); void searchKillboardPilots(); });
 document.getElementById("kill-search").addEventListener("input", showKillList);
 document.getElementById("kills-prev").addEventListener("click", () => { if (killPage > 0) {
     killPage--;
@@ -649,8 +851,9 @@ const pages = {
     alliances: { title: "Alliances", description: "Coalitions and their territory.", windows: ["w-alliances"] },
     corporations: { title: "Corporations", description: "Corporation roster and members.", windows: ["w-corporations"] },
     sieges: { title: "Sieges", description: "Campaigns and system assaults.", windows: ["w-sieges"] },
-    news: { title: "Galactic news", description: "Recent events from across the cluster.", windows: ["w-news"] },
+    news: { title: "Galactic news", description: "Published articles and recent events from across the cluster.", windows: ["w-articles", "w-news"] },
     killboard: { title: "Killboard", description: "Killmails, top killers and recent destruction.", windows: ["w-killboard", "w-kills"] },
+    downtime: { title: "Server downtime", description: "Announce and schedule a graceful shutdown.", windows: ["w-downtime"] },
     market: { title: "Market", description: "Trade activity and hub stock.", windows: ["w-market"] },
     relations: { title: "Standings", description: "Bot relationships and grudges.", windows: ["w-relations"] },
     follow: { title: "Follow a pilot", description: "Track a pilot's current activity.", windows: ["w-follow"] },
@@ -660,20 +863,26 @@ const pages = {
 function route() {
     const hash = window.location.hash.slice(1) || "home";
     const killID = Number(hash.match(/^kill-(\d+)$/)?.[1] ?? 0);
-    const page = killID > 0 ? { title: `Killmail #${killID}`, description: "Fitting, loss and involved pilots.", windows: ["w-kill-detail"] } : pages[hash] ?? pages.home;
+    const pilotID = Number(hash.match(/^pilot-(\d+)$/)?.[1] ?? 0);
+    const page = killID > 0 ? { title: `Killmail #${killID}`, description: "Fitting, loss and involved pilots.", windows: ["w-kill-detail"] }
+        : pilotID > 0 ? { title: "Pilot record", description: "Kills, losses and ships flown.", windows: ["w-pilot-profile"] }
+            : pages[hash] ?? pages.home;
     setText("page-title", page.title);
     setText("page-description", page.description);
-    setText("page-kicker", killID > 0 || hash === "killboard" ? "KILLBOARD / NEW EDEN" : "COMMAND CENTER / NEW EDEN");
+    setText("page-kicker", killID > 0 || pilotID > 0 || hash === "killboard" ? "KILLBOARD / NEW EDEN" : "COMMAND CENTER / NEW EDEN");
     document.title = `${page.title} · Red Moon Rising`;
     for (const window of document.querySelectorAll(".desktop .window")) {
         window.classList.toggle("page-hidden", !page.windows.includes(window.id));
     }
     document.getElementById("w-kill-detail").hidden = killID === 0;
+    document.getElementById("w-pilot-profile").hidden = pilotID === 0;
     for (const link of document.querySelectorAll(".neocom a")) {
-        link.classList.toggle("active", link.hash === (killID > 0 ? "#killboard" : `#${hash}`));
+        link.classList.toggle("active", link.hash === (killID > 0 || pilotID > 0 ? "#killboard" : `#${hash}`));
     }
     if (killID > 0)
         void showKill(killID);
+    if (pilotID > 0)
+        void showPilot(pilotID);
     if (hash === "users")
         void refreshUsers();
     window.scrollTo(0, 0);
@@ -684,4 +893,9 @@ setInterval(tick, 1000);
 route();
 void refresh();
 setInterval(() => void refresh(), REFRESH_MS);
+void refreshArticles();
+setInterval(() => void refreshArticles(), REFRESH_MS);
+void refreshDowntime();
+setInterval(() => void refreshDowntime(), 5000);
+setInterval(renderDowntime, 1000);
 export {};

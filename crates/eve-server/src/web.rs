@@ -14,8 +14,9 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use eve_marshal::Value;
 use serde_json::{json, Map, Value as Json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -31,10 +32,52 @@ const SCRIPT: &str = include_str!("../web/dist/app.js");
 
 /// The most a request may be before it is turned away.
 const MAX_REQUEST: usize = 8 * 1024;
+const MAX_BODY: usize = 64 * 1024;
 /// FILETIME of 1970-01-01, in milliseconds since 1601.
 const UNIX_EPOCH_MS: i64 = 11_644_473_600_000;
 
 static STARTED: OnceLock<Instant> = OnceLock::new();
+
+pub async fn ensure_storage(db: &tokio_postgres::Client) -> Result<(), tokio_postgres::Error> {
+    db.batch_execute(r#"
+        CREATE TABLE IF NOT EXISTS "rmrNewsArticles" (
+            id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            title text NOT NULL,
+            body text NOT NULL,
+            published_ms bigint NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS "rmrDowntime" (
+            id integer PRIMARY KEY CHECK (id = 1),
+            deadline_ms bigint NOT NULL,
+            message text NOT NULL,
+            active boolean NOT NULL DEFAULT false
+        );
+    "#).await
+}
+
+fn unix_ms_now() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64
+}
+
+/// Called by the main accept loop so bot and ship state follow the ordinary
+/// graceful shutdown path before the launcher closes the database.
+pub async fn take_due_downtime(db: &tokio_postgres::Client) -> Result<bool, tokio_postgres::Error> {
+    Ok(db.query_opt(r#"UPDATE "rmrDowntime" SET active = false
+        WHERE id = 1 AND active AND deadline_ms <= $1 RETURNING id"#, &[&unix_ms_now()]).await?.is_some())
+}
+
+pub async fn notify_joined(server: &Server, client_id: i64) {
+    if let Ok(Some(row)) = server.db.query_opt(r#"SELECT deadline_ms, message FROM "rmrDowntime"
+        WHERE id = 1 AND active AND deadline_ms > $1"#, &[&unix_ms_now()]).await {
+        server.world.lock().notify(&[client_id], "OnClusterShutdownInitiated", Value::Tuple(vec![
+            Value::text(row.get::<_, String>(1)), Value::Long(filetime_at_ms(row.get(0))),
+        ]));
+    }
+}
+
+fn filetime_at_ms(ms: i64) -> i64 {
+    (ms + UNIX_EPOCH_MS) * 10_000
+}
 
 pub async fn run(server: Arc<Server>, bind: String) {
     if bind.is_empty() {
@@ -74,10 +117,38 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
             return respond(&mut stream, 431, "text/plain", b"Request too large").await;
         }
     }
-    let head = String::from_utf8_lossy(&buf);
+    let head_end = buf.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+    let head = String::from_utf8_lossy(&buf[..head_end]).into_owned();
     let mut parts = head.lines().next().unwrap_or("").split_whitespace();
     let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
     let path = target.split('?').next().unwrap_or("/");
+    let body = if method == "POST" && matches!(path, "/api/articles" | "/api/downtime") {
+        let Some(len) = header(&head, "Content-Length").and_then(|n| n.parse::<usize>().ok()) else {
+            return respond(&mut stream, 400, "application/json", br#"{"error":"Content-Length is required."}"#).await;
+        };
+        if len > MAX_BODY { return respond(&mut stream, 413, "text/plain", b"Article is too long").await; }
+        while buf.len() - head_end < len {
+            let n = stream.read(&mut chunk).await?;
+            if n == 0 { return respond(&mut stream, 400, "text/plain", b"Incomplete request").await; }
+            buf.extend_from_slice(&chunk[..n]);
+        }
+        buf[head_end..head_end + len].to_vec()
+    } else { Vec::new() };
+    if matches!(path, "/api/articles" | "/api/downtime") && method == "POST" {
+        let host = header(&head, "Host").unwrap_or("");
+        if !local || !local_host(host, stream.local_addr()?.port()) ||
+            header(&head, "X-RMR-Admin") != Some("1") ||
+            header(&head, "Origin") != Some(format!("http://{host}").as_str()) {
+            return respond(&mut stream, 403, "application/json", br#"{"error":"This control is available only on the server dashboard."}"#).await;
+        }
+        let result = if path == "/api/articles" { publish_article(server, &body).await }
+            else { change_downtime(server, &body).await };
+        let (status, reply) = match result {
+            Ok(v) => (200, v),
+            Err((status, message)) => (status, json!({"error": message})),
+        };
+        return respond(&mut stream, status, "application/json", reply.to_string().as_bytes()).await;
+    }
     if path == "/api/users" || path == "/api/users/role" {
         let host = header(&head, "Host").unwrap_or("");
         if !local || !local_host(host, stream.local_addr()?.port()) {
@@ -141,12 +212,18 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
     }
     match path {
         "/" | "/index.html" => respond(&mut stream, 200, "text/html; charset=utf-8", INDEX.as_bytes()).await,
+        "/client-news" => {
+            let page = client_news(server).await.unwrap_or_else(|_| "<html><body><h2>News unavailable</h2></body></html>".into());
+            respond(&mut stream, 200, "text/html; charset=utf-8", page.as_bytes()).await
+        }
         "/style.css" => respond(&mut stream, 200, "text/css; charset=utf-8", STYLE.as_bytes()).await,
         "/app.js" => respond(&mut stream, 200, "text/javascript; charset=utf-8", SCRIPT.as_bytes()).await,
         api if api.starts_with("/api/") => {
             let body = match api {
                 "/api/summary" => Some(summary(server).await),
                 "/api/news" => Some(news(server)),
+                "/api/articles" => Some(articles(server).await),
+                "/api/downtime" => Some(downtime(server).await),
                 "/api/sieges" => Some(sieges(server)),
                 "/api/wars" => Some(wars(server).await),
                 "/api/players" => Some(players(server).await),
@@ -164,6 +241,16 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
                     let query = target.split_once('?').map_or("", |(_, q)| q);
                     let id = query.split('&').find_map(|kv| kv.strip_prefix("id=")).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
                     Some(kill_detail(server, id).await)
+                }
+                "/api/pilot" => {
+                    let query = target.split_once('?').map_or("", |(_, q)| q);
+                    let id = query.split('&').find_map(|kv| kv.strip_prefix("id=")).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+                    Some(pilot_profile(server, id).await)
+                }
+                "/api/pilot-search" => {
+                    let query = target.split_once('?').map_or("", |(_, q)| q);
+                    let q = query.split('&').find_map(|kv| kv.strip_prefix("q=")).map(decode).unwrap_or_default();
+                    Some(pilot_search(server, &q).await)
                 }
                 "/api/market" => Some(Ok(server.world.lock().bot_panels.market.clone())),
                 "/api/relations" => Some(Ok(server.world.lock().bot_panels.relations.clone())),
@@ -210,6 +297,7 @@ async fn respond(stream: &mut TcpStream, status: u16, kind: &str, body: &[u8]) -
         404 => "Not Found",
         405 => "Method Not Allowed",
         431 => "Request Header Fields Too Large",
+        413 => "Content Too Large",
         _ => "Internal Server Error",
     };
     let head = format!(
@@ -304,6 +392,94 @@ fn sieges(server: &Server) -> Answer {
 fn news(server: &Server) -> Answer {
     let news = server.world.lock().bot_stats.news.clone();
     Ok(Json::Array(news.iter().rev().map(|(at, what)| json!({ "time": at / 10_000 - UNIX_EPOCH_MS, "text": what })).collect()))
+}
+
+async fn articles(server: &Server) -> Answer {
+    Ok(rows(&server.db.query(r#"SELECT id, title, body, published_ms AS time
+        FROM "rmrNewsArticles" ORDER BY id DESC LIMIT 100"#, &[]).await?))
+}
+
+async fn downtime(server: &Server) -> Answer {
+    let row = server.db.query_opt(r#"SELECT deadline_ms, message, active FROM "rmrDowntime" WHERE id = 1"#, &[]).await?;
+    Ok(match row {
+        Some(row) => json!({"active": row.get::<_, bool>(2), "deadline": row.get::<_, i64>(0),
+            "message": row.get::<_, String>(1), "now": unix_ms_now()}),
+        None => json!({"active": false, "deadline": null, "message": "", "now": unix_ms_now()}),
+    })
+}
+
+type EditResult = Result<Json, (u16, String)>;
+
+async fn publish_article(server: &Server, body: &[u8]) -> EditResult {
+    let input: Json = serde_json::from_slice(body).map_err(|_| (400, "Invalid article data.".to_string()))?;
+    let title = input["title"].as_str().unwrap_or("").trim();
+    let text = input["body"].as_str().unwrap_or("").trim();
+    if title.is_empty() || title.chars().count() > 140 || text.is_empty() || text.chars().count() > 8_000 {
+        return Err((400, "Enter a title (up to 140 characters) and article (up to 8,000 characters).".into()));
+    }
+    let row = server.db.query_one(r#"INSERT INTO "rmrNewsArticles" (title, body, published_ms)
+        VALUES ($1, $2, $3) RETURNING id"#, &[&title, &text, &unix_ms_now()]).await
+        .map_err(|e| { warn!("publishing news: {}", crate::logging::chain(&e)); (500, "Could not save article.".into()) })?;
+    Ok(json!({"ok": "Article published to the dashboard and character select.", "id": row.get::<_, i64>(0)}))
+}
+
+async fn change_downtime(server: &Server, body: &[u8]) -> EditResult {
+    let input: Json = serde_json::from_slice(body).map_err(|_| (400, "Invalid downtime data.".to_string()))?;
+    let action = input["action"].as_str().unwrap_or("");
+    if action == "cancel" {
+        let removed = server.db.query_opt(r#"UPDATE "rmrDowntime" SET active = false
+            WHERE id = 1 AND active RETURNING id"#, &[]).await
+            .map_err(|e| { warn!("canceling downtime: {}", crate::logging::chain(&e)); (500, "Could not cancel downtime.".into()) })?;
+        if removed.is_some() {
+            let w = server.world.lock();
+            w.notify(&w.all_clients(), "OnClusterShutdownCancelled",
+                Value::Tuple(vec![Value::text("The scheduled downtime has been cancelled.")]));
+        }
+        return Ok(json!({"ok": if removed.is_some() { "Downtime cancelled." } else { "No downtime was scheduled." }}));
+    }
+    if action != "schedule" && action != "now" {
+        return Err((400, "Choose a five-minute countdown, immediate shutdown, or cancel.".into()));
+    }
+    let message = input["message"].as_str().unwrap_or("").trim();
+    if message.chars().count() > 500 {
+        return Err((400, "Downtime announcement must be under 500 characters.".into()));
+    }
+    let message = if message.is_empty() { "The server is going down for maintenance." } else { message };
+    let deadline = unix_ms_now() + if action == "schedule" { 300_000 } else { 0 };
+    server.db.execute(r#"INSERT INTO "rmrDowntime" (id, deadline_ms, message, active)
+        VALUES (1, $1, $2, true) ON CONFLICT (id) DO UPDATE SET
+        deadline_ms = EXCLUDED.deadline_ms, message = EXCLUDED.message, active = true"#,
+        &[&deadline, &message]).await
+        .map_err(|e| { warn!("scheduling downtime: {}", crate::logging::chain(&e)); (500, "Could not schedule downtime.".into()) })?;
+    let w = server.world.lock();
+    w.notify(&w.all_clients(), "OnClusterShutdownInitiated", Value::Tuple(vec![
+        Value::text(message), Value::Long(filetime_at_ms(deadline)),
+    ]));
+    info!(deadline, action, "dashboard scheduled downtime");
+    Ok(json!({"ok": if action == "schedule" { "Five-minute downtime countdown started." } else { "Shutting down the server." }, "deadline": deadline}))
+}
+
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+        .replace('"', "&quot;").replace('\'', "&#39;")
+}
+
+async fn client_news(server: &Server) -> Result<String, tokio_postgres::Error> {
+    let articles = server.db.query(r#"SELECT title, body,
+        to_char(to_timestamp(published_ms / 1000.0) AT TIME ZONE 'UTC', 'DD Mon YYYY HH24:MI "UTC"') AS published
+        FROM "rmrNewsArticles"
+        ORDER BY id DESC LIMIT 25"#, &[]).await?;
+    let mut html = String::from("<html><body bgcolor=\"#101820\" text=\"#e6edf4\" link=\"#9bd0ff\"><font face=\"Tahoma,Arial\" size=\"2\"><h2>Red Moon Rising News</h2>");
+    if articles.is_empty() { html.push_str("<p>No news articles have been published yet.</p>"); }
+    for row in articles {
+        let title: String = row.get(0);
+        let body: String = row.get(1);
+        let at: String = row.get(2);
+        html.push_str(&format!("<hr><h3>{}</h3><small>{}</small><p>{}</p>",
+            escape_html(&title), at, escape_html(&body).replace('\n', "<br>")));
+    }
+    html.push_str("</font></body></html>");
+    Ok(html)
 }
 
 async fn wars(server: &Server) -> Answer {
@@ -511,14 +687,27 @@ async fn killboard(server: &Server) -> Answer {
             WHERE p."finalBlow" = 1
             GROUP BY p."ownerID", c."characterName", co."tickerName"
     ORDER BY kills DESC, name LIMIT 25"#, &[]).await?);
+    let featured_sql = format!(r#"SELECT k."killID" AS id, {time} AS time,
+        k."victimCharID" AS "victimID", COALESCE(c."characterName", 'Unknown pilot') AS victim,
+        COALESCE(t."typeName", 'Unknown ship') AS ship, k."victimShipTypeID" AS "shipTypeID",
+        COALESCE(s."solarSystemName", 'Unknown system') AS system,
+        COALESCE(t."basePrice", 0)::float8 AS "hullValue"
+        FROM "killLog" k
+        LEFT JOIN "character_" c ON c."characterID" = k."victimCharID"
+        LEFT JOIN "invTypes" t ON t."typeID" = k."victimShipTypeID"
+        LEFT JOIN "mapSolarSystems" s ON s."solarSystemID" = k."solarSystemID"
+        WHERE k."killTime" > $1 AND COALESCE(t."basePrice", 0) > 0
+        ORDER BY t."basePrice" DESC, k."killID" DESC LIMIT 6"#, time = ms(r#"k."killTime""#));
+    let featured = rows(&server.db.query(&featured_sql, &[&week]).await?);
     Ok(json!({ "total": total, "day": counts.get::<_, i64>("day"), "week": counts.get::<_, i64>("week"),
-        "pods": counts.get::<_, i64>("pods"), "sides": sides, "ships": ships, "pilots": pilots }))
+        "pods": counts.get::<_, i64>("pods"), "sides": sides, "ships": ships,
+        "pilots": pilots, "featured": featured }))
 }
 
 async fn kill_detail(server: &Server, id: i64) -> Answer {
     if id <= 0 { return Ok(json!({ "error": "Invalid kill ID" })); }
     let sql = format!(r#"SELECT k."killID" AS id, {time} AS time,
-           COALESCE(vc."characterName", 'Unknown pilot') AS victim,
+           k."victimCharID" AS "victimID", COALESCE(vc."characterName", 'Unknown pilot') AS victim,
            COALESCE(vco."corporationName", '') AS "victimCorporation",
            COALESCE(va."allianceName", '') AS "victimAlliance",
            COALESCE(t."typeName", 'Unknown ship') AS ship,
@@ -565,10 +754,10 @@ async fn kill_detail(server: &Server, id: i64) -> Answer {
 
 async fn kills(server: &Server, page: i64) -> Answer {
     let sql = format!(
-        r#"SELECT k."killID" AS id, {time} AS time, vc."characterName" AS victim, vco."corporationName" AS "victimCorporation",
+        r#"SELECT k."killID" AS id, {time} AS time, k."victimCharID" AS "victimID", vc."characterName" AS victim, vco."corporationName" AS "victimCorporation",
                   t."typeName" AS ship, k."victimShipTypeID" AS "shipTypeID", COALESCE(g."groupName", '') AS "shipClass",
                   COALESCE(t."basePrice",0)::float8 AS "hullValue",
-                  s."solarSystemName" AS system, fc."characterName" AS "finalBlow", k."isPodKill" = 1 AS pod
+                  s."solarSystemName" AS system, k."finalBlowID" AS "finalBlowID", fc."characterName" AS "finalBlow", k."isPodKill" = 1 AS pod
              FROM "killLog" k
              LEFT JOIN "character_" vc ON vc."characterID" = k."victimCharID"
              LEFT JOIN "corporation" vco ON vco."corporationID" = k."victimCorpID"
@@ -582,9 +771,71 @@ async fn kills(server: &Server, page: i64) -> Answer {
     Ok(rows(&server.db.query(sql.as_str(), &[&(page * 30)]).await?))
 }
 
+async fn pilot_search(server: &Server, query: &str) -> Answer {
+    let q = query.trim();
+    if q.chars().count() < 2 || q.chars().count() > 80 { return Ok(json!([])); }
+    let pattern = format!("%{q}%");
+    Ok(rows(&server.db.query(r#"SELECT c."characterID" AS id, c."characterName" AS name,
+        co."corporationName" AS corporation, a."allianceName" AS alliance
+        FROM "character_" c LEFT JOIN "corporation" co ON co."corporationID" = c."corporationID"
+        LEFT JOIN alliances a ON a."allianceID" = co."allianceID"
+        WHERE c."characterName" ILIKE $1 ORDER BY
+        CASE WHEN lower(c."characterName") = lower($2) THEN 0 ELSE 1 END, c."characterName" LIMIT 30"#,
+        &[&pattern, &q]).await?))
+}
+
+async fn pilot_profile(server: &Server, id: i64) -> Answer {
+    if id <= 0 || id > i32::MAX as i64 { return Ok(json!({"error": "Invalid pilot ID"})); }
+    let Some(pilot) = server.db.query_opt(r#"SELECT c."characterID" AS id,
+        c."characterName" AS name, COALESCE(co."corporationName", '') AS corporation,
+        COALESCE(co."tickerName", '') AS ticker, COALESCE(a."allianceName", '') AS alliance,
+        COALESCE(c."securityRating", 0)::float8 AS security
+        FROM "character_" c LEFT JOIN "corporation" co ON co."corporationID" = c."corporationID"
+        LEFT JOIN alliances a ON a."allianceID" = co."allianceID"
+        WHERE c."characterID" = $1"#, &[&(id as i32)]).await? else {
+        return Ok(json!({"error": "Pilot not found"}));
+    };
+    let counts = server.db.query_one(r#"SELECT
+        (SELECT count(DISTINCT "killID") FROM "killLogParticipants" WHERE "ownerID" = $1) AS kills,
+        (SELECT count(*) FROM "killLog" WHERE "victimCharID" = $1) AS losses,
+        (SELECT count(*) FROM "killLogParticipants" WHERE "ownerID" = $1 AND "finalBlow" = 1) AS "finalBlows""#,
+        &[&(id as i32)]).await?;
+    let recent_sql = format!(r#"SELECT k."killID" AS id, {time} AS time,
+        k."victimCharID" AS "victimID", COALESCE(vc."characterName", 'Unknown pilot') AS victim,
+        COALESCE(t."typeName", 'Unknown ship') AS ship, k."victimShipTypeID" AS "shipTypeID",
+        COALESCE(s."solarSystemName", '') AS system,
+        k."victimCharID" = $1 AS loss
+        FROM "killLog" k LEFT JOIN "character_" vc ON vc."characterID" = k."victimCharID"
+        LEFT JOIN "invTypes" t ON t."typeID" = k."victimShipTypeID"
+        LEFT JOIN "mapSolarSystems" s ON s."solarSystemID" = k."solarSystemID"
+        WHERE k."victimCharID" = $1 OR EXISTS
+          (SELECT 1 FROM "killLogParticipants" p WHERE p."killID" = k."killID" AND p."ownerID" = $1)
+        ORDER BY k."killID" DESC LIMIT 40"#, time = ms(r#"k."killTime""#));
+    let recent = rows(&server.db.query(&recent_sql, &[&(id as i32)]).await?);
+    let ships = rows(&server.db.query(r#"SELECT t."typeName" AS ship, p."shipTypeID" AS "typeID",
+        count(DISTINCT p."killID")::int AS kills FROM "killLogParticipants" p
+        JOIN "invTypes" t ON t."typeID" = p."shipTypeID" WHERE p."ownerID" = $1
+        GROUP BY p."shipTypeID", t."typeName" ORDER BY kills DESC LIMIT 8"#,
+        &[&(id as i32)]).await?);
+    Ok(json!({"pilot": rows(&[pilot]).as_array().and_then(|a| a.first()).cloned(),
+        "kills": counts.get::<_, i64>(0), "losses": counts.get::<_, i64>(1),
+        "finalBlows": counts.get::<_, i64>(2), "recent": recent, "ships": ships}))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{header, local_host};
+    use super::{escape_html, filetime_at_ms, header, local_host};
+
+    #[test]
+    fn native_shutdown_timer_uses_windows_filetime() {
+        assert_eq!(filetime_at_ms(0), 116_444_736_000_000_000);
+        assert_eq!(filetime_at_ms(300_000), 116_444_739_000_000_000);
+    }
+
+    #[test]
+    fn published_news_cannot_inject_markup_into_character_select() {
+        assert_eq!(escape_html("<script>alert('x')</script>"), "&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;");
+    }
 
     #[test]
     fn account_controls_accept_only_literal_loopback_hosts() {

@@ -708,6 +708,7 @@ async fn bookmarks(db: &impl GenericClient, m: &Mission) -> Vec<Value> {
             ("itemID", Value::Int(item)),
             ("typeID", Value::Int(type_id)),
             ("locationID", Value::Int(system)),
+            ("created", Value::Long(m.accepted_at.unwrap_or(m.expires_at - OFFER_LIFETIME))),
             // Navigation's mission right-click menu reads this exact legacy
             // spelling; without it the entire right-click menu raises.
             ("solarsystemID", Value::Int(system)),
@@ -716,19 +717,50 @@ async fn bookmarks(db: &impl GenericClient, m: &Mission) -> Vec<Value> {
             ("z", Value::Double(at.z)),
         ])
     };
+    let station_bookmark = |location_type: &str, station: i64, r: &tokio_postgres::Row| {
+        let at = Vec3::new(float(r, 2).unwrap_or(0.0), float(r, 3).unwrap_or(0.0), float(r, 4).unwrap_or(0.0));
+        let purpose = match location_type {
+            "dropoff" => "Drop-off",
+            "pickup" => "Pickup",
+            _ => "Agent station",
+        };
+        bookmark(location_type, format!("{purpose} ({})", text(r, 5).unwrap_or_default()),
+            station, int(r, 0).unwrap_or(0), int(r, 1).unwrap_or(0), at)
+    };
+    let station_sql = r#"SELECT "stationTypeID", "solarSystemID", "x", "y", "z", "stationName" FROM "staStations" WHERE "stationID" = $1"#;
     match (m.kind, m.site) {
         (KIND_ENCOUNTER, Some(at)) => {
             let name = system_name(db, m.destination).await;
             vec![bookmark("dungeon", format!("Objective ({name})"), m.destination, TYPE_SOLAR_SYSTEM, m.destination, at)]
         }
         (KIND_COURIER, _) => {
-            let sql = r#"SELECT "stationTypeID", "solarSystemID", "x", "y", "z", "stationName" FROM "staStations" WHERE "stationID" = $1"#;
-            let Some(r) = db.query_opt(sql, &[&(m.destination as i32)]).await.ok().flatten() else { return Vec::new() };
-            let at = Vec3::new(float(&r, 2).unwrap_or(0.0), float(&r, 3).unwrap_or(0.0), float(&r, 4).unwrap_or(0.0));
-            let hint = format!("Drop-off ({})", text(&r, 5).unwrap_or_default());
-            vec![bookmark("dropoff", hint, m.destination, int(&r, 0).unwrap_or(0), int(&r, 1).unwrap_or(0), at)]
+            let mut places = Vec::new();
+            if let Some(r) = db.query_opt(station_sql, &[&(m.destination as i32)]).await.ok().flatten() {
+                places.push(station_bookmark("dropoff", m.destination, &r));
+            }
+            let agent_station = db.query_opt(r#"SELECT "stationID" FROM "agtAgents" WHERE "agentID" = $1"#,
+                &[&(m.agent_id as i32)]).await.ok().flatten().and_then(|r| int(&r, 0));
+            if let Some(station) = agent_station {
+                if let Some(r) = db.query_opt(station_sql, &[&(station as i32)]).await.ok().flatten() {
+                    places.push(station_bookmark("pickup", station, &r));
+                }
+            }
+            places
         }
-        _ => Vec::new(),
+        _ => {
+            // Older encounter rows may lack site coordinates. Keep the mission
+            // visible and give the pilot its agent's station as a safe fallback.
+            let station = if m.kind == KIND_ENCOUNTER {
+                db.query_opt(r#"SELECT "stationID" FROM "agtAgents" WHERE "agentID" = $1"#,
+                    &[&(m.agent_id as i32)]).await.ok().flatten().and_then(|r| int(&r, 0))
+                    .unwrap_or(m.destination)
+            } else {
+                m.destination
+            };
+            db.query_opt(station_sql, &[&(station as i32)]).await.ok().flatten()
+                .map(|r| vec![station_bookmark("agentstation", station, &r)])
+                .unwrap_or_default()
+        }
     }
 }
 
@@ -759,7 +791,7 @@ pub async fn mission_page(ctx: &Ctx<'_>, agent_id: i64) -> Value {
 /// WarpToLocation(locationType, locationNumber, warpRange, gang), and with
 /// `approach` GotoLocation(locationType, locationNumber): to a mission's
 /// place in the pilot's own system. An encounter's site opens as they set out.
-pub async fn go_to(ctx: &Ctx<'_>, number: i64, range: f64, approach: bool) -> Outcome {
+pub async fn go_to(ctx: &Ctx<'_>, location_type: &str, number: i64, range: f64, approach: bool) -> Outcome {
     let me = ctx.session.char_id.unwrap_or(0);
     let Some(system) = ctx.session.solar_system_id else { return Outcome::custom("You have to be in space for that.") };
     let sql = format!(r#"{MISSION_SELECT} WHERE "missionID" = $1 AND "characterID" = $2 AND "state" IN (2, 3)"#);
@@ -777,8 +809,18 @@ pub async fn go_to(ctx: &Ctx<'_>, number: i64, range: f64, approach: bool) -> Ou
             (at, 0.0)
         }
         _ => {
+            let station = if (m.kind == KIND_COURIER && location_type == "pickup")
+                || location_type == "agentstation" {
+                let sql = r#"SELECT "stationID" FROM "agtAgents" WHERE "agentID" = $1"#;
+                let Some(agent_station) = ctx.query_one(sql, &[&(m.agent_id as i32)]).await.and_then(|r| int(&r, 0)) else {
+                    return Outcome::custom("That agent's station is unavailable.");
+                };
+                agent_station
+            } else {
+                m.destination
+            };
             let sql = r#"SELECT "x", "y", "z", COALESCE("radius", 0), "solarSystemID" FROM "mapDenormalize" WHERE "itemID" = $1"#;
-            let Some(r) = ctx.query_one(sql, &[&(m.destination as i32)]).await else { return Outcome::custom("That station is gone.") };
+            let Some(r) = ctx.query_one(sql, &[&(station as i32)]).await else { return Outcome::custom("That station is gone.") };
             if int(&r, 4) != Some(system) {
                 return Outcome::custom("That location is in another solar system. Set your destination there first.");
             }

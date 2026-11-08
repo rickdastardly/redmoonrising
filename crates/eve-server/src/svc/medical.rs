@@ -7,15 +7,82 @@
 //! corporation's station.
 
 use eve_marshal::Value;
-use tokio_postgres::GenericClient;
+use tokio_postgres::{Client, GenericClient};
 use tracing::{error, info};
 
+use crate::combat::attr;
 use crate::services::{Ctx, Outcome};
 
 pub const GROUP_CLONE: i32 = 23;
 pub const TYPE_CLONE_ALPHA: i64 = 164;
 /// market_refTypes: "Clone Activation".
 const REF_CLONE: i32 = 8;
+
+const SIGMA_CLONE: i32 = 23734;
+const LEGACY_CLONE_PRICES: &[(i32, f64)] = &[
+    (164, 1_000.0), (165, 2_000.0), (166, 3_000.0),
+    (9917, 4_000.0), (9919, 8_000.0), (9921, 12_000.0),
+    (9923, 16_000.0), (9925, 32_000.0), (9927, 48_000.0),
+    (9929, 64_000.0), (9931, 128_000.0), (9933, 192_000.0),
+    (9935, 256_000.0), (9937, 512_000.0), (9939, 768_000.0),
+    (16715, 1_000_000.0), (16718, 4_000_000.0),
+    (SIGMA_CLONE, 12_000_000.0),
+];
+
+/// The remaining Greek grades extend the original 92,160,000 SP Sigma clone.
+/// The final grade holds the skill points for every skill at level V.
+const NEW_CLONE_GRADES: &[(i32, &str, i32, f64)] = &[
+    (90_000_001, "Clone Grade Tau",     120_000_000, 4.0 / 3.0),
+    (90_000_002, "Clone Grade Upsilon", 156_000_000, 7.0 / 4.0),
+    (90_000_003, "Clone Grade Phi",     203_000_000, 7.0 / 3.0),
+    (90_000_004, "Clone Grade Chi",     264_000_000, 37.0 / 12.0),
+    (90_000_005, "Clone Grade Psi",     343_000_000, 49.0 / 12.0),
+    (90_000_006, "Clone Grade Omega",   448_386_560, 65.0 / 12.0),
+];
+
+/// Keep both dogma tables in sync: the old client reads dgmTypeAttribs in
+/// bulk data, while capsule loss uses dgmTypeAttributes on the server.
+pub async fn ensure_grades(db: &mut Client) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let tx = db.transaction().await?;
+    for &(type_id, price) in LEGACY_CLONE_PRICES {
+        tx.execute(r#"UPDATE "invTypes" SET "basePrice" = $2
+            WHERE "typeID" = $1 AND "groupID" = $3
+              AND COALESCE("basePrice", 0) <= 0"#,
+            &[&type_id, &price, &GROUP_CLONE]).await?;
+    }
+    let sigma_price: f64 = tx.query_one(r#"SELECT "basePrice" FROM "invTypes"
+        WHERE "typeID" = $1 AND "groupID" = $2"#,
+        &[&SIGMA_CLONE, &GROUP_CLONE]).await?.get(0);
+    let sigma_price = sigma_price.max(12_000_000.0);
+
+    for &(type_id, name, points, multiplier) in NEW_CLONE_GRADES {
+        let price = (sigma_price * multiplier).ceil();
+        let description = format!("This medical clone preserves up to {points} skill points.");
+        let changed = tx.execute(r#"INSERT INTO "invTypes"
+            ("typeID", "groupID", "typeName", description, "graphicID", radius, mass,
+             volume, capacity, "portionSize", "basePrice", published, "chanceOfDuplicating")
+            VALUES ($1, $2, $3, $4, 34, 0, 0, 1, 0, 1, $5, 1, 0)
+            ON CONFLICT ("typeID") DO UPDATE SET "typeName" = EXCLUDED."typeName",
+                description = EXCLUDED.description, "basePrice" = EXCLUDED."basePrice", published = 1
+            WHERE "invTypes"."groupID" = $2 AND "invTypes"."typeName" = $3"#,
+            &[&type_id, &GROUP_CLONE, &name, &description, &price]).await?;
+        if changed != 1 {
+            return Err(format!("clone grade type ID {type_id} is already used by another item").into());
+        }
+        tx.execute(r#"INSERT INTO "dgmTypeAttributes" ("typeID", "attributeID", "valueInt", "valueFloat")
+            VALUES ($1, $2, $3, NULL)
+            ON CONFLICT ("typeID", "attributeID") DO UPDATE SET
+                "valueInt" = EXCLUDED."valueInt", "valueFloat" = NULL"#,
+            &[&type_id, &attr::SKILL_POINTS_SAVED, &points]).await?;
+        tx.execute(r#"INSERT INTO "dgmTypeAttribs" ("typeID", "attributeID", value)
+            VALUES ($1, $2, $3)
+            ON CONFLICT ("typeID", "attributeID") DO UPDATE SET value = EXCLUDED.value"#,
+            &[&type_id, &attr::SKILL_POINTS_SAVED, &points.to_string()]).await?;
+    }
+    tx.commit().await?;
+    info!(grades = NEW_CLONE_GRADES.len(), maximum_sp = 448_386_560, "medical clone grades ready");
+    Ok(())
+}
 
 /// The station the clone waits in, if one was chosen.
 pub async fn home_station(db: &impl GenericClient, char_id: i64) -> Result<Option<i64>, tokio_postgres::Error> {
@@ -126,4 +193,25 @@ pub async fn set_clone_type(ctx: &Ctx<'_>, type_id: i64) -> Outcome {
     }
     info!("{char_id} bought clone {type_id} for {price} ISK");
     Outcome::Value(Value::None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LEGACY_CLONE_PRICES, NEW_CLONE_GRADES};
+
+    #[test]
+    fn clone_capacity_and_price_increase_to_full_skill_cap() {
+        assert!(LEGACY_CLONE_PRICES.windows(2).all(|pair| pair[0].1 < pair[1].1));
+        let mut previous_sp = 92_160_000;
+        let sigma_price = LEGACY_CLONE_PRICES.last().unwrap().1;
+        let mut previous_price = sigma_price;
+        for &(_, _, points, multiplier) in NEW_CLONE_GRADES {
+            let price = (sigma_price * multiplier).ceil();
+            assert!(points > previous_sp);
+            assert!(price > previous_price);
+            previous_sp = points;
+            previous_price = price;
+        }
+        assert_eq!(previous_sp, 448_386_560);
+    }
 }

@@ -176,22 +176,35 @@ async fn bookmark_location(ctx: &Ctx<'_>, item_id: i64, memo: Option<String>) ->
             return failed();
         }
     };
-    let Some(r) = found else {
-        warn!(
-            "BookmarkLocation({item_id}): not a mapDenormalize item -- a \
-             raw-coordinate bookmark needs a ballpark position this server does not track"
-        );
-        return failed();
+    let (type_id, location_id, x, y, z): (i32, i32, f64, f64, f64) = if let Some(r) = found {
+        let system = r.try_get::<_, Option<i32>>(1).ok().flatten()
+            .or_else(|| ctx.session.solar_system_id2.and_then(|v| i32::try_from(v).ok()))
+            .unwrap_or(0);
+        (r.get(0), system, r.get(2), r.get(3), r.get(4))
+    } else {
+        // BookmarkCurrentLocation passes the pilot's ship ID while in space.
+        // Moving balls have no mapDenormalize row: capture their position now
+        // so the bookmark remains at this spot after the ball moves or dies.
+        let Some(system) = ctx.session.solar_system_id else { return failed() };
+        let snapshot = {
+            let world = ctx.world.lock();
+            world.parks.get(&system).and_then(|park| {
+                let (pos, _) = park.ball(item_id)?;
+                let type_id = park.ships.get(&item_id).map(|s| s.pilot.type_id)
+                    .or_else(|| park.rocks.get(&item_id).map(|r| r.type_id))
+                    .or_else(|| park.cans.get(&item_id).map(|c| c.type_id))
+                    .or_else(|| park.structures.get(&item_id).map(|s| s.type_id))
+                    .or_else(|| park.sites.get(&item_id).map(|_| crate::sites::TYPE_BEACON))
+                    .or_else(|| park.celestial(item_id).map(|c| c.type_id))?;
+                Some((type_id, pos))
+            })
+        };
+        let Some((type_id, pos)) = snapshot else {
+            warn!("BookmarkLocation({item_id}): item is neither a map location nor a ball in the current system");
+            return failed();
+        };
+        (type_id as i32, system as i32, pos.x, pos.y, pos.z)
     };
-
-    let type_id: i32 = r.get(0);
-    let location_id: i32 = r
-        .try_get::<_, Option<i32>>(1)
-        .ok()
-        .flatten()
-        .or_else(|| ctx.session.solar_system_id2.and_then(|v| i32::try_from(v).ok()))
-        .unwrap_or(0);
-    let (x, y, z): (f64, f64, f64) = (r.get(2), r.get(3), r.get(4));
 
     let insert = r#"INSERT INTO bookmarks
                         ("ownerID","itemID","typeID","flag","memo","created","x","y","z","locationID")

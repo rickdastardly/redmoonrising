@@ -810,6 +810,28 @@ async fn acl_for(ctx: &Ctx<'_>, channel_id: i64, default_mode: i64) -> Value {
         }
         Err(e) => error!("LSC acl of {channel_id}: {err}", err = crate::logging::chain(&e)),
     }
+    // People and Places' Agents tab reads NPC buddies from this personal
+    // channel ACL. Include the agents who currently have work for this pilot.
+    if ctx.session.char_id == Some(channel_id) {
+        let sql = r#"SELECT DISTINCT "agentID" FROM "agtCharMissions"
+                      WHERE "characterID" = $1 AND "state" IN (0, 2, 3)"#;
+        match ctx.db.query(sql, &[&(channel_id as i32)]).await {
+            Ok(agents) => {
+                for agent in agents {
+                    let Some(id) = int(&agent, 0) else { continue };
+                    if lines.iter().any(|line| matches!(line, Value::List(cells) if cells.first() == Some(&Value::Int(id)))) {
+                        continue;
+                    }
+                    lines.push(Value::List(vec![
+                        Value::Int(id),
+                        Value::Int(CHTMODE_CONVERSATIONALIST),
+                        Value::None, Value::None, Value::None, Value::None,
+                    ]));
+                }
+            }
+            Err(e) => error!("LSC mission agent contacts of {channel_id}: {err}", err = crate::logging::chain(&e)),
+        }
+    }
     if !has_default {
         lines.insert(
             0,

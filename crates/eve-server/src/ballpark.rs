@@ -115,6 +115,7 @@ impl Mul<f64> for Vec3 {
     }
 }
 
+const GROUP_BELT: i64 = 9;
 const GROUP_STATION: i64 = 15;
 
 /// A fixed object in the system: sun, planet, moon, belt, stargate, station.
@@ -133,11 +134,11 @@ pub struct Celestial {
 }
 
 impl Celestial {
-    /// Whether ships bounce off it. Not a station: its undock point lies
-    /// inside its radius, so a massive station would throw every ship that
-    /// leaves it.
+    /// Whether ships bounce off it. Stations have undock points within their
+    /// radius. Asteroid belts are one-metre location markers, not obstacles:
+    /// a capital warping to one lands beside that marker and coasts through it.
     pub fn massive(&self) -> bool {
-        self.group_id != GROUP_STATION
+        self.group_id != GROUP_STATION && self.group_id != GROUP_BELT
     }
 }
 
@@ -1161,7 +1162,7 @@ mod tests {
     }
 
     #[test]
-    fn a_station_lets_ships_through_but_a_planet_does_not() {
+    fn station_and_belt_markers_let_ships_through_but_a_planet_does_not() {
         let at = |group_id: i64| Celestial {
             id: 40_000_001,
             type_id: 1,
@@ -1172,13 +1173,35 @@ mod tests {
             undock: None,
             jump: None,
         };
-        for (group, pushed) in [(GROUP_STATION, false), (7, true)] {
+        for (group, pushed) in [(GROUP_STATION, false), (GROUP_BELT, false), (7, true)] {
             let mut park = Park::new(30002780, vec![at(group)], 0);
             park.ships.insert(1, Ship::new(1, 10, rifter(), pilot(), Vec3::new(15_000.0, 0.0, 0.0), Vec3::ZERO));
             park.advance(5);
             let moved = park.ships[&1].pos.x - 15_000.0;
             assert_eq!(moved > 100.0, pushed, "group {group}: moved {moved} m");
         }
+    }
+
+    #[test]
+    fn a_capital_coasts_through_the_belt_marker_after_warp() {
+        let belt = Celestial {
+            id: 40208661,
+            type_id: 15,
+            group_id: GROUP_BELT,
+            name: "Asteroid Belt".into(),
+            pos: Vec3::ZERO,
+            radius: 1.0,
+            undock: None,
+            jump: None,
+        };
+        let mut park = Park::new(30003287, vec![belt], 0);
+        let stats = ShipStats::new(2_000.0, 1_127_500_000.0, 0.05, 100.0, 0.5);
+        park.ships.insert(1, Ship::new(1, 10, stats, pilot(), Vec3::new(2_001.0, 0.0, 0.0), Vec3::new(-80.0, 0.0, 0.0)));
+        park.advance(1);
+        let ship = &park.ships[&1];
+        assert!(ship.pos.x < 2_001.0, "belt marker bounced the capital to {}", ship.pos.x);
+        assert!(ship.vel.x < 0.0 && ship.vel.len() < stats.max_velocity,
+            "belt marker changed its exit velocity to {:?}", ship.vel);
     }
 
     #[test]

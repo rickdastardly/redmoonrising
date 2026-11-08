@@ -20,6 +20,7 @@
     <a href="#sieges" title="Sieges">SIE</a>
     <a href="#news" title="Galactic News">NEW</a>
     <a href="#killboard" title="Killboard">KBD</a>
+    <a href="#downtime" title="Downtime">DT</a>
     <a href="#market" title="Market">MKT</a>
     <a href="#relations" title="Standings">STD</a>
     <a href="#follow" title="Follow a Pilot">FOL</a>
@@ -69,6 +70,20 @@
       <div class="body"><table id="sieges"></table></div>
     </section>
 
+    <section class="window wide" id="w-articles">
+      <header class="caption"><span class="glyph"></span><h2>Server news</h2></header>
+      <div class="body">
+        <div id="articles" class="articles"></div>
+        <form id="article-form" class="article-form">
+          <h3>Publish an article</h3>
+          <p class="note">Articles appear here and in the EVE character selection news panel.</p>
+          <input name="title" maxlength="140" placeholder="Headline" required aria-label="Article headline">
+          <textarea name="body" maxlength="8000" rows="7" placeholder="Write the article" required aria-label="Article body"></textarea>
+          <button type="submit">Publish article</button><span id="article-reply" role="status"></span>
+        </form>
+      </div>
+    </section>
+
     <section class="window" id="w-news">
       <header class="caption"><span class="glyph"></span><h2>Galactic News</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
       <div class="body"><table id="news"></table></div>
@@ -86,15 +101,37 @@
       <div class="body kill-report"><div id="kill-detail"></div></div>
     </section>
 
+    <section class="window wide" id="w-pilot-profile" hidden>
+      <header class="caption"><span class="glyph"></span><h2>Pilot record</h2><a class="caption-link" href="#killboard">← Killboard</a></header>
+      <div class="body" id="pilot-profile"></div>
+    </section>
+
     <section class="window wide" id="w-killboard">
       <header class="caption"><span class="glyph"></span><h2>Killboard statistics</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
       <div class="body">
+        <form id="killboard-search-form" class="killboard-search"><input id="killboard-search" type="search" placeholder="Search pilots across New Eden" aria-label="Search pilots" required minlength="2"><button type="submit">Search</button></form>
+        <div id="killboard-search-results" class="search-results"></div>
         <div id="killboard-stats" class="killboard-stats"></div>
+        <h3 class="table-heading">Highest-value hulls lost · last 7 days</h3><div id="killboard-featured" class="featured-kills"></div>
         <h3 class="table-heading">Top killers · all time</h3><table id="killboard-pilots"></table>
         <h3 class="table-heading">Corporations & alliances</h3>
         <table id="killboard"></table>
         <h3 class="table-heading">Most lost hulls</h3>
         <table id="killboard-ships"></table>
+      </div>
+    </section>
+
+    <section class="window wide" id="w-downtime">
+      <header class="caption"><span class="glyph"></span><h2>Server downtime</h2></header>
+      <div class="body downtime-body">
+        <p class="note">Announce downtime to connected players. The client shows its own countdown; the server saves the universe before disconnecting everyone at zero.</p>
+        <div id="downtime-clock" class="downtime-clock">No downtime scheduled</div>
+        <form id="downtime-form" class="downtime-form">
+          <label for="downtime-message">Announcement</label>
+          <textarea id="downtime-message" name="message" maxlength="500" rows="3" placeholder="The server is going down for maintenance."></textarea>
+          <div class="toolbar"><button type="submit">Start 5-minute countdown</button><button type="button" id="downtime-cancel">Cancel countdown</button><button type="button" id="downtime-now" class="danger-button">Shut down now</button></div>
+        </form>
+        <p id="downtime-reply" class="note" role="status"></p>
       </div>
     </section>
 

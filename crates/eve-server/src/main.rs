@@ -92,11 +92,13 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         auto_create_accounts: config.auto_create_accounts,
     });
 
+    svc::medical::ensure_grades(&mut client).await.map_err(|e| format!("preparing medical clone grades: {e}"))?;
     market_seed::ensure(&mut client).await.map_err(|e| format!("seeding the market: {}", logging::chain(&e)))?;
     svc::moves::ensure_capital_storage(&client).await.map_err(|e| format!("preparing capital hangars: {}", logging::chain(&e)))?;
     svc::fitting::ensure_doomsday_fitting(&client).await.map_err(|e| format!("preparing doomsday fittings: {}", logging::chain(&e)))?;
     svc::agent_missions::ensure(&client).await.map_err(|e| format!("preparing period missions: {}", logging::chain(&e)))?;
     losses::ensure_kill_items(&client).await.map_err(|e| format!("preparing kill item records: {}", logging::chain(&e)))?;
+    web::ensure_storage(&client).await.map_err(|e| format!("preparing dashboard news and downtime: {}", logging::chain(&e)))?;
 
     let started = Instant::now();
     let bulk =
@@ -140,6 +142,19 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
                 if shutdown_file.as_ref().is_some_and(|path| path.exists()) {
                     info!("graceful shutdown requested");
                     break;
+                }
+                match web::take_due_downtime(&server.db).await {
+                    Ok(true) => {
+                        info!("scheduled downtime reached zero; saving and stopping");
+                        if let Some(path) = &shutdown_file {
+                            if let Err(e) = std::fs::write(path, b"downtime") {
+                                warn!("recording planned downtime for launcher: {e}");
+                            }
+                        }
+                        break;
+                    }
+                    Err(e) => warn!("checking scheduled downtime: {}", logging::chain(&e)),
+                    _ => {}
                 }
                 continue;
             }

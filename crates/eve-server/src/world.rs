@@ -234,6 +234,11 @@ impl WorldState {
             .collect()
     }
 
+    /// Every connected EVE client, including pilots on character select.
+    pub fn all_clients(&self) -> Vec<i64> {
+        self.clients.keys().copied().collect()
+    }
+
     /// Where each player in the game is.
     pub fn players(&self) -> Vec<Presence> {
         self.clients.values().filter_map(|c| c.presence).collect()
