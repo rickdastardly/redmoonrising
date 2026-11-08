@@ -2029,6 +2029,69 @@ def _rmr_install_bookmark_shortcut():
 
 uthread.new(_rmr_install_bookmark_shortcut)
 
+def _rmr_install_bookmark_warp_menu():
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        cls = sm.StartService('menu').__class__
+        if getattr(cls, '_rmr_bookmark_warp_installed', False):
+            return
+        original = cls.ParseMenu
+
+        def adjust_bookmark_warp_range(self, entries):
+            for entry in entries:
+                if entry and len(entry) == 5 and entry[1] == self.ApproachLocation:
+                    bookmark = entry[2][0]
+                    break
+            else:
+                return entries
+            system = eve.session.solarsystemid
+            if not system or bookmark.locationID != system or getattr(bookmark, 'agentID', None):
+                return entries
+            park = eve.LocalSvc('michelle').GetBallpark()
+            if not park:
+                return entries
+            coordinate = bookmark.typeID == const.typeSolarSystem and bookmark.itemID == system and bookmark.x is not None
+            ball_id = bookmark.itemID
+            if coordinate:
+                ball_id = eve.session.shipid
+            if ball_id not in park.balls:
+                return entries
+            ball = park.balls[ball_id]
+            if coordinate:
+                dx, dy, dz = ball.x - bookmark.x, ball.y - bookmark.y, ball.z - bookmark.z
+                in_range = dx * dx + dy * dy + dz * dz > const.minWarpDistance ** 2
+            else:
+                in_range = ball.surfaceDist > const.minWarpDistance
+            # Build 3913 uses a separate 1,000 km check for the bookmark warp
+            # entries. Keep the native menu and replace only that distance check.
+            adjusted = list(entries)
+            for index, entry in enumerate(entries):
+                if entry and len(entry) == 5 and entry[4] == 'warp' and entry[3]:
+                    checks = list(entry[3])
+                    for offset in range(0, len(checks), 2):
+                        if checks[offset][1:] == ['Within range', 'Not in range']:
+                            checks[offset] = [in_range, 'You are in warp range', 'You are not in warp range']
+                    adjusted[index] = list(entry)
+                    adjusted[index][3] = tuple(checks)
+            return adjusted
+
+        def parse_menu(self, menuEntries, showInactive=0, filterFunc=None):
+            try:
+                menuEntries = adjust_bookmark_warp_range(self, menuEntries)
+            except:
+                _rmr_log('Bookmark warp menu failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+                sys.exc_clear()
+            return original(self, menuEntries, showInactive, filterFunc)
+
+        cls.ParseMenu = parse_menu
+        cls._rmr_bookmark_warp_installed = True
+    except:
+        _rmr_log('Bookmark warp setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+uthread.new(_rmr_install_bookmark_warp_menu)
+
 def _rmr_install_mission_agent_contacts():
     while not getattr(eve.session, 'charid', None):
         blue.pyos.synchro.Sleep(1000)

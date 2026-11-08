@@ -13,6 +13,23 @@ const BOOKMARK_SELECT: &str = r#"SELECT "bookmarkID","ownerID","itemID","typeID"
                                         "created","x","y","z","locationID"
                                    FROM bookmarks"#;
 
+const TYPE_SOLAR_SYSTEM: i32 = 5;
+
+/// The legacy client only measures a coordinate bookmark from its saved XYZ
+/// if it is marked as a solar system. Repair older bookmarks and their copies
+/// in vouchers, which used the live ship or other space object's item ID.
+pub async fn ensure_coordinate_format(db: &mut tokio_postgres::Client) -> Result<(), tokio_postgres::Error> {
+    let tx = db.transaction().await?;
+    for table in ["bookmarks", r#""bookmarkVouchers""#] {
+        let sql = format!(r#"UPDATE {table} b SET "itemID" = b."locationID", "typeID" = $1
+                  WHERE b.x IS NOT NULL AND b.y IS NOT NULL AND b.z IS NOT NULL
+                    AND EXISTS (SELECT 1 FROM "mapSolarSystems" s WHERE s."solarSystemID" = b."locationID")
+                    AND NOT EXISTS (SELECT 1 FROM "mapDenormalize" d WHERE d."itemID" = b."itemID")"#);
+        tx.execute(&sql, &[&TYPE_SOLAR_SYSTEM]).await?;
+    }
+    tx.commit().await
+}
+
 pub async fn bookmark(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
     let arg = |i: usize| call.arg_i64(i);
     let value = match call.method.as_str() {
@@ -176,34 +193,26 @@ async fn bookmark_location(ctx: &Ctx<'_>, item_id: i64, memo: Option<String>) ->
             return failed();
         }
     };
-    let (type_id, location_id, x, y, z): (i32, i32, f64, f64, f64) = if let Some(r) = found {
+    let (saved_item, type_id, location_id, x, y, z): (i32, i32, i32, f64, f64, f64) = if let Some(r) = found {
         let system = r.try_get::<_, Option<i32>>(1).ok().flatten()
             .or_else(|| ctx.session.solar_system_id2.and_then(|v| i32::try_from(v).ok()))
             .unwrap_or(0);
-        (r.get(0), system, r.get(2), r.get(3), r.get(4))
+        (item_id as i32, r.get(0), system, r.get(2), r.get(3), r.get(4))
     } else {
         // BookmarkCurrentLocation passes the pilot's ship ID while in space.
         // Moving balls have no mapDenormalize row: capture their position now
         // so the bookmark remains at this spot after the ball moves or dies.
         let Some(system) = ctx.session.solar_system_id else { return failed() };
-        let snapshot = {
+        let pos = {
             let world = ctx.world.lock();
-            world.parks.get(&system).and_then(|park| {
-                let (pos, _) = park.ball(item_id)?;
-                let type_id = park.ships.get(&item_id).map(|s| s.pilot.type_id)
-                    .or_else(|| park.rocks.get(&item_id).map(|r| r.type_id))
-                    .or_else(|| park.cans.get(&item_id).map(|c| c.type_id))
-                    .or_else(|| park.structures.get(&item_id).map(|s| s.type_id))
-                    .or_else(|| park.sites.get(&item_id).map(|_| crate::sites::TYPE_BEACON))
-                    .or_else(|| park.celestial(item_id).map(|c| c.type_id))?;
-                Some((type_id, pos))
-            })
+            world.parks.get(&system).and_then(|park| park.ball(item_id)).map(|(pos, _)| pos)
         };
-        let Some((type_id, pos)) = snapshot else {
+        let Some(pos) = pos else {
             warn!("BookmarkLocation({item_id}): item is neither a map location nor a ball in the current system");
             return failed();
         };
-        (type_id as i32, system as i32, pos.x, pos.y, pos.z)
+        let system = system as i32;
+        (system, TYPE_SOLAR_SYSTEM, system, pos.x, pos.y, pos.z)
     };
 
     let insert = r#"INSERT INTO bookmarks
@@ -218,7 +227,7 @@ async fn bookmark_location(ctx: &Ctx<'_>, item_id: i64, memo: Option<String>) ->
             insert,
             &[
                 &(char_id as i32),
-                &(item_id as i32),
+                &saved_item,
                 &type_id,
                 &memo,
                 &created,
@@ -232,7 +241,7 @@ async fn bookmark_location(ctx: &Ctx<'_>, item_id: i64, memo: Option<String>) ->
     {
         Ok(row) => Value::Tuple(vec![
             cell(&row, 0),
-            Value::Int(item_id),
+            Value::Int(i64::from(saved_item)),
             Value::Int(type_id as i64),
             Value::Double(x),
             Value::Double(y),

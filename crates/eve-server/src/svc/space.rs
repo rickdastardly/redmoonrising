@@ -988,11 +988,13 @@ async fn warp_target(ctx: &Ctx<'_>, kind: &str, id: i64) -> Option<(Vec3, f64, b
         "bookmark" => {
             let sql = r#"SELECT b."x", b."y", b."z", d."x", d."y", d."z", COALESCE(d."radius", 0), d."groupID"
                            FROM bookmarks b
-                           LEFT JOIN "mapDenormalize" d ON d."itemID" = b."itemID"
-                          WHERE b."bookmarkID" = $1 AND b."ownerID" = $2"#;
+                           LEFT JOIN "mapDenormalize" d ON d."itemID" = b."itemID" AND d."solarSystemID" = b."locationID"
+                          WHERE b."bookmarkID" = $1 AND b."ownerID" = $2 AND b."locationID" = $3"#;
             let owner = ctx.session.char_id? as i32;
-            let r = ctx.query_one(sql, &[&(id as i32), &owner]).await?;
-            // A bookmark of a celestial carries the celestial's position.
+            let system = ctx.session.solar_system_id? as i32;
+            let r = ctx.query_one(sql, &[&(id as i32), &owner, &system]).await?;
+            // Map objects use local celestial coordinates. A coordinate bookmark
+            // names its system, whose map row is in galaxy coordinates, so use its own XYZ.
             match point(&r, 3) {
                 Some(at) => Some((at, float(&r, 6).unwrap_or(0.0), int(&r, 7) == Some(GROUP_STATION))),
                 None => Some((point(&r, 0)?, 0.0, false)),
