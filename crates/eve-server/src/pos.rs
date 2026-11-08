@@ -338,6 +338,9 @@ pub async fn load(db: &impl GenericClient, solar_system_id: i64) -> Result<Vec<S
                     if let Some(charge) = float(r, 14) {
                         v.shield.set(now, charge);
                     }
+                    if int(r, 11) == Some(i64::from(state::REINFORCED)) {
+                        v.shield.set_paused(now, true);
+                    }
                     v.armor_damage = float(r, 15).unwrap_or(0.0);
                     v.hull_damage = float(r, 16).unwrap_or(0.0);
                     v
@@ -395,6 +398,33 @@ pub async fn delays(db: &impl GenericClient, types: &[i32]) -> Result<std::colle
         out.entry(int(&r, 0).unwrap_or(0)).or_default()[slot] = ms * TICKS_PER_MS;
     }
     Ok(out)
+}
+
+/// Finishes elapsed timers for systems that have no live park to step them.
+pub async fn finish_unloaded(db: &impl GenericClient, loaded: &[i32]) -> Result<(), tokio_postgres::Error> {
+    db.execute(
+        r#"WITH expired AS (
+               SELECT p."itemID", p.state, p."stateTimestamp",
+                      p."stateTimestamp" + COALESCE(a."valueInt"::bigint, a."valueFloat"::bigint, 0) * 10000 AS finished
+                 FROM "posStructures" p
+                 JOIN entity e USING ("itemID")
+                 JOIN "invTypes" t ON t."typeID" = e."typeID"
+                 LEFT JOIN "dgmTypeAttributes" a ON a."typeID" = t."typeID"
+                      AND a."attributeID" = CASE WHEN p.state = 1 OR (p.state = 0 AND t."groupID" = 361) THEN 556
+                                                WHEN p.state = 0 THEN 676 WHEN p.state = 2 THEN 677 END
+                WHERE p.state IN (0, 1, 2, 3) AND p."stateTimestamp" IS NOT NULL
+                  AND NOT (e."locationID" = ANY($1))
+           )
+           UPDATE "posStructures" p SET state = CASE WHEN p.state IN (2, 3) THEN 4 ELSE p.state END,
+                  "stateTimestamp" = NULL,
+                  "controlTowerID" = CASE WHEN p.state = 0 THEN NULL ELSE p."controlTowerID" END,
+                  "moonID" = CASE WHEN p.state = 0 THEN NULL ELSE p."moonID" END,
+                  "lastFuel" = CASE WHEN p.state IN (2, 3) AND p."moonID" IS NOT NULL THEN x.finished ELSE p."lastFuel" END
+             FROM expired x WHERE p."itemID" = x."itemID" AND x.finished <= $2
+               AND p.state = x.state AND p."stateTimestamp" = x."stateTimestamp""#,
+        &[&loaded, &crate::bulkdata::filetime_now()],
+    ).await?;
+    Ok(())
 }
 
 /// The attributes a structure fights with, by type.
@@ -464,10 +494,11 @@ pub fn step(park: &mut Park, out: &mut Out) {
         if s.reinforce_asked && !s.invulnerable() && s.vitals.damage_state(now_ms).0 >= 0.25 {
             s.reinforce_asked = false;
         }
-        if s.stamp.is_none() || s.busy(now) {
-            continue;
-        }
+        let Some(stamp) = s.stamp.filter(|_| !s.busy(now)) else { continue };
         let loose = s.state == state::UNANCHORED;
+        if s.invulnerable() {
+            s.vitals.shield.set_paused(now_ms, false);
+        }
         if matches!(s.state, state::ONLINING | state::REINFORCED) {
             s.state = state::ONLINE;
         }
@@ -481,7 +512,7 @@ pub fn step(park: &mut Park, out: &mut Out) {
             }
         }
         out.destiny(system, slim_change(tick, s));
-        out.jobs.push(Job::Structure { id: s.id, state: s.state, stamp: None, tower: s.tower });
+        out.jobs.push(Job::Structure { id: s.id, state: s.state, completed_stamp: stamp, tower: s.tower });
     }
     for id in added_fields {
         for (client, entry) in crate::svc::space::add_object_entries_for_nearby(park, id) {

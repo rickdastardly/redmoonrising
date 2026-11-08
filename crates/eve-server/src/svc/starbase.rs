@@ -28,7 +28,7 @@ use crate::items::{self, ItemTxn, NewItem};
 use crate::pos::{self, state, Structure};
 use crate::services::{Call, Ctx, Outcome};
 use crate::session::CORP_ROLE_DIRECTOR;
-use crate::svc::membership::{access_denied, message, Refused};
+use crate::svc::membership::{access_denied, db_failed, message, Refused};
 use crate::svc::moonmining;
 use crate::svc::rows::{float, int, line, rowset};
 use crate::svc::space::{self, entry};
@@ -36,6 +36,7 @@ use crate::world::World;
 
 /// dgmEffects: onlineForStructures, anchorLiftForStructures.
 const EFFECT_ONLINE: i64 = 901;
+const EFFECT_ANCHOR: i64 = 1022;
 const EFFECT_UNANCHOR: i64 = 1023;
 const ATTR_POWER: i32 = 30;
 const ATTR_CPU: i32 = 50;
@@ -43,13 +44,19 @@ const ATTR_POWER_OUTPUT: i32 = 11;
 const ATTR_CPU_OUTPUT: i32 = 48;
 const ATTR_HARVESTER_CPU_BONUS: i32 = 756;
 const ATTR_MAX_STRUCTURE_DISTANCE: i32 = 650;
+const ATTR_MOON_ANCHOR_DISTANCE: i32 = 711;
 const ATTR_TOWER_PERIOD: i32 = 722;
 const ATTR_ANCHORING_SECURITY_MAX: i32 = 1032;
+const ATTR_ANCHORING_SOVEREIGNTY: i32 = 1033;
 /// invControlTowerResourcePurposes.
 const PURPOSE_ONLINE: i64 = 1;
 const PURPOSE_POWER: i64 = 2;
 const PURPOSE_CPU: i64 = 3;
 const PURPOSE_REINFORCE: i64 = 4;
+pub const STRONTIUM: i64 = 16275;
+/// The Blood dump's 12,500/25,000/50,000 m3 tower capacities are kept for
+/// strontium. The expanded fuel allocation is 35,000/70,000/140,000 m3.
+pub const TOWER_FUEL_CAPACITY_RATIO: f64 = 2.8;
 /// eveConstants corpRoleStarbaseConfig.
 const CORP_ROLE_STARBASE_CONFIG: i64 = 1 << 53;
 const GROUP_MOON: i64 = 8;
@@ -192,7 +199,7 @@ fn seen(ctx: &Ctx<'_>, id: i64) -> Option<Seen> {
 }
 
 /// posMgr.AnchorStructure(itemID, (x, y, z)).
-async fn anchor(ctx: &Ctx<'_>, id: i64, at: Vec3) -> Refused<Value> {
+async fn anchor(ctx: &Ctx<'_>, id: i64, mut at: Vec3) -> Refused<Value> {
     let Some(Seen { s, system, ship_pos, distance }) = seen(ctx, id) else {
         return Err(Outcome::custom("That structure is not here."));
     };
@@ -200,21 +207,22 @@ async fn anchor(ctx: &Ctx<'_>, id: i64, at: Vec3) -> Refused<Value> {
     if !s.is_free(now) {
         return Err(message_with("AlreadyUnanchoring", &[("group", Value::text(&s.name))]));
     }
-    if !allowed(ctx, &s, deploy_flag(ctx.db, s.tower.unwrap_or(s.id), "deployAnchor").await) || distance > CONFIGURE_RANGE {
+    if !allowed(ctx, &s, deploy_flag(ctx.db, s.tower.unwrap_or(s.id), "deployAnchor").await) || distance > ANCHOR_REACH {
         return Err(access_denied("you may not anchor that structure from here"));
     }
     let reach = (at - ship_pos).len();
-    if reach > ANCHOR_REACH {
+    if !reach.is_finite() || reach > ANCHOR_REACH {
         return Err(message_with(
             "CantAnchorTooDistant",
             &[("structure", Value::text(&s.name)), ("limit", Value::Int(ANCHOR_REACH as i64)), ("actual", Value::Int(reach as i64))],
         ));
     }
-    let security = system_security(ctx.db, system).await;
+    let security = (system_security(ctx.db, system).await * 10.0).round() / 10.0;
     if security >= CONCORD_ANCHOR_LIMIT {
         return Err(message("CantAnchorConcordRestriction"));
     }
-    if let Some(max) = type_attributes(ctx.db, &[s.type_id], &[ATTR_ANCHORING_SECURITY_MAX]).await.get(&(s.type_id, ATTR_ANCHORING_SECURITY_MAX)) {
+    let attrs = type_attributes(ctx.db, &[s.type_id], &[ATTR_ANCHORING_SECURITY_MAX, ATTR_ANCHORING_SOVEREIGNTY, ATTR_MOON_ANCHOR_DISTANCE]).await;
+    if let Some(max) = attrs.get(&(s.type_id, ATTR_ANCHORING_SECURITY_MAX)) {
         if security > *max {
             return Err(Outcome::custom(format!(
                 "CONCORD forbids anchoring the {} in systems above {max:.1} security.",
@@ -222,25 +230,64 @@ async fn anchor(ctx: &Ctx<'_>, id: i64, at: Vec3) -> Refused<Value> {
             )));
         }
     }
+    if attrs.get(&(s.type_id, ATTR_ANCHORING_SOVEREIGNTY)).is_some_and(|v| *v > 0.0) {
+        let sovereign = ctx.query_one(
+            r#"SELECT 1 FROM "mapSolarSystems" WHERE "solarSystemID" = $1 AND "allianceID" = $2"#,
+            &[&(system as i32), &s.alliance_id.map(|id| id as i32)],
+        ).await.is_some();
+        if !sovereign {
+            return Err(Outcome::custom("Your alliance must hold sovereignty in this system to anchor that structure."));
+        }
+    }
 
     let (tower, moon) = if s.is_tower() {
-        (None, Some(moon_for(ctx, system, &s, at).await?))
+        if (0.4..0.8).contains(&security) {
+            check_empire_anchor(ctx, &s, system, security).await?;
+        }
+        let range = attrs.get(&(s.type_id, ATTR_MOON_ANCHOR_DISTANCE)).copied().unwrap_or(MOON_RANGE);
+        let moon = moon_for(ctx, system, at, range)?;
+        let from_moon = at - moon.pos;
+        let clearance = moon.radius + s.radius + LAUNCH_CLEARANCE;
+        if from_moon.len() < clearance {
+            let outward = if from_moon.len() > 0.0 { from_moon.unit() } else { (ship_pos - moon.pos).unit() };
+            at = moon.pos + outward * clearance;
+        }
+        (None, Some(moon))
     } else {
         (Some(tower_for(ctx, system, &s, at, now).await?), None)
     };
     let stamp = pos::timer_start(now, s.delays[0]);
-    let saved = ctx
-        .db
-        .execute(
-            r#"UPDATE "posStructures" SET "state" = $2, "stateTimestamp" = $3, "controlTowerID" = $4, "moonID" = $5
-                WHERE "itemID" = $1"#,
-            &[&(id as i32), &state::ANCHORED, &stamp, &tower.map(|t| t as i32), &moon.map(|m| m as i32)],
-        )
-        .await
-        .and(ctx.db.execute(r#"UPDATE entity SET "x" = $2, "y" = $3, "z" = $4 WHERE "itemID" = $1"#, &[&(id as i32), &at.x, &at.y, &at.z]).await);
-    if let Err(e) = saved {
-        error!("anchoring {id}: {}", crate::logging::chain(&e));
-        return Err(Outcome::custom("The structure could not be anchored."));
+    let moon_id = moon.as_ref().map(|m| m.id as i32);
+    let saved = async {
+        let mut db = crate::db::connect(ctx.db_url).await?;
+        let tx = db.transaction().await?;
+        if let Some(moon) = moon_id {
+            if !reserve_moon(&tx, moon).await? {
+                return Ok(false);
+            }
+        }
+        let changed = tx.execute(
+            r#"UPDATE "posStructures" SET state = $2, "stateTimestamp" = $3, "controlTowerID" = $4, "moonID" = $5
+                WHERE "itemID" = $1 AND state = 0 AND "stateTimestamp" IS NOT DISTINCT FROM $6"#,
+            &[&(id as i32), &state::ANCHORED, &stamp, &tower.map(|t| t as i32), &moon_id, &s.stamp],
+        ).await?;
+        if changed == 0 {
+            return Ok(false);
+        }
+        tx.execute(r#"UPDATE entity SET "x" = $2, "y" = $3, "z" = $4 WHERE "itemID" = $1"#, &[&(id as i32), &at.x, &at.y, &at.z]).await?;
+        tx.commit().await?;
+        Ok::<_, tokio_postgres::Error>(true)
+    }.await;
+    match saved {
+        Ok(true) => {}
+        Ok(false) => return Err(match moon {
+            Some(m) => message_with("CantAnchorMoonAlreadyHasControlTower", &[("tower", Value::text(&s.name)), ("moon", Value::text(m.name))]),
+            None => Outcome::custom("That structure is already anchoring."),
+        }),
+        Err(e) => {
+            error!("anchoring {id}: {}", crate::logging::chain(&e));
+            return Err(Outcome::custom("The structure could not be anchored."));
+        }
     }
     update(ctx.world, system, id, |s, tick| {
         s.state = state::ANCHORED;
@@ -255,34 +302,64 @@ async fn anchor(ctx: &Ctx<'_>, id: i64, at: Vec3) -> Refused<Value> {
     Ok(Value::None)
 }
 
-/// The moon a control tower anchors at: the nearest, which no other tower
-/// holds.
-async fn moon_for(ctx: &Ctx<'_>, system: i64, s: &Structure, at: Vec3) -> Refused<i64> {
-    let (moon, taken) = {
-        let world = ctx.world.lock();
-        let park = world.parks.get(&system).ok_or_else(|| Outcome::custom("You are not in space."))?;
-        let moon = park
-            .celestials
-            .iter()
-            .filter(|c| c.group_id == GROUP_MOON)
-            .map(|c| (c, (c.pos - at).len() - c.radius))
-            .filter(|(_, d)| *d <= MOON_RANGE)
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(c, _)| (c.id, c.name.clone()));
-        (moon, park.structures.values().filter(|o| o.is_tower() && o.id != s.id && o.fixed()).map(|o| o.id).collect::<Vec<_>>())
-    };
-    let Some((moon_id, moon_name)) = moon else { return Err(message("CantAnchorNoMoonNearby")) };
-    let occupied = ctx
-        .query_one(
-            r#"SELECT 1 FROM "posStructures" WHERE "moonID" = $1 AND "itemID" = ANY($2)"#,
-            &[&(moon_id as i32), &taken.iter().map(|t| *t as i32).collect::<Vec<_>>()],
-        )
-        .await
-        .is_some();
-    if occupied {
-        return Err(message_with("CantAnchorMoonAlreadyHasControlTower", &[("tower", Value::text(&s.name)), ("moon", Value::text(moon_name))]));
+/// Empire space checks corporate faction standing and the charter carried
+/// by the ship. The matching charter is then burned with each fuel cycle.
+async fn check_empire_anchor(ctx: &Ctx<'_>, tower: &Structure, system: i64, security: f64) -> Refused<()> {
+    let row = ctx.query_one(
+        r#"SELECT COALESCE(s."factionID", c."factionID", g."factionID") AS faction,
+                  r."resourceTypeID", it."typeName"
+             FROM "mapSolarSystems" s
+             JOIN "mapConstellations" c ON c."constellationID" = s."constellationID"
+             JOIN "mapRegions" g ON g."regionID" = s."regionID"
+             JOIN "invControlTowerResources" r ON r."factionID" = COALESCE(s."factionID", c."factionID", g."factionID")
+             JOIN "invTypes" it ON it."typeID" = r."resourceTypeID"
+            WHERE s."solarSystemID" = $1 AND r."controlTowerTypeID" = $2 AND r."minSecurityLevel" IS NOT NULL"#,
+        &[&(system as i32), &(tower.type_id as i32)],
+    ).await.ok_or_else(|| Outcome::custom("There is no matching starbase charter for this tower in this system."))?;
+    let faction: i32 = row.get(0);
+    let charter: i32 = row.get(1);
+    let name: String = row.get(2);
+    let status = ctx.query_one(
+        r#"SELECT COALESCE(
+                      (SELECT "standing" FROM "ownerStandings" WHERE "fromID" = $1 AND "toID" = $2),
+                      (SELECT avg(n."standing") FROM "chrNPCStandings" n
+                         JOIN "character_" ch ON ch."characterID" = n."characterID"
+                        WHERE ch."corporationID" = $1 AND n."fromID" = $2 AND n."standing" <> 0),
+                      0)::float8,
+                  EXISTS (SELECT 1 FROM entity WHERE "locationID" = $3 AND flag = 5 AND "typeID" = $4 AND quantity > 0)"#,
+        &[&(tower.corp_id as i32), &faction, &ctx.session.ship_id.map(|id| id as i32), &charter],
+    ).await.ok_or_else(|| Outcome::custom("The starbase anchoring requirements could not be checked."))?;
+    let required = security * 10.0;
+    let standing: f64 = status.get(0);
+    if standing < required {
+        return Err(Outcome::custom(format!("Your corporation needs {required:.1} standing with the faction that holds this system.")));
     }
-    Ok(moon_id)
+    if !status.get::<_, bool>(1) {
+        return Err(Outcome::custom(format!("Carry a {name} in your cargo hold to anchor here.")));
+    }
+    Ok(())
+}
+
+fn moon_for(ctx: &Ctx<'_>, system: i64, at: Vec3, range: f64) -> Refused<crate::ballpark::Celestial> {
+    let world = ctx.world.lock();
+    let park = world.parks.get(&system).ok_or_else(|| Outcome::custom("You are not in space."))?;
+    park.celestials.iter().filter(|c| c.group_id == GROUP_MOON)
+        .map(|moon| (moon, ((moon.pos - at).len() - moon.radius).abs()))
+        .filter(|(_, distance)| *distance <= range)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(moon, _)| moon.clone())
+        .ok_or_else(|| message("CantAnchorNoMoonNearby"))
+}
+
+/// Hold the moon until the caller commits its tower placement.
+pub async fn reserve_moon(tx: &tokio_postgres::Transaction<'_>, moon: i32) -> Result<bool, tokio_postgres::Error> {
+    tx.query_one("SELECT pg_advisory_xact_lock($1, $2)", &[&365i32, &moon]).await?;
+    let tower = tx.query_opt(
+        r#"SELECT 1 FROM "posStructures" WHERE "moonID" = $1
+             AND (state <> 0 OR "stateTimestamp" IS NOT NULL) LIMIT 1"#,
+        &[&moon],
+    ).await?;
+    Ok(tower.is_none())
 }
 
 /// The online tower of the same owner whose reach covers `at`.
@@ -294,13 +371,19 @@ async fn tower_for(ctx: &Ctx<'_>, system: i64, s: &Structure, at: Vec3, now: i64
     };
     let types: Vec<i64> = towers.iter().map(|t| t.type_id).collect();
     let reach = type_attributes(ctx.db, &types, &[ATTR_MAX_STRUCTURE_DISTANCE]).await;
-    let near = towers.iter().find(|t| (t.pos - at).len() <= reach.get(&(t.type_id, ATTR_MAX_STRUCTURE_DISTANCE)).copied().unwrap_or(0.0));
+    let near = towers.iter()
+        .filter(|t| (t.pos - at).len() <= reach.get(&(t.type_id, ATTR_MAX_STRUCTURE_DISTANCE)).copied().unwrap_or(0.0))
+        .min_by(|a, b| (a.owner_id != s.owner_id).cmp(&(b.owner_id != s.owner_id))
+            .then_with(|| (a.pos - at).len_sq().total_cmp(&(b.pos - at).len_sq())));
     let Some(tower) = near else { return Err(message_with("CantAnchorRequireTower", &[("item", Value::text(&s.name))])) };
     if tower.owner_id != s.owner_id {
         return Err(message_with("CantAnchorStructureOwnerBad", &[("what", Value::text(&s.name)), ("whom", Value::text(owner_name(ctx, tower.owner_id).await))]));
     }
     if !tower.fully_online(now) {
         return Err(message("CantTowerNotOnline"));
+    }
+    if (tower.pos - at).len() < tower.radius + s.radius + LAUNCH_CLEARANCE {
+        return Err(Outcome::custom("Choose an anchoring position clear of the control tower."));
     }
     Ok(tower.id)
 }
@@ -310,16 +393,16 @@ async fn tower_for(ctx: &Ctx<'_>, system: i64, s: &Structure, at: Vec3, now: i64
 pub async fn dogma_im(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
     let id = call.arg_id(0);
     let effect = call.arg_i64(1)?;
-    if !matches!(call.method.as_str(), "Activate" | "Deactivate") || ![EFFECT_ONLINE, EFFECT_UNANCHOR].contains(&effect) {
+    if !matches!(call.method.as_str(), "Activate" | "Deactivate")
+        || !matches!(effect, EFFECT_ONLINE | EFFECT_ANCHOR | EFFECT_UNANCHOR) {
         return None;
     }
-    if seen(ctx, id).is_none() {
-        return None;
-    }
+    let s = seen(ctx, id)?.s;
     let result = match (call.method.as_str(), effect) {
+        ("Activate", EFFECT_ANCHOR) => anchor(ctx, id, s.pos).await,
+        ("Activate", EFFECT_UNANCHOR) => unanchor(ctx, id).await,
         ("Activate", EFFECT_ONLINE) => online(ctx, id).await,
         ("Deactivate", EFFECT_ONLINE) => offline(ctx, id).await,
-        ("Activate", EFFECT_UNANCHOR) => unanchor(ctx, id).await,
         _ => Ok(Value::None),
     };
     Some(result.map_or_else(|refusal| refusal, Outcome::Value))
@@ -335,9 +418,22 @@ async fn online(ctx: &Ctx<'_>, id: i64) -> Refused<Value> {
     if !allowed(ctx, &s, deploy_flag(ctx.db, s.tower.unwrap_or(s.id), "deployOnline").await) || distance > CONFIGURE_RANGE {
         return Err(access_denied("you may not put that structure online from here"));
     }
+    let stamp = pos::timer_start(now, s.delays[1]);
     if s.is_tower() {
-        let fuel = Fuel::of(ctx.db, &s, system).await;
+        let mut db = crate::db::connect(ctx.db_url).await.map_err(|e| db_failed("connecting to fuel the tower", e))?;
+        let tx = db.transaction().await.map_err(|e| db_failed("onlining the tower", e))?;
+        let anchored = tx.query_opt(
+            r#"SELECT 1 FROM entity e JOIN "posStructures" p USING ("itemID")
+                WHERE e."itemID" = $1 AND p.state = 1 FOR UPDATE OF e, p"#, &[&(id as i32)],
+        ).await.map_err(|e| db_failed("locking the tower", e))?;
+        if anchored.is_none() {
+            return Err(Outcome::custom("The tower must be anchored before you can put it online."));
+        }
+        let fuel = Fuel::of(&tx, &s, system).await;
         let burn = fuel.burn(0.0, 0.0);
+        if burn.is_empty() {
+            return Err(Outcome::custom("The tower's fuel requirements could not be found."));
+        }
         if let Some((type_id, need)) = burn.iter().find(|(t, need)| fuel.held.get(t).copied().unwrap_or(0) < *need) {
             return Err(message_with(
                 "CantOnlineTowerLacksResources",
@@ -345,15 +441,23 @@ async fn online(ctx: &Ctx<'_>, id: i64) -> Refused<Value> {
             ));
         }
         // The first period's fuel goes as it comes online.
-        if let Err(e) = consume(ctx.db, id, &burn, now).await {
-            error!("fuelling tower {id}: {}", crate::logging::chain(&e));
-            return Err(Outcome::custom("The tower could not be fuelled."));
+        if !consume(&tx, id, &burn, now).await.map_err(|e| db_failed("fuelling the tower", e))? {
+            return Err(Outcome::custom("The tower ran out of fuel while going online."));
         }
+        tx.execute(
+            r#"UPDATE "posStructures" SET state = $2, "stateTimestamp" = $3, "claimSince" = NULL WHERE "itemID" = $1"#,
+            &[&(id as i32), &state::ONLINING, &stamp],
+        ).await.map_err(|e| db_failed("saving the tower's onlining timer", e))?;
+        tx.commit().await.map_err(|e| db_failed("onlining the tower", e))?;
+        update(ctx.world, system, id, |s, _| {
+            s.state = state::ONLINING;
+            s.stamp = Some(stamp);
+            Vec::new()
+        });
     } else {
         draw_from_tower(ctx, system, &s, now).await?;
+        set_state(ctx, system, id, state::ONLINING, Some(stamp)).await?;
     }
-    let stamp = pos::timer_start(now, s.delays[1]);
-    set_state(ctx, system, id, state::ONLINING, Some(stamp)).await?;
     info!("onlining {} ({id}) in {system}", s.name);
     Ok(Value::None)
 }
@@ -467,14 +571,15 @@ async fn scoop_structure(ctx: &Ctx<'_>, s: Structure, system: i64, distance: f64
     }
     let room = ctx
         .query_one(
-            r#"SELECT (SELECT COALESCE("capacity", 0) FROM "invTypes" t JOIN entity sh ON sh."typeID" = t."typeID" WHERE sh."itemID" = $1)
-                    - (SELECT COALESCE(sum(t."volume" * e."quantity"), 0) FROM entity e JOIN "invTypes" t ON t."typeID" = e."typeID"
+            r#"SELECT (SELECT COALESCE(sum(t."volume" * e."quantity"), 0) FROM entity e JOIN "invTypes" t ON t."typeID" = e."typeID"
                         WHERE e."locationID" = $1 AND e."flag" = $3),
                       (SELECT "volume" FROM "invTypes" WHERE "typeID" = $2)"#,
             &[&(ship_id as i32), &(s.type_id as i32), &(FLAG_CARGO as i32)],
         )
         .await;
-    let (free, volume) = room.map_or((0.0, f64::MAX), |r| (float(&r, 0).unwrap_or(0.0), float(&r, 1).unwrap_or(0.0)));
+    let (used, volume) = room.map_or((0.0, f64::MAX), |r| (float(&r, 0).unwrap_or(0.0), float(&r, 1).unwrap_or(0.0)));
+    let capacity = crate::svc::moves::active_cargo_capacity(ctx, ctx.db, ship_id).await.ok().flatten().unwrap_or(0.0);
+    let free = (capacity - used).max(0.0);
     if volume > free + 1e-6 {
         return Err(Outcome::custom(format!("Not enough room: the {} needs {volume:.0} m3 and only {free:.0} m3 is free.", s.name)));
     }
@@ -513,7 +618,7 @@ async fn scoop_structure(ctx: &Ctx<'_>, s: Structure, system: i64, distance: f64
 async fn set_state(ctx: &Ctx<'_>, system: i64, id: i64, new: i16, stamp: Option<i64>) -> Refused<()> {
     let saved = ctx
         .db
-        .execute(r#"UPDATE "posStructures" SET "state" = $2, "stateTimestamp" = $3 WHERE "itemID" = $1"#, &[&(id as i32), &new, &stamp])
+        .execute(r#"UPDATE "posStructures" SET "state" = $2, "stateTimestamp" = $3, "claimSince" = NULL WHERE "itemID" = $1"#, &[&(id as i32), &new, &stamp])
         .await;
     if let Err(e) = saved {
         error!("saving the state of structure {id}: {}", crate::logging::chain(&e));
@@ -541,7 +646,7 @@ fn update(world: &World, system: i64, id: i64, f: impl FnOnce(&mut Structure, i6
 
 /// A structure, and if it is a tower everything drawing on it, goes offline.
 pub async fn take_offline(db: &impl GenericClient, world: &World, system: i64, id: i64) {
-    let sql = r#"UPDATE "posStructures" SET "state" = $2, "stateTimestamp" = NULL
+    let sql = r#"UPDATE "posStructures" SET "state" = $2, "stateTimestamp" = NULL, "claimSince" = NULL
                   WHERE ("itemID" = $1 OR "controlTowerID" = $1) AND "state" IN (2, 3, 4, 5)
                  RETURNING "itemID""#;
     let ids: Vec<i64> = match db.query(sql, &[&(id as i32), &state::ANCHORED]).await {
@@ -592,7 +697,8 @@ pub async fn reinforce(world: &World, db: &mut Client, system: i64, tower_id: i6
         .needs
         .iter()
         .filter(|(_, purpose, _)| *purpose == PURPOSE_REINFORCE)
-        .map(|&(type_id, _, quantity)| (type_id, ((quantity as f64 * fuel.factor).ceil() as i64).max(1)))
+        .filter(|(_, _, quantity)| *quantity > 0)
+        .map(|&(type_id, _, quantity)| (type_id, quantity))
         .collect();
     let periods = per_period.iter().map(|(t, q)| fuel.held.get(t).copied().unwrap_or(0) / q).min().unwrap_or(0);
     if periods == 0 {
@@ -606,24 +712,40 @@ pub async fn reinforce(world: &World, db: &mut Client, system: i64, tower_id: i6
         * TICKS_PER_MS;
     let until = crate::bulkdata::filetime_now() + periods * period;
     let burn: Vec<(i64, i64)> = per_period.iter().map(|(t, q)| (*t, q * periods)).collect();
+    let now_ms = crate::combat::now_ms();
+    let shield = world.lock().parks.get(&system).and_then(|p| p.structures.get(&tower_id))
+        .map_or_else(|| tower.vitals.shield.at(now_ms), |s| s.vitals.shield.at(now_ms));
     let saved = async {
         let tx = db.transaction().await?;
-        take(&tx, tower_id, &burn).await?;
+        let current = tx.query_opt(
+            r#"SELECT 1 FROM entity e JOIN "posStructures" p USING ("itemID")
+                WHERE e."itemID" = $1 AND p.state IN (4, 5) FOR UPDATE OF e, p"#, &[&(tower_id as i32)],
+        ).await?;
+        if current.is_none() || !take(&tx, tower_id, &burn).await? {
+            return Ok(false);
+        }
         tx.execute(
-            r#"UPDATE "posStructures" SET "state" = $2, "stateTimestamp" = $3 WHERE "itemID" = $1"#,
-            &[&(tower_id as i32), &state::REINFORCED, &until],
+            r#"UPDATE "posStructures" SET "state" = $2, "stateTimestamp" = $3, "shieldCharge" = $4 WHERE "itemID" = $1"#,
+            &[&(tower_id as i32), &state::REINFORCED, &until, &shield],
         )
         .await?;
-        tx.commit().await
+        tx.commit().await?;
+        Ok::<_, tokio_postgres::Error>(true)
     }
     .await;
-    if let Err(e) = saved {
-        error!("reinforcing tower {tower_id}: {}", crate::logging::chain(&e));
-        return;
+    match saved {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(e) => {
+            error!("reinforcing tower {tower_id}: {}", crate::logging::chain(&e));
+            return;
+        }
     }
     update(world, system, tower_id, |s, _| {
         s.state = state::REINFORCED;
         s.stamp = Some(until);
+        s.vitals.shield.set(now_ms, shield);
+        s.vitals.shield.set_paused(now_ms, true);
         Vec::new()
     });
     info!("tower {tower_id} in {system} is reinforced for {periods} period(s)");
@@ -736,7 +858,7 @@ impl Fuel {
                      LEFT JOIN "mapConstellations" c ON c."constellationID" = s."constellationID"
                      LEFT JOIN "mapRegions" g ON g."regionID" = s."regionID"
                     WHERE r."controlTowerTypeID" = $1 AND s."solarSystemID" = $2
-                      AND (r."minSecurityLevel" IS NULL OR s."security" >= r."minSecurityLevel")
+                      AND (r."minSecurityLevel" IS NULL OR round(s."security"::numeric, 1) >= r."minSecurityLevel")
                       AND (r."factionID" IS NULL OR r."factionID" = COALESCE(s."factionID", c."factionID", g."factionID"))"#,
                 &[&(tower.type_id as i32), &(system as i32)],
             )
@@ -781,18 +903,21 @@ impl Fuel {
 }
 
 /// Takes `burn` out of a tower's bay and records the period as paid for.
-async fn consume(db: &impl GenericClient, tower: i64, burn: &[(i64, i64)], now: i64) -> Result<(), tokio_postgres::Error> {
-    take(db, tower, burn).await?;
+async fn consume(db: &tokio_postgres::Transaction<'_>, tower: i64, burn: &[(i64, i64)], now: i64) -> Result<bool, tokio_postgres::Error> {
+    if !take(db, tower, burn).await? {
+        return Ok(false);
+    }
     db.execute(r#"UPDATE "posStructures" SET "lastFuel" = $2 WHERE "itemID" = $1"#, &[&(tower as i32), &now]).await?;
-    Ok(())
+    Ok(true)
 }
 
 /// Takes `burn` out of a tower's bay, smallest stacks first.
-async fn take(db: &impl GenericClient, tower: i64, burn: &[(i64, i64)]) -> Result<(), tokio_postgres::Error> {
+async fn take(db: &tokio_postgres::Transaction<'_>, tower: i64, burn: &[(i64, i64)]) -> Result<bool, tokio_postgres::Error> {
     for &(type_id, mut amount) in burn {
         let stacks = db
             .query(
-                r#"SELECT "itemID", "quantity" FROM entity WHERE "locationID" = $1 AND "typeID" = $2 ORDER BY "quantity""#,
+                r#"SELECT "itemID", "quantity" FROM entity WHERE "locationID" = $1 AND "typeID" = $2
+                    AND "quantity" > 0 ORDER BY "quantity", "itemID" FOR UPDATE"#,
                 &[&(tower as i32), &(type_id as i32)],
             )
             .await?;
@@ -809,8 +934,11 @@ async fn take(db: &impl GenericClient, tower: i64, burn: &[(i64, i64)]) -> Resul
             }
             amount -= take;
         }
+        if amount > 0 {
+            return Ok(false);
+        }
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Every online tower whose period is up burns another period's fuel, or
@@ -823,7 +951,7 @@ pub async fn burn_fuel(world: &World, db: &mut Client) {
                    JOIN entity e ON e."itemID" = p."itemID"
                    JOIN "invTypes" t ON t."typeID" = e."typeID"
                    LEFT JOIN "dgmTypeAttributes" a ON a."typeID" = e."typeID" AND a."attributeID" = $3
-                  WHERE t."groupID" = $1 AND p."state" IN (2, 3, 4, 5)"#;
+                  WHERE t."groupID" = $1 AND p."state" IN (4, 5)"#;
     let towers = match db.query(sql, &[&(pos::GROUP_CONTROL_TOWER as i32), &(DEFAULT_PERIOD_MS as f64), &ATTR_TOWER_PERIOD]).await {
         Ok(rows) => rows,
         Err(e) => {
@@ -851,12 +979,21 @@ pub async fn burn_fuel(world: &World, db: &mut Client) {
             None => {
                 let paid = async {
                     let tx = db.transaction().await?;
-                    consume(&tx, tower_id, &burn, last + period).await?;
-                    tx.commit().await
+                    let current = tx.query_opt(
+                        r#"SELECT 1 FROM entity e JOIN "posStructures" p USING ("itemID")
+                            WHERE e."itemID" = $1 AND p.state IN (4, 5) AND p."lastFuel" = $2
+                              FOR UPDATE OF e, p"#, &[&(tower_id as i32), &last],
+                    ).await?;
+                    if current.is_none() || !consume(&tx, tower_id, &burn, last + period).await? {
+                        return Ok(false);
+                    }
+                    tx.commit().await?;
+                    Ok::<_, tokio_postgres::Error>(true)
                 }
                 .await;
                 match paid {
-                    Ok(()) => moonmining::cycle(db, tower_id).await,
+                    Ok(true) => moonmining::cycle(db, tower_id).await,
+                    Ok(false) => {}
                     Err(e) => error!("fuelling tower {tower_id}: {}", crate::logging::chain(&e)),
                 }
             }
@@ -905,43 +1042,59 @@ async fn cpu_factors(db: &impl GenericClient, tower_type: i64, types: &[i64]) ->
 
 // ---- sovereignty -----------------------------------------------------------------------
 
+pub async fn ensure_sovereignty(db: &Client) -> Result<(), tokio_postgres::Error> {
+    db.batch_execute(r#"
+        ALTER TABLE "posStructures" ADD COLUMN IF NOT EXISTS "claimAllianceID" integer;
+        ALTER TABLE "mapSolarSystems" ADD COLUMN IF NOT EXISTS "sovereigntySince" bigint;
+    "#).await
+}
+
 /// Counts claiming towers and moves sovereignty where it has changed hands.
 /// Run by the heartbeat.
-pub async fn sovereignty(db: &Client, claim_delay_secs: i64) {
-    let now = crate::bulkdata::filetime_now();
-    let started = db
-        .execute(r#"UPDATE "posStructures" SET "claimSince" = $1 WHERE "claim" = 1 AND "state" IN (2, 3, 4, 5) AND "claimSince" IS NULL"#, &[&now])
-        .await;
-    let lapsed = db
-        .execute(r#"UPDATE "posStructures" SET "claimSince" = NULL WHERE ("claim" = 0 OR "state" NOT IN (2, 3, 4, 5)) AND "claimSince" IS NOT NULL"#, &[])
-        .await;
-    if let Err(e) = started.and(lapsed) {
-        error!("updating claims: {}", crate::logging::chain(&e));
-        return;
+pub async fn sovereignty(db: &mut Client, claim_delay_secs: i64) {
+    if let Err(e) = resolve_sovereignty(db, claim_delay_secs).await {
+        error!("updating sovereignty: {}", crate::logging::chain(&e));
     }
-    let standing = now - claim_delay_secs * TICKS_PER_SECOND;
-    let claims = db
-        .query(
-            r#"SELECT s."solarSystemID", NULLIF(COALESCE(co."allianceID", cc."allianceID"), 0), count(*)
+}
+
+async fn resolve_sovereignty(db: &mut Client, claim_delay_secs: i64) -> Result<(), tokio_postgres::Error> {
+    let tx = db.transaction().await?;
+    // Bot startup can request an immediate pass as well as the heartbeat.
+    tx.query_one("SELECT pg_advisory_xact_lock(365, 0)", &[]).await?;
+    let now = crate::bulkdata::filetime_now();
+    tx.execute(
+        r#"WITH eligible AS (
+               SELECT p."itemID",
+                      CASE WHEN p.claim = 1 AND p.state IN (3, 4, 5) AND p."moonID" IS NOT NULL
+                               AND s.security <= 0 AND COALESCE(s."factionID", 0) = 0
+                           THEN NULLIF(co."allianceID", 0) END AS alliance
                  FROM "posStructures" p
                  JOIN entity e ON e."itemID" = p."itemID"
+                 JOIN "invTypes" t ON t."typeID" = e."typeID" AND t."groupID" = 365
                  JOIN "mapSolarSystems" s ON s."solarSystemID" = e."locationID"
-                 LEFT JOIN "corporation" co ON co."corporationID" = e."ownerID"
-                 LEFT JOIN "character_" ch ON ch."characterID" = e."ownerID"
-                 LEFT JOIN "corporation" cc ON cc."corporationID" = ch."corporationID"
-                WHERE p."claim" = 1 AND p."claimSince" <= $1 AND s."factionID" IS NULL
-                GROUP BY 1, 2"#,
-            &[&standing],
-        )
-        .await;
-    let held = db.query(r#"SELECT "solarSystemID", "allianceID" FROM "mapSolarSystems" WHERE "allianceID" IS NOT NULL"#, &[]).await;
-    let (claims, held) = match (claims, held) {
-        (Ok(c), Ok(h)) => (c, h),
-        (Err(e), _) | (_, Err(e)) => {
-            error!("reading sovereignty claims: {}", crate::logging::chain(&e));
-            return;
-        }
-    };
+                 LEFT JOIN "corporation" co ON co."corporationID" = e."ownerID" AND co.deleted = 0
+           )
+           UPDATE "posStructures" p SET "claimAllianceID" = e.alliance,
+                  "claimSince" = CASE WHEN e.alliance IS NULL THEN NULL
+                                      WHEN p."claimAllianceID" IS NULL OR p."claimAllianceID" = e.alliance
+                                          THEN COALESCE(p."claimSince", $1)
+                                      ELSE $1 END
+             FROM eligible e WHERE e."itemID" = p."itemID"
+              AND (p."claimAllianceID" IS DISTINCT FROM e.alliance
+                   OR (e.alliance IS NULL) <> (p."claimSince" IS NULL))"#,
+        &[&now],
+    ).await?;
+    let standing = now.saturating_sub(claim_delay_secs.max(0).saturating_mul(TICKS_PER_SECOND));
+    let claims = tx.query(
+        r#"SELECT e."locationID", p."claimAllianceID", count(*)
+             FROM "posStructures" p JOIN entity e USING ("itemID")
+            WHERE p."claimAllianceID" IS NOT NULL AND p."claimSince" <= $1
+            GROUP BY 1, 2"#,
+        &[&standing],
+    ).await?;
+    let held = tx.query(
+        r#"SELECT "solarSystemID", "allianceID" FROM "mapSolarSystems" WHERE "allianceID" IS NOT NULL"#, &[],
+    ).await?;
     let mut by_system: HashMap<i64, Vec<(i64, i64)>> = HashMap::new();
     for r in &claims {
         if let (Some(system), Some(alliance)) = (int(r, 0), int(r, 1)) {
@@ -963,23 +1116,31 @@ pub async fn sovereignty(db: &Client, claim_delay_secs: i64) {
     // Many at once (null-sec settled at the start) are summed up, not listed.
     let many = changes.len() > SOV_CHANGES_LISTED;
     let mut moved = 0;
-    for (system, holder, winner) in &changes {
-        let saved = db
-            .execute(r#"UPDATE "mapSolarSystems" SET "allianceID" = $2 WHERE "solarSystemID" = $1"#, &[&(*system as i32), &winner.map(|a| a as i32)])
-            .await;
-        match saved {
-            Ok(_) if many => debug!("sovereignty of {system} passes from {holder:?} to {winner:?}"),
-            Ok(_) => info!("sovereignty of {system} passes from {holder:?} to {winner:?}"),
-            Err(e) => {
-                error!("moving sovereignty of {system}: {}", crate::logging::chain(&e));
-                continue;
-            }
-        }
+    for (system, _, winner) in &changes {
+        tx.execute(
+            r#"UPDATE "mapSolarSystems" SET "allianceID" = $2,
+                   "sovereigntySince" = CASE WHEN $2 IS NULL THEN NULL ELSE $3 END
+               WHERE "solarSystemID" = $1"#,
+            &[&(*system as i32), &winner.map(|a| a as i32), &now],
+        ).await?;
         moved += 1;
+    }
+    tx.execute(
+        r#"UPDATE "mapSolarSystems" SET "sovereigntySince" = $1
+            WHERE "allianceID" IS NOT NULL AND "sovereigntySince" IS NULL"#, &[&now],
+    ).await?;
+    tx.commit().await?;
+    for (system, holder, winner) in &changes {
+        if many {
+            debug!("sovereignty of {system} passes from {holder:?} to {winner:?}");
+        } else {
+            info!("sovereignty of {system} passes from {holder:?} to {winner:?}");
+        }
     }
     if many {
         info!("sovereignty of {moved} systems changed hands");
     }
+    Ok(())
 }
 
 /// More changes of sovereignty than this in one pass are logged as a count.
@@ -1020,11 +1181,7 @@ pub async fn pos_mgr(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         "GetMoonForTower" => Ok(moonmining::moon_for_tower(ctx, tower).await),
         "GetTowerClaim" => Ok(Value::Bool(setting(ctx, tower, r#""claim""#).await.and_then(|v| v.as_i64()) == Some(1))),
         "SetTowerClaim" => {
-            let claim = flag(1);
-            configure(ctx, tower, r#""claim" = $2, "claimSince" = NULL"#, &[&i16::from(claim)]).await.map(|v| {
-                info!("tower {tower} {} sovereignty", if claim { "claims" } else { "no longer claims" });
-                v
-            })
+            set_tower_claim(ctx, tower, flag(1)).await
         }
         "GetTowerSentrySettings" => {
             let sql = r#"SELECT "sentryStanding", "sentryStatus", "sentryStandingDrop", "sentryStatusDrop", "sentryAggression", "sentryWar"
@@ -1100,6 +1257,31 @@ pub async fn pos_mgr(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         _ => return None,
     };
     Some(result.map_or_else(|refusal| refusal, Outcome::Value))
+}
+
+async fn set_tower_claim(ctx: &Ctx<'_>, tower: i64, claim: bool) -> Refused<Value> {
+    let Seen { s, system, .. } = seen(ctx, tower).ok_or_else(|| Outcome::custom("That tower is not here."))?;
+    if !s.is_tower() {
+        return Err(Outcome::custom("Only a control tower can claim sovereignty."));
+    }
+    if claim {
+        let eligible = ctx.query_one(
+            r#"SELECT 1 FROM entity e JOIN "corporation" c ON c."corporationID" = e."ownerID"
+                 JOIN "mapSolarSystems" s ON s."solarSystemID" = e."locationID"
+                WHERE e."itemID" = $1 AND s."solarSystemID" = $2 AND s.security <= 0
+                  AND COALESCE(s."factionID", 0) = 0 AND c."allianceID" > 0 AND c.deleted = 0"#,
+            &[&(tower as i32), &(system as i32)],
+        ).await.is_some();
+        if !eligible {
+            return Err(Outcome::custom("Only a corporation in an alliance can claim sovereignty, and the system must be outside NPC territory in nullsec."));
+        }
+    }
+    configure(
+        ctx, tower,
+        r#""claim" = $2, "claimSince" = CASE WHEN "claim" = $2 THEN "claimSince" ELSE NULL END,
+           "claimAllianceID" = CASE WHEN "claim" = $2 THEN "claimAllianceID" ELSE NULL END"#,
+        &[&i16::from(claim)],
+    ).await
 }
 
 /// A ship takes the harmonic of a password, unless it sits inside a force

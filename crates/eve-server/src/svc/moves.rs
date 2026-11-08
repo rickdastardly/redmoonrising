@@ -164,6 +164,7 @@ struct Destination {
     flag: i64,
     /// m3, or None for unlimited.
     capacity: Option<f64>,
+    tower: bool,
     /// The ship, when this is one of its slots.
     fitting: Option<Item>,
 }
@@ -238,7 +239,7 @@ async fn destination(
             if owner_id.is_some_and(|o| o != me(ctx)) {
                 return refuse("You cannot move items into that hangar.");
             }
-            Ok(Destination { location: station, flag: FLAG_HANGAR as i64, capacity: None, fitting: None })
+            Ok(Destination { location: station, flag: FLAG_HANGAR as i64, capacity: None, tower: false, fitting: None })
         }
         Container::Special { .. } => refuse("Items cannot be moved there."),
         Container::Item(id) => {
@@ -249,10 +250,13 @@ async fn destination(
             if holder.category_id == CATEGORY_SHIP {
                 let flag = flag.unwrap_or(FLAG_CARGO);
                 if fitting::is_fitting_flag(flag) {
-                    return Ok(Destination { location: id, flag, capacity: None, fitting: Some(holder) });
+                    return Ok(Destination { location: id, flag, capacity: None, tower: false, fitting: Some(holder) });
                 }
                 let capacity = match flag {
-                    FLAG_CARGO => type_capacity(txn, holder.type_id).await?,
+                    FLAG_CARGO => match active_cargo_capacity(ctx, txn.tx(), id).await? {
+                        Some(capacity) => capacity,
+                        None => type_capacity(txn, holder.type_id).await?,
+                    },
                     FLAG_DRONE_BAY => drone_capacity(txn, holder.type_id).await?,
                     FLAG_CAPITAL_CORP_HANGAR | FLAG_CORP_HANGAR_FIRST..=FLAG_CORP_HANGAR_LAST =>
                         attribute_capacity(txn, holder.type_id, ATTR_CORP_HANGAR_CAPACITY).await?,
@@ -261,19 +265,23 @@ async fn destination(
                 if capacity <= 0.0 {
                     return refuse("This ship has no capacity in that hold.");
                 }
-                Ok(Destination { location: id, flag, capacity: Some(capacity), fitting: None })
+                Ok(Destination { location: id, flag, capacity: Some(capacity), tower: false, fitting: None })
             } else {
                 if !holder.singleton {
                     return refuse("Assemble the container before putting things in it.");
                 }
-                let capacity = match crate::svc::moonmining::silo_capacity(txn.tx(), holder.id).await? {
-                    Some(silo) => silo,
-                    None => type_capacity(txn, holder.type_id).await?,
-                };
+                let kind = txn.tx().query_one(
+                    r#"SELECT "groupID", COALESCE("capacity", 0) FROM "invTypes" WHERE "typeID" = $1"#,
+                    &[&(holder.type_id as i32)],
+                ).await?;
+                let tower = i64::from(kind.get::<_, i32>(0)) == crate::pos::GROUP_CONTROL_TOWER;
+                let capacity = crate::svc::moonmining::silo_capacity(txn.tx(), holder.id).await?
+                    .unwrap_or_else(|| kind.get(1));
                 if capacity <= 0.0 {
                     return refuse("That item cannot hold anything.");
                 }
-                Ok(Destination { location: id, flag: flag.unwrap_or(0), capacity: Some(capacity), fitting: None })
+                let flag = if tower { 0 } else { flag.unwrap_or(0) };
+                Ok(Destination { location: id, flag, capacity: Some(capacity), tower, fitting: None })
             }
         }
     }
@@ -285,6 +293,20 @@ async fn type_capacity(txn: &ItemTxn<'_>, type_id: i64) -> DbResult<f64> {
         .query_opt(r#"SELECT "capacity" FROM "invTypes" WHERE "typeID" = $1"#, &[&(type_id as i32)])
         .await?;
     Ok(r.and_then(|r| r.get::<_, Option<f64>>(0)).unwrap_or(0.0))
+}
+
+/// The active ship's cargo attribute includes the same skill and fitting
+/// modifiers sent to the client in ShipGetInfo.
+pub async fn active_cargo_capacity(
+    ctx: &Ctx<'_>,
+    db: &impl tokio_postgres::GenericClient,
+    ship_id: i64,
+) -> DbResult<Option<f64>> {
+    let Some(pilot) = ctx.session.char_id.filter(|_| ctx.session.ship_id == Some(ship_id)) else {
+        return Ok(None);
+    };
+    let loadout = crate::dogma::Loadout::load(db, ctx.dogma, pilot, Some(ship_id), &Default::default()).await?;
+    Ok(loadout.ship().map(|ship| loadout.value(ship, crate::dogma::attr::CAPACITY)))
 }
 
 async fn drone_capacity(txn: &ItemTxn<'_>, type_id: i64) -> DbResult<f64> {
@@ -325,6 +347,9 @@ async fn used(txn: &ItemTxn<'_>, dest: &Destination, except: i64) -> DbResult<f6
 
 async fn check_room(txn: &ItemTxn<'_>, dest: &Destination, item: &Item, quantity: i64) -> Result<(), MoveError> {
     let Some(capacity) = dest.capacity else { return Ok(()) };
+    if dest.tower {
+        return tower_room(txn, dest.location, capacity, item, quantity).await;
+    }
     let free = capacity - used(txn, dest, item.id).await?;
     // A courier package takes the room of what is wrapped in it.
     let needed = if item.type_id == crate::svc::missions::TYPE_PLASTIC_WRAP {
@@ -334,6 +359,42 @@ async fn check_room(txn: &ItemTxn<'_>, dest: &Destination, item: &Item, quantity
     };
     if needed > free + 1e-6 {
         return refuse(format!("Not enough room: that needs {needed:.2} m3 and only {free:.2} m3 is free."));
+    }
+    Ok(())
+}
+
+/// Build 3913 has one Resources window. Both bays use its inventory flag,
+/// with a separate capacity check for strontium and ordinary fuel.
+async fn tower_room(
+    txn: &ItemTxn<'_>, tower: i64, stront_capacity: f64, item: &Item, quantity: i64,
+) -> Result<(), MoveError> {
+    use crate::svc::starbase::{STRONTIUM, TOWER_FUEL_CAPACITY_RATIO};
+    let stront = item.type_id == STRONTIUM;
+    let row = txn.tx().query_one(
+        r#"SELECT p.state,
+                  EXISTS (SELECT 1 FROM "invControlTowerResources" r
+                           WHERE r."controlTowerTypeID" = tower."typeID" AND r."resourceTypeID" = $2),
+                  (SELECT COALESCE(SUM(t.volume * e.quantity), 0)::float8
+                     FROM entity e JOIN "invTypes" t ON t."typeID" = e."typeID"
+                    WHERE e."locationID" = $1 AND (e."typeID" = $3) = $4)
+             FROM entity tower JOIN "posStructures" p USING ("itemID")
+            WHERE tower."itemID" = $1"#,
+        &[&(tower as i32), &(item.type_id as i32), &(STRONTIUM as i32), &stront],
+    ).await?;
+    if !row.get::<_, bool>(1) {
+        return refuse("That item is not a fuel resource for this control tower.");
+    }
+    if stront && row.get::<_, i16>(0) == crate::pos::state::REINFORCED {
+        return refuse("The strontium bay is locked while the control tower is reinforced.");
+    }
+    let capacity = if stront { stront_capacity } else { stront_capacity * TOWER_FUEL_CAPACITY_RATIO };
+    let already_inside = if item.location_id == tower { item.volume * quantity as f64 } else { 0.0 };
+    let used: f64 = row.get(2);
+    let free = (capacity - used + already_inside).max(0.0);
+    let needed = item.volume * quantity as f64;
+    if needed > free + 1e-6 {
+        let bay = if stront { "strontium" } else { "fuel" };
+        return refuse(format!("The {bay} bay has {free:.2} m3 free. This move needs {needed:.2} m3."));
     }
     Ok(())
 }
@@ -363,6 +424,13 @@ async fn reachable(ctx: &Ctx<'_>, txn: &mut ItemTxn<'_>, item: &Item) -> DbResul
         return Ok(ok);
     }
     if let Some(ok) = may(ctx, item.location_id, Access::Take).await {
+        if ok && item.type_id == crate::svc::starbase::STRONTIUM {
+            let reinforced = txn.tx().query_opt(
+                r#"SELECT 1 FROM "posStructures" WHERE "itemID" = $1 AND state = $2"#,
+                &[&(item.location_id as i32), &crate::pos::state::REINFORCED],
+            ).await?.is_some();
+            return Ok(!reinforced);
+        }
         return Ok(ok);
     }
     if item.owner_id != me(ctx) {

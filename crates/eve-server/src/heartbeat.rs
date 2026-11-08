@@ -148,7 +148,7 @@ pub enum Job {
     /// A starbase structure was destroyed.
     StructureLost { id: i64, tower: bool },
     /// A starbase structure finished a timed step.
-    Structure { id: i64, state: i16, stamp: Option<i64>, tower: Option<i64> },
+    Structure { id: i64, state: i16, completed_stamp: i64, tower: Option<i64> },
 }
 
 pub async fn run(server: Arc<Server>) {
@@ -184,8 +184,12 @@ pub async fn run(server: Arc<Server>) {
             crate::svc::alliance::take_effect(&server.world, &mut db, server.alliance_join_delay_secs).await;
             crate::svc::alliance::bill_alliances(&db).await;
             crate::svc::war::bill_wars(&server.world, &db).await;
+            let loaded: Vec<i32> = server.world.lock().parks.keys().map(|id| *id as i32).collect();
+            if let Err(e) = crate::pos::finish_unloaded(&db, &loaded).await {
+                error!("updating starbase timers: {}", crate::logging::chain(&e));
+            }
             crate::svc::starbase::burn_fuel(&server.world, &mut db).await;
-            crate::svc::starbase::sovereignty(&db, server.sov_claim_delay_secs).await;
+            crate::svc::starbase::sovereignty(&mut db, server.sov_claim_delay_secs).await;
             crate::svc::votes::close_votes(&server.world, &db).await;
             crate::guard::reload(&server.world, &db).await;
             crate::guard::refresh_standings(&db).await;
@@ -284,7 +288,7 @@ async fn perform(server: &Server, db: &mut Client, job: Job) {
         }
         Job::Security { char_id, delta } => change_security(db, char_id, delta).await,
         Job::SiteCleared { mission_id, char_id } => crate::svc::agent_missions::site_cleared(&server.world, db, mission_id, char_id).await,
-        Job::Structure { id, state, stamp, tower } => save_structure(db, id, state, stamp, tower).await,
+        Job::Structure { id, state, completed_stamp, tower } => save_structure(db, id, state, completed_stamp, tower).await,
         Job::StructureDamage { id, shield, armor, hull } => crate::svc::starbase::save_damage(db, id, shield, armor, hull).await,
         Job::Reinforce { system, tower } => crate::svc::starbase::reinforce(&server.world, db, system, tower).await,
         Job::StructureLost { id, tower } => crate::svc::starbase::lost(db, id, tower).await,
@@ -422,9 +426,12 @@ async fn apply_security_tick(db: &mut Client) -> Result<(), tokio_postgres::Erro
     tx.commit().await
 }
 
-async fn save_structure(db: &mut Client, id: i64, state: i16, stamp: Option<i64>, tower: Option<i64>) {
-    let sql = r#"UPDATE "posStructures" SET "state" = $2, "stateTimestamp" = $3, "controlTowerID" = $4 WHERE "itemID" = $1"#;
-    if let Err(e) = db.execute(sql, &[&(id as i32), &state, &stamp, &tower.map(|t| t as i32)]).await {
+async fn save_structure(db: &mut Client, id: i64, state: i16, completed_stamp: i64, tower: Option<i64>) {
+    let sql = r#"UPDATE "posStructures" SET "state" = $2, "stateTimestamp" = NULL, "controlTowerID" = $4,
+                        "moonID" = CASE WHEN $2 = 0 THEN NULL ELSE "moonID" END,
+                        "lastFuel" = CASE WHEN state IN (2, 3) AND $2 = 4 AND "moonID" IS NOT NULL THEN $5 ELSE "lastFuel" END
+                  WHERE "itemID" = $1 AND "stateTimestamp" = $3"#;
+    if let Err(e) = db.execute(sql, &[&(id as i32), &state, &completed_stamp, &tower.map(|t| t as i32), &crate::bulkdata::filetime_now()]).await {
         error!("saving structure {id}: {}", crate::logging::chain(&e));
     }
 }

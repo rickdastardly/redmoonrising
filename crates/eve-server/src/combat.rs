@@ -120,20 +120,21 @@ pub fn filetime(ms: i64) -> i64 {
 pub struct Charged {
     value: f64,
     at_ms: i64,
+    paused: bool,
     pub max: f64,
     pub recharge_ms: f64,
 }
 
 impl Charged {
     pub fn full(max: f64, recharge_ms: f64, now: i64) -> Self {
-        Charged { value: max.max(0.0), at_ms: now, max: max.max(0.0), recharge_ms }
+        Charged { value: max.max(0.0), at_ms: now, paused: false, max: max.max(0.0), recharge_ms }
     }
 
     pub fn at(&self, now: i64) -> f64 {
         if self.max <= 0.0 {
             return 0.0;
         }
-        if self.recharge_ms <= 0.0 {
+        if self.paused || self.recharge_ms <= 0.0 {
             return self.value;
         }
         let tau = self.recharge_ms / 5.0;
@@ -145,6 +146,12 @@ impl Charged {
     pub fn set(&mut self, now: i64, value: f64) {
         self.value = value.clamp(0.0, self.max);
         self.at_ms = now;
+    }
+
+    /// Stops or resumes the recharge curve at the current charge level.
+    pub fn set_paused(&mut self, now: i64, paused: bool) {
+        self.set(now, self.at(now));
+        self.paused = paused;
     }
 
     pub fn add(&mut self, now: i64, delta: f64) {
@@ -626,6 +633,17 @@ impl Fighter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reinforced_shield_does_not_recharge_until_it_resumes() {
+        let mut shield = Charged::full(100.0, 10_000.0, 0);
+        shield.set(0, 25.0);
+        shield.set_paused(0, true);
+        assert_eq!(shield.at(60_000), 25.0);
+        shield.set_paused(60_000, false);
+        assert_eq!(shield.at(60_000), 25.0);
+        assert!(shield.at(62_000) > 25.0);
+    }
 
     fn vitals() -> Vitals {
         Vitals {

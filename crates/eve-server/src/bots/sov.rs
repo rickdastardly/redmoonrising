@@ -114,7 +114,11 @@ async fn claimants(db: &Client, p: &Politics) -> Result<Vec<(i32, i32, i32, i64,
 
 /// A moon in the system to put a tower beside, and where.
 async fn spot(db: &Client, system: i32, rng: &mut Rng) -> Result<Option<Place>, tokio_postgres::Error> {
-    let sql = r#"SELECT "itemID", "x", "y", "z", COALESCE("radius", 1000) FROM "mapDenormalize" WHERE "solarSystemID" = $1 AND "groupID" = $2 ORDER BY "itemID""#;
+    let sql = r#"SELECT m."itemID", m."x", m."y", m."z", COALESCE(m."radius", 1000)
+                   FROM "mapDenormalize" m WHERE m."solarSystemID" = $1 AND m."groupID" = $2
+                    AND NOT EXISTS (SELECT 1 FROM "posStructures" p WHERE p."moonID" = m."itemID"
+                                      AND (p.state <> 0 OR p."stateTimestamp" IS NOT NULL))
+                  ORDER BY m."itemID""#;
     let moons = db.query(sql, &[&system, &GROUP_MOON]).await?;
     let Some(m) = moons.get(rng.below(moons.len().max(1))) else { return Ok(None) };
     let dir = rng.in_sphere(1.0);
@@ -125,23 +129,27 @@ async fn spot(db: &Client, system: i32, rng: &mut Rng) -> Result<Option<Place>, 
 }
 
 /// Anchors and onlines a claiming tower; its claim counts from `claim_since`.
-async fn anchor(db: &Client, owner: i32, tower_type: i32, place: &Place, claim_since: i64) -> Result<i32, tokio_postgres::Error> {
+async fn anchor(db: &mut Client, owner: i32, tower_type: i32, place: &Place, claim_since: i64) -> Result<bool, tokio_postgres::Error> {
+    let tx = db.transaction().await?;
+    if !crate::svc::starbase::reserve_moon(&tx, place.moon).await? {
+        return Ok(false);
+    }
     let now = crate::bulkdata::filetime_now();
-    let id: i32 = db
-        .query_one(
+    tx
+        .execute(
             r#"WITH t AS (INSERT INTO entity ("itemID","itemName","typeID","ownerID","locationID","flag","contraband","singleton","quantity","x","y","z")
                           VALUES (nextval('dyn_id_seq'), '', $1, $2, $3, 0, 0, 1, 1, $4, $5, $6) RETURNING "itemID")
                INSERT INTO "posStructures" ("itemID","state","stateTimestamp","moonID","lastFuel","claim","claimSince","allowCorp","allowAlliance")
-               SELECT "itemID", 4, $7, $8, $7, 1, $9, 1, 1 FROM t RETURNING "itemID""#,
+               SELECT "itemID", 4, $7, $8, $7, 1, $9, 1, 1 FROM t"#,
             &[&tower_type, &owner, &place.system, &place.pos.0, &place.pos.1, &place.pos.2, &now, &place.moon, &claim_since],
         )
-        .await?
-        .get(0);
-    Ok(id)
+        .await?;
+    tx.commit().await?;
+    Ok(true)
 }
 
 /// Settles null-sec: towers for every null-sec bot alliance with none yet.
-pub async fn establish(db: &Client, atlas: &Atlas, p: &Politics, rng: &mut Rng, claim_delay_secs: i64) -> Result<Vec<News>, tokio_postgres::Error> {
+pub async fn establish(db: &mut Client, atlas: &Atlas, p: &Politics, rng: &mut Rng, claim_delay_secs: i64) -> Result<Vec<News>, tokio_postgres::Error> {
     let have: HashSet<i64> = db
         .query(
             r#"SELECT DISTINCT co."allianceID" FROM "posStructures" p JOIN entity e ON e."itemID" = p."itemID"
@@ -194,7 +202,9 @@ pub async fn establish(db: &Client, atlas: &Atlas, p: &Politics, rng: &mut Rng, 
                 continue;
             }
             let Some(place) = spot(db, system, rng).await? else { continue };
-            anchor(db, executor, tower_type, &place, settled).await?;
+            if !anchor(db, executor, tower_type, &place, settled).await? {
+                continue;
+            }
             claimed.insert(system);
             held += 1;
             towers += 1;
@@ -238,7 +248,7 @@ pub async fn refuel(db: &Client) -> Result<u64, tokio_postgres::Error> {
 /// news.
 #[allow(clippy::too_many_arguments)]
 pub async fn upkeep(
-    db: &Client,
+    db: &mut Client,
     atlas: &Atlas,
     p: &mut Politics,
     watched: &HashSet<i32>,
@@ -341,16 +351,19 @@ pub async fn upkeep(
             .map(|(id, _)| *id)
             .collect();
         let Some(&system) = empty.get(rng.below(empty.len().max(1))) else { continue };
+        let Some(place) = spot(db, system, rng).await? else { continue };
         let tower_type = TOWERS.iter().find(|(r, _)| r == race).map_or(TOWERS[2].1, |(_, t)| *t);
         // A tower is bought out of the executor's wallet, or not at all.
         let paid = db.execute(r#"UPDATE "corporation" SET "balance" = "balance" - $2 WHERE "corporationID" = $1 AND "balance" >= $2"#, &[executor, &TOWER_COST]).await?;
         if paid == 0 {
             continue;
         }
-        if let Some(place) = spot(db, system, rng).await? {
-            anchor(db, *executor, tower_type, &place, claim_since).await?;
+        if anchor(db, *executor, tower_type, &place, claim_since).await? {
             towers.entry(system).or_default().insert(*alliance);
             news.push((now, format!("{} anchored a control tower in {}", alliance_name(db, *alliance).await, system_name(db, system).await)));
+        } else {
+            db.execute(r#"UPDATE "corporation" SET "balance" = "balance" + $2 WHERE "corporationID" = $1"#,
+                &[executor, &TOWER_COST]).await?;
         }
     }
     Ok(news)
@@ -362,7 +375,7 @@ pub async fn upkeep(
 /// clock). Returns the news.
 #[allow(clippy::too_many_arguments)]
 pub async fn conclude(
-    db: &Client,
+    db: &mut Client,
     p: &mut Politics,
     s: &Siege,
     won: bool,
@@ -387,12 +400,16 @@ pub async fn conclude(
     let delay = claim_delay_secs as f64;
     let claim_since = now - ((delay - delay / speed.max(1.0)) as i64) * SECOND_FT;
     let tower_type = TOWERS.iter().find(|(r, _)| *r == s.attacker_race).map_or(TOWERS[2].1, |(_, t)| *t);
-    if let Some(place) = spot(db, s.system, rng).await? {
-        anchor(db, s.attacker_exec, tower_type, &place, claim_since).await?;
+    let anchored = match spot(db, s.system, rng).await? {
+        Some(place) => anchor(db, s.attacker_exec, tower_type, &place, claim_since).await?,
+        None => false,
+    };
+    if anchored {
         refuel(db).await?;
     }
     info!("bots: {} besieged {}: {gone} tower(s) of {} destroyed", n.attacker, n.system, n.defender);
-    Ok((now, format!("{} destroyed {}'s towers in {} and anchored their own", n.attacker, n.defender, n.system)))
+    let followup = if anchored { " and anchored their own" } else { "" };
+    Ok((now, format!("{} destroyed {}'s towers in {}{followup}", n.attacker, n.defender, n.system)))
 }
 
 /// Brings a system's park up to date with its towers after a siege: the

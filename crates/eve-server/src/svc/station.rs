@@ -157,10 +157,15 @@ async fn get_region(ctx: &Ctx<'_>, region_id: i64) -> Value {
 }
 
 async fn alliance_systems(ctx: &Ctx<'_>) -> Value {
-    const HEADER: &[&str] = &["solarSystemID", "allianceID"];
-    let sql = r#"SELECT "solarSystemID", "allianceID" FROM "mapSolarSystems"
+    const HEADER: &[&str] = &["solarSystemID", "allianceID", "sovereigntyLevel"];
+    // Revelations II adds one level for each fourteen days of continuous
+    // alliance ownership, up through Province.
+    let sql = r#"SELECT "solarSystemID", "allianceID",
+                        (1 + LEAST(2, GREATEST(0, ($1::bigint - COALESCE("sovereigntySince", $1)) / $2::bigint)))::int
+                   FROM "mapSolarSystems"
                   WHERE "allianceID" IS NOT NULL"#;
-    match ctx.db.query(sql, &[]).await {
+    const TWO_WEEKS_FILETIME: i64 = 14 * 86_400 * 10_000_000;
+    match ctx.db.query(sql, &[&crate::bulkdata::filetime_now(), &TWO_WEEKS_FILETIME]).await {
         Ok(rows) => rowset(HEADER, rows.iter().map(|r| Value::List(cells(r))).collect()),
         Err(e) => {
             error!("GetAllianceSystems: {err}", err = crate::logging::chain(&e));

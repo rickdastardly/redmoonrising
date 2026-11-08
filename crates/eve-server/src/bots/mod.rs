@@ -133,10 +133,10 @@ pub async fn run(server: Arc<Server>, target: usize, speed: f64, shown: usize, s
                 Ok(p) => p,
                 Err(e) => return error!("bots: politics: {}", crate::logging::chain(&e)),
             };
-            match sov::establish(&db, &atlas, &politics, &mut rng, server.sov_claim_delay_secs).await {
+            match sov::establish(&mut db, &atlas, &politics, &mut rng, server.sov_claim_delay_secs).await {
                 Ok(news) if !news.is_empty() => {
                     politics.tell(news);
-                    crate::svc::starbase::sovereignty(&db, server.sov_claim_delay_secs).await;
+                    crate::svc::starbase::sovereignty(&mut db, server.sov_claim_delay_secs).await;
                 }
                 Ok(_) => {}
                 Err(e) => error!("bots: settling null-sec: {}", crate::logging::chain(&e)),
@@ -517,7 +517,7 @@ impl Sim {
         if let Err(e) = politics::tick(&mut self.politics, &self.db, &self.bots, &mut self.ids, &mut self.rng, now, self.speed).await {
             error!("bots: politics: {}", crate::logging::chain(&e));
         }
-        match sov::upkeep(&self.db, &self.atlas, &mut self.politics, self.presence.watched(), &mut self.sieges, &mut self.rng, now, self.server.sov_claim_delay_secs, self.speed).await {
+        match sov::upkeep(&mut self.db, &self.atlas, &mut self.politics, self.presence.watched(), &mut self.sieges, &mut self.rng, now, self.server.sov_claim_delay_secs, self.speed).await {
             Ok(news) => self.politics.tell(news),
             Err(e) => error!("bots: sovereignty: {}", crate::logging::chain(&e)),
         }
@@ -602,7 +602,7 @@ impl Sim {
                 let fought = battle::run(
                     &mut self.sieges,
                     &self.server.world,
-                    &self.db,
+                    &mut self.db,
                     &self.atlas,
                     &mut self.bots,
                     &self.ids,

@@ -310,7 +310,7 @@ pub async fn get_item(ctx: &Ctx<'_>, container: Container) -> Value {
 pub async fn get_capacity(ctx: &Ctx<'_>, container: Container, flag: Option<i64>) -> Value {
     const HEADER: &[&str] = &["capacity", "used"];
 
-    let capacity = match container {
+    let mut capacity = match container {
         Container::Item(item_id) => {
             // A silo's tower may raise its capacity.
             let silo = match crate::svc::moonmining::silo_capacity(ctx.db, item_id).await {
@@ -320,7 +320,7 @@ pub async fn get_capacity(ctx: &Ctx<'_>, container: Container, flag: Option<i64>
                     None
                 }
             };
-            let sql = r#"SELECT t."capacity",
+            let sql = r#"SELECT CASE WHEN t."groupID" = 365 THEN t."capacity" * 3.8 ELSE t."capacity" END,
                                   (SELECT COALESCE(a."valueFloat", a."valueInt"::float8)
                                      FROM "dgmTypeAttributes" a
                                     WHERE a."typeID" = e."typeID" AND a."attributeID" = 912)
@@ -354,6 +354,15 @@ pub async fn get_capacity(ctx: &Ctx<'_>, container: Container, flag: Option<i64>
         }
         Container::Special { .. } => UNLIMITED_CAPACITY,
     };
+    if let Container::Item(item_id) = container {
+        if flag == Some(crate::svc::moves::FLAG_CARGO) {
+            match crate::svc::moves::active_cargo_capacity(ctx, ctx.db, item_id).await {
+                Ok(Some(actual)) => capacity = actual,
+                Ok(None) => {}
+                Err(e) => error!("invbroker GetCapacity dogma: {}", crate::logging::chain(&e)),
+            }
+        }
+    }
 
     let used = match contents_scope(ctx, container) {
         Some((mut where_sql, mut vals)) => {

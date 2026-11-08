@@ -86,7 +86,7 @@ impl Report {
 pub async fn run(
     sieges: &mut Vec<Siege>,
     world: &World,
-    db: &Client,
+    db: &mut Client,
     atlas: &Atlas,
     bots: &mut [Bot],
     ids: &[Identity],

@@ -95,6 +95,8 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     svc::medical::ensure_grades(&mut client).await.map_err(|e| format!("preparing medical clone grades: {e}"))?;
     market_seed::ensure(&mut client).await.map_err(|e| format!("seeding the market: {}", logging::chain(&e)))?;
     svc::moves::ensure_capital_storage(&client).await.map_err(|e| format!("preparing capital hangars: {}", logging::chain(&e)))?;
+    svc::starbase::ensure_sovereignty(&client).await.map_err(|e| format!("preparing sovereignty: {}", logging::chain(&e)))?;
+    pos::finish_unloaded(&client, &[]).await.map_err(|e| format!("restoring starbase timers: {}", logging::chain(&e)))?;
     svc::fitting::ensure_doomsday_fitting(&client).await.map_err(|e| format!("preparing doomsday fittings: {}", logging::chain(&e)))?;
     svc::agent_missions::ensure(&client).await.map_err(|e| format!("preparing period missions: {}", logging::chain(&e)))?;
     svc::bookmark::ensure_coordinate_format(&mut client).await.map_err(|e| format!("repairing coordinate bookmarks: {}", logging::chain(&e)))?;
