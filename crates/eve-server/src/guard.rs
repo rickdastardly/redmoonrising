@@ -307,6 +307,9 @@ fn judged(ship: &Ship) -> Option<(i64, &Pilot)> {
 
 /// Whether the tower's settings make this ship a target of `s`'s.
 fn hostile(park: &Park, s: &Structure, sentry: &Sentry, ship: &Ship, now: i64) -> bool {
+    if park.inside_force_field(ship.pos) {
+        return false;
+    }
     let Some((char_id, pilot)) = judged(ship) else { return false };
     let friend = char_id == s.owner_id
         || pilot.corp_id == s.corp_id

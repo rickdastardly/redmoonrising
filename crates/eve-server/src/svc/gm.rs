@@ -33,7 +33,7 @@ use crate::svc::rows::{float, int, text};
 use crate::svc::wallet::{self, Entry};
 use crate::world::Move;
 
-const ROLE_GML: i64 = 8;
+pub(crate) const ROLE_GML: i64 = 8;
 const ROLE_LEGIONEER: i64 = 262_144;
 const FLAG_HANGAR: i64 = 4;
 const FLAG_CARGO: i64 = 5;
@@ -367,14 +367,32 @@ async fn max_standings(ctx: &Ctx<'_>, words: &[&str]) -> Result<String, String> 
         return Err("Usage: /maxstandings".into());
     }
     let me = ctx.session.char_id.ok_or("Select a character first.")? as i32;
-    let sql = r#"INSERT INTO "chrNPCStandings" ("characterID", "fromID", "standing")
-                 SELECT $1, owners.id, 10.0
-                   FROM (SELECT "agentID" AS id FROM "agtAgents"
-                         UNION SELECT "corporationID" FROM "crpNPCCorporations"
-                         UNION SELECT "factionID" FROM "chrFactions") owners
-                 ON CONFLICT ("characterID", "fromID") DO UPDATE SET "standing" = 10.0"#;
-    let count = ctx.db.execute(sql, &[&me]).await.map_err(|e| e.to_string())?;
-    Ok(format!("Maximum standing set for {count} agents, NPC corporations and factions. Log in again to refresh standings."))
+    let sql = r#"WITH organizations AS (
+                     SELECT "corporationID" AS id FROM "crpNPCCorporations"
+                     UNION SELECT "factionID" FROM "chrFactions"
+                 ), updated AS (
+                     INSERT INTO "chrNPCStandings" ("characterID", "fromID", "standing")
+                     SELECT $1, owners.id, 10.0
+                       FROM (SELECT "agentID" AS id FROM "agtAgents"
+                             UNION SELECT id FROM organizations) owners
+                     ON CONFLICT ("characterID", "fromID") DO UPDATE SET "standing" = 10.0
+                     RETURNING "fromID"
+                 )
+                 SELECT count(*), ARRAY(SELECT id FROM organizations ORDER BY id)
+                   FROM updated"#;
+    let row = ctx.db.query_one(sql, &[&me]).await.map_err(|e| e.to_string())?;
+    let count: i64 = row.get(0);
+    let organizations: Vec<i32> = row.get(1);
+
+    // Refresh the legacy client's organization cache without loading every agent.
+    let world = ctx.world.lock();
+    let clients = world.clients_of(i64::from(me));
+    for from in organizations {
+        world.notify(&clients, "OnStandingSet", Value::Tuple(vec![
+            Value::Int(i64::from(from)), Value::Int(i64::from(me)), Value::Double(10.0),
+        ]));
+    }
+    Ok(format!("Maximum standing set for {count} agents, NPC corporations and factions. Reopen the Standings tab to see updated corporations and factions."))
 }
 
 fn spawn(ctx: &Ctx<'_>) -> Result<String, String> {

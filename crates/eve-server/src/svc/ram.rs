@@ -120,7 +120,8 @@ pub async fn ram_proxy(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         "AssemblyLinesGet" => Ok(lines_at(ctx, call.arg_id(0)).await),
         "GetJobs2" => Ok(jobs(ctx, call).await),
         "InstallJob" => install(ctx, call).await,
-        "CompleteJob" => complete(ctx, call.arg_id(1), call.arg_i64(2).unwrap_or(0) != 0).await,
+        "CompleteJob" => complete(ctx, call.arg_id(1), call.arg_i64(2).unwrap_or(0) != 0, false).await,
+        "RushJob" => complete(ctx, call.arg_id(0), false, true).await,
         "UpdateAssemblyLineConfigurations" => Err(message("RamConfigAssemblyLinesAccessDenied")),
         _ => return None,
     };
@@ -205,6 +206,14 @@ struct Line {
     next_free: i64,
     min_security: f64,
     max_security: f64,
+}
+
+impl Line {
+    fn misses_quoted_start(&self, now: i64, latest_start: Option<i64>) -> bool {
+        // A free line's estimated start is the quote time. Only a later
+        // booking that still delays the job invalidates that estimate.
+        self.next_free > now && latest_start.is_some_and(|t| self.next_free > t)
+    }
 }
 
 async fn line(db: &impl GenericClient, id: i64) -> Refused<Line> {
@@ -529,7 +538,7 @@ async fn install(ctx: &Ctx<'_>, call: &Call) -> Refused<Value> {
         txn.commit().await.map_err(|e| db_failed("COMMIT", e))?;
         return Ok(Value::Tuple(vec![quote(&plan), split_off]));
     }
-    if latest_start.is_some_and(|t| plan.begin > t) {
+    if line.misses_quoted_start(now, latest_start) {
         return Err(message("RamCannotGuaranteeStartTime"));
     }
     if authorized.is_some_and(|a| plan.cost() > a + 0.01) {
@@ -808,16 +817,32 @@ async fn within_reach(ctx: &Ctx<'_>, line: &Line) -> Refused<()> {
 /// CompleteJob(installationLocationData, jobID, cancel): a finished job's
 /// output and its blueprint go to the owner's hangar at the station; a
 /// cancelled one gives the blueprint back alone.
-async fn complete(ctx: &Ctx<'_>, job_id: i64, cancel: bool) -> Refused<Value> {
+async fn complete(ctx: &Ctx<'_>, job_id: i64, cancel: bool, rush: bool) -> Refused<Value> {
+    if rush && ctx.session.role & crate::svc::gm::ROLE_GML == 0 {
+        return Err(message("RamCompletionAccessDenied"));
+    }
     let me = ctx.session.char_id.unwrap_or(0);
     let mut client = crate::db::connect(ctx.db_url).await.map_err(|e| db_failed("connecting", e))?;
     let mut txn = ItemTxn::begin(&mut client).await.map_err(|e| db_failed("BEGIN", e))?;
+    let job_id_param = job_id as i32;
+    // Match installation's lock order so a new booking cannot race the slot update.
+    let line = if rush {
+        let sql = r#"SELECT "assemblyLineID" FROM "ramAssemblyLines"
+                      WHERE "assemblyLineID" = (SELECT "assemblyLineID" FROM "ramJobs" WHERE "jobID" = $1)
+                      FOR UPDATE"#;
+        let row = txn.tx().query_opt(sql, &[&job_id_param]).await
+            .map_err(|e| db_failed("locking the assembly line", e))?
+            .ok_or_else(|| message("RamCompletionNoSuchJob"))?;
+        Some(row.get::<_, i32>(0))
+    } else {
+        None
+    };
     let sql = r#"SELECT "installedItemOwnerID", "installedItemID", "activityID", "outputTypeID", "outputLocationID",
                         "runs", "licensedProductionRuns", "endProductionTime", "completed"
                    FROM "ramJobs" WHERE "jobID" = $1 FOR UPDATE"#;
     let r = txn
         .tx()
-        .query_opt(sql, &[&(job_id as i32)])
+        .query_opt(sql, &[&job_id_param])
         .await
         .map_err(|e| db_failed("reading the job", e))?
         .ok_or_else(|| message("RamCompletionNoSuchJob"))?;
@@ -829,7 +854,7 @@ async fn complete(ctx: &Ctx<'_>, job_id: i64, cancel: bool) -> Refused<Value> {
     if i(8) != 0 {
         return Err(message("RamCompletionJobCompleted"));
     }
-    if !cancel && crate::bulkdata::filetime_now() < end {
+    if !cancel && !rush && crate::bulkdata::filetime_now() < end {
         return Err(message("RamCompletionInProduction"));
     }
     let bp = blueprint(&mut txn, item_id).await?;
@@ -894,9 +919,25 @@ async fn complete(ctx: &Ctx<'_>, job_id: i64, cancel: bool) -> Refused<Value> {
         .execute(r#"UPDATE "ramJobs" SET "completed" = 1, "completedStatus" = $2 WHERE "jobID" = $1"#, &[&(job_id as i32), &status])
         .await
         .map_err(|e| db_failed("closing the job", e))?;
+    if let Some(line) = line {
+        let now = crate::bulkdata::filetime_now();
+        txn.tx().execute(
+            r#"UPDATE "ramJobs" SET "beginProductionTime" = LEAST("beginProductionTime", $2),
+                       "endProductionTime" = LEAST("endProductionTime", $2) WHERE "jobID" = $1"#,
+            &[&job_id_param, &now],
+        ).await.map_err(|e| db_failed("recording the rushed finish", e))?;
+        txn.tx().execute(
+            r#"UPDATE "ramAssemblyLines" SET "nextFreeTime" = to_timestamp(
+                    (GREATEST($2::bigint, (SELECT MAX("endProductionTime") FROM "ramJobs"
+                        WHERE "assemblyLineID" = $1 AND "completed" = 0)) - 116444736000000000) / 1e7
+                ) AT TIME ZONE 'UTC' WHERE "assemblyLineID" = $1"#,
+            &[&line, &now],
+        ).await.map_err(|e| db_failed("releasing the assembly line", e))?;
+    }
     let events = txn.commit().await.map_err(|e| db_failed("COMMIT", e))?;
     crate::items::notify(ctx.world, ctx.client_id, events);
-    info!("{me} {} job {job_id} ({} of {})", if cancel { "cancelled" } else { "delivered" }, activity_name(activity), bp.type_name);
+    let action = if rush { "rushed" } else if cancel { "cancelled" } else { "delivered" };
+    info!("{me} {action} job {job_id} ({} of {})", activity_name(activity), bp.type_name);
     Ok(Value::None)
 }
 
@@ -993,6 +1034,20 @@ mod tests {
         let p = plan(&line, &bp, &need, 1, 1, 0, (1.0, 1.0), &level, 0);
         assert!((p.seconds - 4800.0).abs() < 1e-6);
         assert!((p.char_material_multiplier - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn accepting_a_quote_later_does_not_make_a_free_line_look_booked() {
+        let (mut line, bp, need) = rifter();
+        let quoted_at = 100 * SECOND;
+        let accepted_at = quoted_at + 12 * SECOND;
+        let quoted_start = plan(&line, &bp, &need, ACTIVITY_MANUFACTURING, 1, 0, (1.0, 1.0), &|_| 0, quoted_at).begin;
+        assert!(!line.misses_quoted_start(accepted_at, Some(quoted_start)));
+        line.next_free = accepted_at;
+        assert!(!line.misses_quoted_start(accepted_at, Some(quoted_start)));
+        line.next_free += SECOND;
+        assert!(line.misses_quoted_start(accepted_at, Some(quoted_start)));
+        assert!(!line.misses_quoted_start(accepted_at, Some(line.next_free)));
     }
 
     #[test]

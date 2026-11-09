@@ -257,7 +257,7 @@ async fn logo_image(ctx: &Ctx<'_>, alliance_id: i64) -> Refused<Value> {
     let Ok(id) = i32::try_from(alliance_id) else { return Ok(Value::None) };
     let row = ctx.db.query_opt(r#"SELECT "logoImage" FROM alliances WHERE "allianceID" = $1 AND "deleted" = 0"#, &[&id])
         .await.map_err(|e| db_failed("reading the alliance logo", e))?;
-    Ok(row.and_then(|r| r.get::<_, Option<Vec<u8>>>(0)).map_or(Value::None, Value::Bytes))
+    Ok(row.and_then(|r| r.get::<_, Option<Vec<u8>>>(0)).map_or(Value::None, |bytes| Value::Bytes(super::alliance_logo::remove_stored_matte(bytes))))
 }
 
 /// UpdateAlliance(description, url[, logoUrl]), by the executor's directors.

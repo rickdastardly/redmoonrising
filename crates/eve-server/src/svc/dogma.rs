@@ -212,7 +212,15 @@ async fn computed_attributes(ctx: &Ctx<'_>, item_ids: &[i64]) -> BTreeMap<i64, B
     let mut rest = Vec::new();
     match ctx.session.char_id {
         Some(char_id) => {
-            let active = std::collections::HashSet::new();
+            let active = {
+                let world = ctx.world.lock();
+                ctx.session.solar_system_id.zip(ctx.session.ship_id)
+                    .and_then(|(system, ship)| world.parks.get(&system)?.ships.get(&ship)?.fight.as_ref())
+                    .into_iter()
+                    .flat_map(|fight| &fight.modules)
+                    .map(|module| module.module_id)
+                    .collect()
+            };
             match crate::dogma::Loadout::load(ctx.db, ctx.dogma, char_id, ctx.session.ship_id, &active).await {
                 Ok(loadout) => {
                     for id in item_ids {

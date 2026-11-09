@@ -112,45 +112,82 @@ fn prepare(bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
     limits.max_image_width = Some(MAX_IMAGE_DIMENSION);
     limits.max_image_height = Some(MAX_IMAGE_DIMENSION);
     reader.limits(limits);
-    let mut source = reader.decode().map_err(|_| INVALID_IMAGE)?.into_rgba8();
-    strip_checkerboard_background(&mut source);
-    let fitted = DynamicImage::ImageRgba8(source).thumbnail(LOGO_SIZE, LOGO_SIZE).into_rgba8();
+    let mut fitted = reader.decode().map_err(|_| INVALID_IMAGE)?
+        .thumbnail(LOGO_SIZE, LOGO_SIZE).into_rgba8();
+    strip_light_matte(&mut fitted);
     let (width, height) = fitted.dimensions();
     let mut logo = RgbaImage::new(LOGO_SIZE, LOGO_SIZE);
     image::imageops::replace(&mut logo, &fitted, i64::from((LOGO_SIZE - width) / 2), i64::from((LOGO_SIZE - height) / 2));
+    encode_logo(logo)
+}
+
+fn encode_logo(logo: RgbaImage) -> Result<Vec<u8>, &'static str> {
     let mut output = Cursor::new(Vec::new());
     DynamicImage::ImageRgba8(logo).write_to(&mut output, ImageFormat::Png).map_err(|_| INVALID_IMAGE)?;
     Ok(output.into_inner())
 }
 
-/// Some image sites save the transparency preview as an opaque checkerboard.
-/// Remove a regular light checkerboard only where it connects to the border.
-fn strip_checkerboard_background(image: &mut RgbaImage) {
+/// Repair previously imported logos without asking players to re-upload them.
+/// Ignore the transparent letterbox around the opaque image.
+pub(super) fn remove_stored_matte(bytes: Vec<u8>) -> Vec<u8> {
+    let mut reader = Reader::with_format(Cursor::new(&bytes), ImageFormat::Png);
+    let mut limits = image::io::Limits::default();
+    limits.max_image_width = Some(LOGO_SIZE);
+    limits.max_image_height = Some(LOGO_SIZE);
+    reader.limits(limits);
+    let Ok(decoded) = reader.decode() else { return bytes };
+    let mut logo = decoded.into_rgba8();
+    let (mut left, mut top, mut right, mut bottom) = (logo.width(), logo.height(), 0, 0);
+    for (x, y, pixel) in logo.enumerate_pixels() {
+        if pixel[3] > 0 {
+            left = left.min(x);
+            top = top.min(y);
+            right = right.max(x + 1);
+            bottom = bottom.max(y + 1);
+        }
+    }
+    if left >= right || top >= bottom {
+        return bytes;
+    }
+    let mut content = image::imageops::crop_imm(&logo, left, top, right - left, bottom - top).to_image();
+    if !strip_light_matte(&mut content) {
+        return bytes;
+    }
+    image::imageops::replace(&mut logo, &content, i64::from(left), i64::from(top));
+    encode_logo(logo).unwrap_or(bytes)
+}
+
+/// Clear a light, neutral matte connected to the border. A resized checkerboard
+/// can have dozens of shades, so identify it from the border rather than tiles.
+fn strip_light_matte(image: &mut RgbaImage) -> bool {
     let (width, height) = image.dimensions();
     if width < 8 || height < 8 || image.pixels().any(|pixel| pixel[3] != 255) {
-        return;
+        return false;
     }
-
-    let light_gray = |pixel: image::Rgba<u8>| pixel[0] >= 200 && pixel[0] == pixel[1] && pixel[0] == pixel[2];
-    let first = *image.get_pixel(0, 0);
-    let Some(tile) = (1..=64.min(width - 1)).find(|&x| *image.get_pixel(x, 0) != first) else { return };
-    let second = *image.get_pixel(tile, 0);
-    if !light_gray(first) || !light_gray(second) || !(10..=50).contains(&first[0].abs_diff(second[0]))
-        || width < tile * 4 || height < tile * 4
-    {
-        return;
-    }
-    let background_at = |x: u32, y: u32| if (x / tile + y / tile) % 2 == 0 { first } else { second };
+    let light = |pixel: &image::Rgba<u8>, minimum: u8| {
+        let [r, g, b, _] = pixel.0;
+        let darkest = r.min(g).min(b);
+        darkest >= minimum && r.max(g).max(b) - darkest <= 6
+    };
     let border: Vec<_> = (0..width).flat_map(|x| [(x, 0), (x, height - 1)])
         .chain((1..height - 1).flat_map(|y| [(0, y), (width - 1, y)])).collect();
-    let matching = border.iter().filter(|&&(x, y)| *image.get_pixel(x, y) == background_at(x, y)).count();
-    if matching * 10 < border.len() * 9 {
-        return;
+    let mut shades: Vec<_> = border.iter().filter_map(|&(x, y)| {
+        let pixel = image.get_pixel(x, y);
+        light(pixel, 200).then_some(pixel[0].min(pixel[1]).min(pixel[2]))
+    }).collect();
+    if shades.len() * 10 < border.len() * 9 {
+        return false;
+    }
+    shades.sort_unstable();
+    let minimum = shades[shades.len() / 10].saturating_sub(4);
+    if image.pixels().all(|pixel| light(pixel, minimum)) {
+        return false;
     }
 
     let mut pending = Vec::new();
     let visit = |x, y, image: &mut RgbaImage, pending: &mut Vec<_>| {
-        if *image.get_pixel(x, y) == background_at(x, y) {
+        let pixel = image.get_pixel(x, y);
+        if pixel[3] == 255 && light(pixel, minimum) {
             image.put_pixel(x, y, image::Rgba([0, 0, 0, 0]));
             pending.push((x, y));
         }
@@ -164,6 +201,7 @@ fn strip_checkerboard_background(image: &mut RgbaImage) {
         if x + 1 < width { visit(x + 1, y, image, &mut pending); }
         if y + 1 < height { visit(x, y + 1, image, &mut pending); }
     }
+    true
 }
 
 #[cfg(test)]
@@ -195,6 +233,31 @@ mod tests {
     }
 
     #[test]
+    fn repairs_stored_letterboxed_mattes_without_removing_white_art() {
+        for checkerboard in [false, true] {
+            let mut stored = RgbaImage::from_fn(128, 128, |x, y| {
+                if !(20..108).contains(&y) {
+                    return image::Rgba([0, 0, 0, 0]);
+                }
+                let shade = if checkerboard { 230 + ((x * 11 + y * 7) % 26) as u8 } else { 255 };
+                image::Rgba([shade, shade, shade, 255])
+            });
+            for y in 32..90 {
+                for x in 20..110 {
+                    stored.put_pixel(x, y, image::Rgba([20, 30, 40, 255]));
+                }
+            }
+            stored.put_pixel(64, 64, image::Rgba([255, 255, 255, 255]));
+            let bytes = remove_stored_matte(encode_logo(stored).unwrap());
+            let repaired = image::load_from_memory(&bytes).unwrap().into_rgba8();
+            assert_eq!(repaired.get_pixel(0, 20)[3], 0);
+            assert_eq!(repaired.get_pixel(20, 32).0, [20, 30, 40, 255]);
+            assert_eq!(repaired.get_pixel(64, 64).0, [255, 255, 255, 255]);
+            assert_eq!(remove_stored_matte(bytes.clone()), bytes);
+        }
+    }
+
+    #[test]
     fn rejects_local_destinations_and_non_web_urls() {
         for url in ["file:///logo.png", "http://2130706433/logo.png", "http://169.254.169.254/logo.png",
             "http://[::ffff:127.0.0.1]/logo.png", "http://[fd00::1]/logo.png", "http://10.0.0.5/logo.png",
@@ -216,12 +279,12 @@ mod tests {
             }
         }
         source.put_pixel(28, 22, image::Rgba([255, 255, 255, 255]));
-        strip_checkerboard_background(&mut source);
+        assert!(strip_light_matte(&mut source));
         assert_eq!(source.pixels().filter(|pixel| pixel[3] == 0).count(), 2600);
         assert_eq!(source.get_pixel(28, 22).0, [255, 255, 255, 255]);
 
         let mut white = RgbaImage::from_pixel(60, 50, image::Rgba([255, 255, 255, 255]));
-        strip_checkerboard_background(&mut white);
+        assert!(!strip_light_matte(&mut white));
         assert!(white.pixels().all(|pixel| pixel[3] == 255));
     }
 }

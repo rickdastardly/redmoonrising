@@ -2,7 +2,7 @@
 //! pirates that wait among them for whoever comes to mine.
 //!
 //! A system's [`Wildlife`] is read from the database when its park is made:
-//! which pirate faction holds it (from the system's or region's faction), the
+//! which pirate faction patrols its region, the
 //! rats of that faction by hull class, and the ores its security allows. Each
 //! belt gets a field of asteroids at once; its rats spawn when a player comes
 //! within [`SPAWN_RANGE`] and respawn some minutes after the last one dies.
@@ -35,6 +35,7 @@ const WAR_AGGRO_RANGE: f64 = 80_000.0;
 const THINK_MS: i64 = 1_000;
 const GROUP_BELT: i64 = 9;
 const GROUP_CONCORD: i32 = 301;
+const GROUP_ROGUE_DRONE: i32 = 287;
 const OWNER_SYSTEM: i64 = 1;
 
 /// Transient objects (rats, asteroids) get IDs from here: above every item
@@ -55,32 +56,39 @@ enum Class {
     Battleship,
 }
 
-const CLASSES: [Class; 5] = [Class::Frigate, Class::Destroyer, Class::Cruiser, Class::Battlecruiser, Class::Battleship];
-
-/// A pirate faction's belt rat groups (in [`CLASSES`] order) and the
+/// A pirate faction's belt rat groups (in [`Class`] order) and the
 /// corporation its rats belong to.
 struct Pirates {
     name: &'static str,
     corp_id: i64,
-    groups: [i32; 5],
+    groups: &'static [i32],
 }
 
-const ANGELS: Pirates = Pirates { name: "Angel Cartel", corp_id: 1000124, groups: [550, 575, 551, 576, 552] };
-const BLOOD_RAIDERS: Pirates = Pirates { name: "Blood Raiders", corp_id: 1000134, groups: [557, 577, 555, 578, 556] };
-const GURISTAS: Pirates = Pirates { name: "Guristas", corp_id: 1000127, groups: [562, 579, 561, 580, 560] };
-const SANSHA: Pirates = Pirates { name: "Sansha's Nation", corp_id: 1000162, groups: [567, 581, 566, 582, 565] };
-const SERPENTIS: Pirates = Pirates { name: "Serpentis", corp_id: 1000135, groups: [572, 583, 571, 584, 570] };
-const ALL_PIRATES: [&Pirates; 5] = [&ANGELS, &BLOOD_RAIDERS, &GURISTAS, &SANSHA, &SERPENTIS];
+const ANGELS: Pirates = Pirates { name: "Angel Cartel", corp_id: 1000124, groups: &[550, 575, 551, 576, 552] };
+const BLOOD_RAIDERS: Pirates = Pirates { name: "Blood Raiders", corp_id: 1000134, groups: &[557, 577, 555, 578, 556] };
+const GURISTAS: Pirates = Pirates { name: "Guristas", corp_id: 1000127, groups: &[562, 579, 561, 580, 560] };
+const SANSHA: Pirates = Pirates { name: "Sansha's Nation", corp_id: 1000162, groups: &[567, 581, 566, 582, 565] };
+const SERPENTIS: Pirates = Pirates { name: "Serpentis", corp_id: 1000135, groups: &[572, 583, 571, 584, 570] };
+const ROGUE_DRONES: Pirates = Pirates { name: "Rogue Drones", corp_id: OWNER_SYSTEM, groups: &[GROUP_ROGUE_DRONE] };
+const NO_RATS: Pirates = Pirates { name: "No local pirates", corp_id: OWNER_SYSTEM, groups: &[] };
 
-/// Who raids an empire's space; a pirate faction's own space is its own.
-fn pirates_for(faction_id: Option<i64>, solar_system_id: i64) -> &'static Pirates {
-    match faction_id {
-        Some(500001 | 500010) => &GURISTAS,
-        Some(500002 | 500011 | 500015) => &ANGELS,
-        Some(500003 | 500007 | 500008 | 500012) => &BLOOD_RAIDERS,
-        Some(500019) => &SANSHA,
-        Some(500004 | 500009 | 500014 | 500020) => &SERPENTIS,
-        _ => ALL_PIRATES[(solar_system_id % ALL_PIRATES.len() as i64) as usize],
+/// Local pirates by region ID, from DOTLAN's Rats column. These IDs also
+/// cover the Drone Regions under their original names in the RMR data.
+fn pirates_for(region_id: i32) -> &'static Pirates {
+    match region_id {
+        10000002 | 10000003 | 10000010 | 10000015 | 10000016 | 10000023 | 10000029
+        | 10000033 | 10000035 | 10000045 | 10000055 | 10000069 => &GURISTAS,
+        10000005 | 10000006 | 10000007 | 10000008 | 10000009 | 10000011 | 10000012
+        | 10000025 | 10000028 | 10000030 | 10000031 | 10000042 | 10000056 | 10000061 | 10000062 => &ANGELS,
+        10000038 | 10000049 | 10000050 | 10000052 | 10000054 | 10000060 | 10000063
+        | 10000065 | 10000067 => &BLOOD_RAIDERS,
+        10000001 | 10000014 | 10000020 | 10000022 | 10000036 | 10000039 | 10000043
+        | 10000047 | 10000059 => &SANSHA,
+        10000032 | 10000037 | 10000041 | 10000044 | 10000046 | 10000048 | 10000051
+        | 10000057 | 10000058 | 10000064 | 10000068 => &SERPENTIS,
+        10000013 | 10000018 | 10000021 | 10000027 | 10000034 | 10000040 | 10000053
+        | 10000066 => &ROGUE_DRONES,
+        _ => &NO_RATS,
     }
 }
 
@@ -139,6 +147,15 @@ impl NpcType {
         self.get(attr::ENTITY_KILL_BOUNTY)
     }
 
+    fn is_faction_rat(&self) -> bool {
+        if self.group_id == i64::from(GROUP_ROGUE_DRONE) {
+            return self.name.starts_with("Sentient ");
+        }
+        ["Domination ", "Dark Blood ", "Dread Guristas ", "True Sansha's ", "Shadow Serpentis "]
+            .into_iter()
+            .any(|prefix| self.name.starts_with(prefix))
+    }
+
     /// Whether it carries a gun or a missile it can use.
     fn armed(&self, missiles: &HashMap<i64, NpcType>) -> bool {
         let gun = self.get(attr::DAMAGE_MULTIPLIER) > 0.0 && self.get(attr::SPEED) > 0.0;
@@ -189,6 +206,7 @@ pub struct Belt {
     pub rats: Vec<i64>,
     /// When the rats may come (back); None until first visited.
     pub respawn_at: Option<i64>,
+    faction_next: bool,
 }
 
 /// A missile in flight.
@@ -322,21 +340,19 @@ pub fn bot_gun(t: &NpcType, ship_id: i64, damage: [f64; 4], gun: Gun, duration: 
 pub async fn load(db: &tokio_postgres::Client, solar_system_id: i64) -> Result<Wildlife, tokio_postgres::Error> {
     let row = db
         .query_opt(
-            r#"SELECT COALESCE(s."security", 0)::float8, COALESCE(s."factionID", r."factionID")
-                 FROM "mapSolarSystems" s
-                 LEFT JOIN "mapRegions" r ON r."regionID" = s."regionID"
-                WHERE s."solarSystemID" = $1"#,
+            r#"SELECT COALESCE("security", 0)::float8, "regionID"
+                 FROM "mapSolarSystems" WHERE "solarSystemID" = $1"#,
             &[&(solar_system_id as i32)],
         )
         .await?;
-    let (security, faction) = row.map_or((1.0, None), |r| (r.get(0), r.get::<_, Option<i32>>(1).map(i64::from)));
-    let pirates = pirates_for(faction, solar_system_id);
+    let (security, region) = row.map_or((1.0, 0), |r| (r.get(0), r.get::<_, Option<i32>>(1).unwrap_or(0)));
+    let pirates = pirates_for(region);
 
     let types = db
         .query(
             r#"SELECT t."typeID", t."groupID", COALESCE(t."typeName", ''), COALESCE(t."radius", 0), COALESCE(t."mass", 0)
                  FROM "invTypes" t WHERE t."groupID" = ANY($1)"#,
-            &[&&pirates.groups[..]],
+            &[&pirates.groups],
         )
         .await?;
     let mut by_id: HashMap<i64, NpcType> = types.iter().map(|r| npc_type(r)).map(|t| (t.type_id, t)).collect();
@@ -362,7 +378,17 @@ pub async fn load(db: &tokio_postgres::Client, solar_system_id: i64) -> Result<W
         if t.bounty() <= 0.0 || t.get(attr::HP) <= 0.0 || !t.armed(&missiles) {
             continue;
         }
-        if let Some(class) = pirates.groups.iter().position(|g| *g as i64 == t.group_id) {
+        if t.group_id == i64::from(GROUP_ROGUE_DRONE) {
+            // Legacy rogue drones share one group across all hull sizes.
+            let class = match t.get(attr::SIGNATURE_RADIUS) {
+                s if s >= 350.0 => Class::Battleship,
+                s if s >= 275.0 => Class::Battlecruiser,
+                s if s >= 125.0 => Class::Cruiser,
+                s if s >= 80.0 => Class::Destroyer,
+                _ => Class::Frigate,
+            };
+            rats[class as usize].push(t);
+        } else if let Some(class) = pirates.groups.iter().position(|g| *g as i64 == t.group_id) {
             rats[class].push(t);
         }
     }
@@ -457,7 +483,7 @@ pub fn populate(park: &mut Park) {
         park.celestials.iter().filter(|c| c.group_id == GROUP_BELT).map(|c| (c.id, c.pos)).collect();
     let ores = park.wildlife.ores.clone();
     for (id, pos) in belts {
-        park.belts.push(Belt { id, pos, rats: Vec::new(), respawn_at: None });
+        park.belts.push(Belt { id, pos, rats: Vec::new(), respawn_at: None, faction_next: false });
         if ores.is_empty() {
             continue;
         }
@@ -623,13 +649,15 @@ fn spawn(park: &mut Park, belt_index: usize, now: i64, out: &mut Out) {
     let belt_id = park.belts[belt_index].id;
     let centre = park.belts[belt_index].pos;
     let security = park.wildlife.security;
-    let ids = spawn_group(park, belt_id, centre, security, now);
+    let wave = if park.belts[belt_index].faction_next { Wave::FactionBelt } else { Wave::RegularBelt };
+    let ids = spawn_wave(park, belt_id, centre, security, now, wave);
     park.belts[belt_index].rats = ids.clone();
     if ids.is_empty() {
         // Nothing to spawn here; do not try again every pulse.
         park.belts[belt_index].respawn_at = Some(now + RESPAWN_MS.1 as i64);
         return;
     }
+    park.belts[belt_index].faction_next = !park.belts[belt_index].faction_next;
     info!("belt {belt_id}: {} rat(s) spawned", ids.len());
     for id in ids {
         for (client, e) in space::add_ball_entries_for_nearby(park, id) {
@@ -642,14 +670,44 @@ fn spawn(park: &mut Park, belt_index: usize, now: i64, out: &mut Out) {
 /// `security` calls for; returns their IDs. They are in the park but not yet
 /// shown to anyone.
 pub fn spawn_group(park: &mut Park, anchor: i64, centre: Vec3, security: f64, now: i64) -> Vec<i64> {
+    spawn_wave(park, anchor, centre, security, now, Wave::Other)
+}
+
+#[derive(PartialEq, Eq)]
+enum Wave {
+    RegularBelt,
+    FactionBelt,
+    Other,
+}
+
+fn spawn_wave(park: &mut Park, anchor: i64, centre: Vec3, security: f64, now: i64, wave: Wave) -> Vec<i64> {
     let wildlife = std::sync::Arc::clone(&park.wildlife);
+    let pools: [Vec<&NpcType>; 5] = std::array::from_fn(|i| {
+        wildlife.rats[i].iter().filter(|t| wave == Wave::Other || !t.is_faction_rat()).collect()
+    });
+    let mut classes = plan(security, &mut park.rng);
+    let mut commander = None;
+    if wave == Wave::FactionBelt {
+        let battleships: Vec<_> = wildlife.rats[Class::Battleship as usize].iter().filter(|t| t.is_faction_rat()).collect();
+        if !battleships.is_empty() {
+            commander = Some(battleships[park.rng.below(battleships.len())]);
+            // Upgrade one battleship slot, or add one if the regular wave has none.
+            if !classes.contains(&Class::Battleship) {
+                classes.push(Class::Battleship);
+            }
+        }
+    }
     let mut ids = Vec::new();
-    for class in plan(security, &mut park.rng) {
-        // A class this faction has none of falls back to the next smaller one.
-        let index = CLASSES.iter().position(|c| *c == class).unwrap_or(0);
-        let Some(list) = (0..=index).rev().map(|i| &wildlife.rats[i]).find(|l| !l.is_empty()) else { continue };
-        let range = tier(security, list.len());
-        let t = &list[range.start + park.rng.below(range.len())];
+    for class in classes {
+        let faction = if class == Class::Battleship { commander.take() } else { None };
+        let t = if let Some(t) = faction {
+            t
+        } else {
+            // A missing class falls back to the next smaller one.
+            let Some(list) = pools[..=class as usize].iter().rev().find(|l| !l.is_empty()) else { continue };
+            let range = tier(security, list.len());
+            list[range.start + park.rng.below(range.len())]
+        };
         let offset = park.rng.in_sphere(20_000.0);
         let rat = make_rat(t, &wildlife, anchor, centre + Vec3::new(offset.x, offset.y * 0.2, offset.z), now, &mut park.rng);
         ids.push(rat.id);
@@ -1006,6 +1064,7 @@ fn think_one(park: &mut Park, id: i64, now: i64, seen: &[Seen], enemies: &HashSe
     };
     let signature = park.ships.get(&target).and_then(|s| s.fight.as_ref()).map_or(35.0, |f| f.signature);
     let distance = park.surface_distance(id, target).unwrap_or(f64::MAX);
+    let field_blocked = park.field_blocks_lock(id, target);
 
     // Lock it.
     let Some(rat) = park.ships.get_mut(&id) else { return };
@@ -1013,7 +1072,7 @@ fn think_one(park: &mut Park, id: i64, now: i64, seen: &[Seen], enemies: &HashSe
     brain.target = Some(target);
     // Aggro reaches further than sensors: a lock started out of range, or
     // while jammed, would be dropped by the next pulse and started over.
-    let can_lock = distance <= fight.lock_range() && !fight.afflictions.jammed;
+    let can_lock = !field_blocked && distance <= fight.lock_range() && !fight.afflictions.jammed;
     if can_lock && !fight.locks.contains_key(&target) {
         fight.locks.clear();
         let lock_ms = (combat::lock_seconds(fight.scan_resolution, signature) * 1_000.0) as i64;
@@ -1146,10 +1205,15 @@ mod tests {
     }
 
     #[test]
-    fn pirates_follow_the_faction() {
-        assert_eq!(pirates_for(Some(500001), 1).corp_id, GURISTAS.corp_id);
-        assert_eq!(pirates_for(Some(500004), 1).corp_id, SERPENTIS.corp_id);
-        assert_eq!(pirates_for(None, 30002780).corp_id, ALL_PIRATES[(30002780 % 5) as usize].corp_id);
+    fn belt_pirates_follow_the_region() {
+        assert_eq!(pirates_for(10000023).name, GURISTAS.name); // Pure Blind, including X-7OMU
+        assert_eq!(pirates_for(10000002).name, GURISTAS.name); // The Forge
+        assert_eq!(pirates_for(10000043).name, SANSHA.name); // Domain
+        assert_eq!(pirates_for(10000060).name, BLOOD_RAIDERS.name); // Delve
+        assert_eq!(pirates_for(10000025).name, ANGELS.name); // Immensea
+        assert_eq!(pirates_for(10000046).name, SERPENTIS.name); // Fade
+        assert_eq!(pirates_for(10000053).groups, &[GROUP_ROGUE_DRONE]); // Cobalt Edge
+        assert!(pirates_for(10000019).groups.is_empty()); // A821-A
     }
 
     use crate::ballpark::Celestial;
@@ -1235,6 +1299,44 @@ mod tests {
         park.wildlife = std::sync::Arc::new(wildlife);
         populate(&mut park);
         park
+    }
+
+    #[test]
+    fn each_belt_alternates_regular_waves_and_one_faction_battleship() {
+        for security in [0.9, -0.8] {
+            let mut park = belt_park();
+            let wildlife = std::sync::Arc::make_mut(&mut park.wildlife);
+            wildlife.security = security;
+            let frigate = rat_type();
+            let regular = NpcType { type_id: 11898, group_id: 552, name: "Angel Commander".into(), ..frigate.clone() };
+            let faction = NpcType { type_id: 13535, name: "Domination Commander".into(), ..regular.clone() };
+            wildlife.rats[Class::Frigate as usize].push(NpcType {
+                type_id: 13515, name: "Domination Hijacker".into(), ..frigate
+            });
+            wildlife.rats[Class::Battleship as usize].extend([regular, faction]);
+
+            let mut out = Out::default();
+            let players = [(PLAYER + 1, park.belts[0].pos)];
+            let mut now = 0;
+            for expected_faction in [0, 1, 0, 1] {
+                spawn_where_needed(&mut park, now, &players, &mut out);
+                let rats = park.belts[0].rats.clone();
+                assert!(rats.len() > expected_faction);
+                let types: Vec<_> = rats.iter().map(|id| park.ships[id].pilot.type_id).collect();
+                assert_eq!(types.iter().filter(|&&t| t == 13535).count(), expected_faction);
+                assert!(!types.contains(&13515));
+                if security < 0.0 {
+                    assert!(types.contains(&11898));
+                }
+                for id in rats {
+                    let rat = park.ships.remove(&id).unwrap();
+                    killed(&mut park, &rat, now, &mut out);
+                }
+                now = park.belts[0].respawn_at.unwrap();
+                spawn_where_needed(&mut park, now - 1, &players, &mut out);
+                assert!(park.belts[0].rats.is_empty());
+            }
+        }
     }
 
     /// Runs the park for `seconds`, a pulse every 250 ms.

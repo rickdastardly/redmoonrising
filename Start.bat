@@ -6,12 +6,14 @@ set "RMR_INVOCATION_DIRECTORY=%CD%"
 set "RMR_MODE=ui"
 set "RMR_UI_PID="
 set "RMR_RUN_ID="
+set "RMR_RESTART="
 :parse
 if "%~1"=="" goto parsed
 if /i "%~1"=="--help" goto help
 if /i "%~1"=="-h" goto help
 if /i "%~1"=="--headless" goto headless
 if /i "%~1"=="--stop" goto stop
+if /i "%~1"=="--restart" goto restart
 if /i "%~1"=="--check" goto check
 if /i "%~1"=="--server-only" goto serveronly
 if /i "%~1"=="--no-auto-client" goto noautoclient
@@ -23,6 +25,11 @@ echo Unknown option. Use --help for usage. 1>&2
 exit /b 2
 :headless
 set "RMR_MODE=headless"
+shift
+goto parse
+:restart
+set "RMR_RESTART=1"
+if "%RMR_MODE%"=="ui" set "RMR_MODE=headless"
 shift
 goto parse
 :stop
@@ -81,10 +88,11 @@ echo An option is missing its value. Use --help for usage. 1>&2
 exit /b 2
 :help
 echo Red Moon Rising launcher
- echo Usage: Start.bat [--headless ^| --server-only ^| --check ^| --stop]
+ echo Usage: Start.bat [--headless ^| --server-only ^| --check ^| --stop] [--restart]
 echo                  [--no-auto-client] [--client "folder"]
 echo                  [--game-port N] [--web-port N] [--database-port N]
 echo No options opens the launcher window. --check tests the server then stops it.
+echo --restart saves and stops the current server, then starts it again.
 echo --server-only runs without selecting or starting a game client.
 echo EVE starts automatically when the server is ready. --no-auto-client keeps it closed.
 echo Default ports: game 26000, web 18080, database 5432; busy ports advance automatically.
@@ -146,6 +154,13 @@ function Set-Status([string]$Stage, [string]$Message, [int]$Progress) {
     $script:Status.progress = $Progress
     [IO.File]::WriteAllText($StatusPath, ($script:Status | ConvertTo-Json -Compress), $Utf8)
     Write-Log ('[{0}] {1}' -f $Stage, $Message)
+}
+function Test-RmrWorkerStopped([string]$Directory) {
+    try {
+        $probe = [IO.File]::Open((Join-Path $Directory 'launcher.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
+        $probe.Dispose()
+        return $true
+    } catch [IO.IOException] { return $false }
 }
 function Assert-Running {
     if ($script:Stopping) { return }
@@ -778,8 +793,29 @@ function Start-RmrWorker {
         Install-PostgresRuntime $pgBin
         Invoke-Native (Join-Path $pgBin 'postgres.exe') @('--version')
         if ($needsBuild) {
+            # Raw DLL imports need a matching GNU dlltool and assembler.
+            $binutilsDir = Join-Path $toolDir 'winlibs-16.2.0-r3'
+            $gnuTools = Join-Path $binutilsDir 'mingw64\bin'
+            $binutilsFiles = @('dlltool.exe','as.exe','libintl-8.dll','libiconv-2.dll','libzstd.dll','zlib1.dll','libwinpthread-1.dll','libgcc_s_seh-1.dll')
+            $missingBinutils = $binutilsFiles | Where-Object { -not [IO.File]::Exists((Join-Path $gnuTools $_)) }
+            $binutilsReady = Join-Path $binutilsDir 'installed.ok'
+            if ($missingBinutils -or -not [IO.File]::Exists($binutilsReady)) {
+                Set-Status 'Toolchain' 'Preparing portable MinGW tools for Windows DLL imports' 30
+                $binutilsArchive = Get-Download 'https://github.com/brechtsanders/winlibs_mingw/releases/download/16.2.0posix-23.1.3-14.0.0-ucrt-r3/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r3.7z' 'winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r3.7z' 'db014a73b71907c6c778fd1c938056cddcae9023f89f8dfff7783d9e45baf975'
+                [IO.Directory]::CreateDirectory($binutilsDir) | Out-Null
+                [IO.File]::Delete($binutilsReady)
+                $entries = $binutilsFiles | ForEach-Object { "mingw64/bin/$_" }
+                Invoke-Native (Join-Path $env:SystemRoot 'System32\tar.exe') (@('-xf',$binutilsArchive,'-C',$binutilsDir) + $entries)
+                [IO.File]::WriteAllText($binutilsReady, '16.2.0-r3', $Utf8)
+            }
             Set-Status 'Building' 'Compiling RMR; later launches reuse the verified build' 35
-            Invoke-Native $rustup @('run','1.97.0-x86_64-pc-windows-gnu','cargo','build','--release','--locked','-p','eve-server','--bins','--target','x86_64-pc-windows-gnu')
+            $originalPath = $env:Path
+            try {
+                $env:Path = "$gnuTools;$originalPath"
+                Invoke-Native $rustup @('run','1.97.0-x86_64-pc-windows-gnu','cargo','build','--release','--locked','-p','eve-server','--bins','--target','x86_64-pc-windows-gnu')
+            } finally {
+                $env:Path = $originalPath
+            }
             if (-not (Test-Path -LiteralPath $serverExe) -or -not (Test-Path -LiteralPath $fakeClientExe)) { throw 'The build did not produce both server and fakeclient executables.' }
             $buildRecord = [pscustomobject]@{ fingerprint = $fingerprint; serverHash = (Get-RmrFileHash $serverExe); clientHash = (Get-RmrFileHash $fakeClientExe) }
             [IO.File]::WriteAllText($buildStamp, ($buildRecord | ConvertTo-Json), $Utf8)
@@ -2000,6 +2036,69 @@ def _rmr_install_self_info():
 import uthread
 uthread.new(_rmr_install_self_info)
 
+def _rmr_install_alliance_attributes():
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        import listentry
+        import util
+        cls = sm.StartService('info').__class__
+        if getattr(cls, '_rmr_alliance_attributes_installed', False):
+            return
+        original = cls.GetWndData
+
+        def get_wnd_data(self, wnd, typeID, itemID, parentID=None):
+            if typeID != const.typeAlliance or not wnd.sr.isAlliance or wnd.sr.allianceinfo is None:
+                return original(self, wnd, typeID, itemID, parentID)
+            record = wnd.sr.allianceinfo
+            owner_fields = (('executorCorpID', 'Executor'),
+                            ('creatorCorpID', 'Created By Corporation'),
+                            ('creatorCharID', 'Created By'))
+            owner_ids = [getattr(record, key, 0) for key, label in owner_fields]
+            owner_ids = [owner for owner in owner_ids if owner and owner > 0]
+            if owner_ids:
+                cfg.eveowners.Prime(owner_ids)
+
+            # The stock builder assumes both founder IDs resolve. Give it
+            # only valid links so one missing owner cannot abort the whole tab.
+            view = util.KeyVal(header=[])
+            missing = []
+            for key, label in owner_fields:
+                owner = getattr(record, key, 0)
+                if not owner or owner <= 0 or cfg.eveowners.GetIfExists(owner) is None:
+                    missing.append((key, label))
+            skip = [key for key, label in missing]
+            for key in record.header:
+                if key not in skip:
+                    view.header.append(key)
+                    setattr(view, key, getattr(record, key))
+            wnd.sr.allianceinfo = view
+            try:
+                result = original(self, wnd, typeID, itemID, parentID)
+            finally:
+                wnd.sr.allianceinfo = record
+
+            attributes = wnd.sr.data['Attributes']['items']
+            for key, label in missing:
+                attributes.append(listentry.Get('LabelTextTop', {
+                    'line': 1, 'label': label, 'text': 'Unknown'}))
+            member_count = getattr(record, 'memberCount', None)
+            if member_count is not None:
+                attributes.append(listentry.Get('LabelTextTop', {
+                    'line': 1, 'label': 'Member Count', 'text': str(member_count)}))
+            return result
+
+        cls.GetWndData = get_wnd_data
+        cls._rmr_alliance_attributes_installed = True
+        _rmr_log('Alliance Attributes tab hook installed.')
+    except:
+        _rmr_log('Alliance Attributes hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+
+uthread.new(_rmr_install_alliance_attributes)
+
+
 def _rmr_install_alliance_logos():
     while not getattr(eve.session, 'charid', None):
         blue.pyos.synchro.Sleep(1000)
@@ -2085,6 +2184,14 @@ def _rmr_install_alliance_logos():
         sys.exc_clear()
 
 uthread.new(_rmr_install_alliance_logos)
+
+def _rmr_editable_focus(ui):
+    import xtriui
+    focus = ui.GetFocus()
+    if isinstance(focus, (xtriui.SingleLineEdit, xtriui.VirtualEdit)) and not getattr(focus, 'readonly', False):
+        return focus
+    return None
+
 
 def _rmr_install_directional_scan(cmd_class):
     import listentry
@@ -2243,8 +2350,7 @@ def _rmr_install_directional_scan(cmd_class):
     def directional_scan(self):
         if not eve.session.solarsystemid or not eve.session.shipid:
             return
-        focus = eve.LocalSvc('ui').GetFocus()
-        if isinstance(focus, (xtriui.SingleLineEdit, xtriui.VirtualEdit)) and not getattr(focus, 'readonly', False):
+        if _rmr_editable_focus(eve.LocalSvc('ui')) is not None:
             return
         armed[0] = (context(), blue.os.GetTime() + 100000000)
 
@@ -2259,21 +2365,27 @@ def _rmr_install_shortcuts():
     while not getattr(eve.session, 'charid', None):
         blue.pyos.synchro.Sleep(1000)
     try:
-        import xtriui
+        import uix
         cmd = sm.StartService('cmd')
         cls = cmd.__class__
         if not getattr(cls, '_rmr_shortcuts_installed', False):
             original_reload = cls.ReloadcommandsByFunc
+            shortcut_defaults = (('CmdBookmarkCurrentLocation', (1, 0, 0, 'b')),
+                                 ('CmdDronesEngage', (0, 0, 0, 'f')),
+                                 ('CmdReturnDrones', (0, 0, 1, 'r')),
+                                 ('CmdDirectionalScan', (0, 0, 0, 'v')))
+            shortcut_names = tuple([name for name, key in shortcut_defaults])
 
             def bookmark_current_location(self):
+                if _rmr_editable_focus(eve.LocalSvc('ui')) is not None:
+                    return
                 return eve.LocalSvc('addressbook').BookmarkCurrentLocation()
 
             def order_drones(engage):
                 session = eve.session
                 if not session.solarsystemid or not session.shipid:
                     return
-                focus = eve.LocalSvc('ui').GetFocus()
-                if isinstance(focus, (xtriui.SingleLineEdit, xtriui.VirtualEdit)) and not getattr(focus, 'readonly', False):
+                if _rmr_editable_focus(eve.LocalSvc('ui')) is not None:
                     return
                 michelle = eve.LocalSvc('michelle')
                 park = michelle.GetBallpark()
@@ -2305,17 +2417,37 @@ def _rmr_install_shortcuts():
 
             def reload_shortcuts(self):
                 result = original_reload(self)
-                shortcuts = (('CmdBookmarkCurrentLocation', (1, 0, 0, 'b')),
-                             ('CmdDronesEngage', (0, 0, 0, 'f')),
-                             ('CmdReturnDrones', (0, 0, 1, 'r')),
-                             ('CmdDirectionalScan', (0, 0, 0, 'v')))
-                for name, key in shortcuts:
+                for name, key in shortcut_defaults:
                     if not hasattr(self, name):
                         continue
                     self.defaultcmds[name] = key
                     if name not in self.commandsByFunc:
                         self.LoadCmd(name, self.GetCustomCmd(name) or key)
                 return result
+
+            # LocalSvc returns a proxy; patch the service that owns charHandler.
+            ui = sm.StartService('ui')
+            ui_class = ui.__class__
+            original_char = ui_class.OnGlobalChar
+
+            def on_global_char(self, char, flag):
+                # The legacy character handler drops accelerator keys before
+                # forwarding characters to chat, even if the action did nothing.
+                focus = _rmr_editable_focus(self)
+                if focus is not None and 32 <= char <= 126:
+                    key = eve.triapp.uilib.Key
+                    if not key(uix.VK_CONTROL) and not key(uix.VK_MENU):
+                        name = chr(char).replace(' ', 'space').upper()
+                        vkey = getattr(uix, 'VK_' + name, None)
+                        shortcut = (0, 0, key(uix.VK_SHIFT), vkey)
+                        current_cmd = sm.services.get('cmd')
+                        if current_cmd and current_cmd.GetFuncByShortcut(shortcut) in shortcut_names:
+                            focus.OnChar(char, flag)
+                            return
+                return original_char(self, char, flag)
+
+            ui_class.OnGlobalChar = on_global_char
+            eve.triapp.uilib.charHandler = ui.OnGlobalChar
 
             cls.CmdBookmarkCurrentLocation = bookmark_current_location
             cls.CmdDronesEngage = drones_engage
@@ -2704,6 +2836,41 @@ def _rmr_install_agent_standings():
 
 uthread.new(_rmr_install_agent_standings)
 
+def _rmr_install_rush_job():
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        import uix
+        cls = form.Manufacturing
+        if getattr(cls, '_rmr_rush_job_installed', False):
+            return
+        original = cls.ShowJobDetails
+        gm_role = 8  # ROLE_GML in the session protocol and the server's RushJob check.
+
+        def show_job_details(self, job):
+            result = original(self, job)
+            if (eve.session.role & gm_role and job and not job.completed
+                    and job.installedItemOwnerID == eve.session.charid
+                    and job.endProductionTime > blue.os.GetTime()):
+                def rush_job(*args):
+                    eve.ProxySvc('ramProxy').RushJob(job.jobID)
+                    button.Close()
+                    self.LoadJobs()
+
+                # Cancel Job is anchored 10 pixels from the bottom.
+                button = uix.GetButton(self.sr.details, 'Rush Job', func=rush_job, left=12, top=32)
+                button.anchors = uix.UI_ANCHRIGHT | uix.UI_ANCHBOTTOM
+            return result
+
+        cls.ShowJobDetails = show_job_details
+        cls._rmr_rush_job_installed = True
+    except:
+        _rmr_log('Rush Job hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+
+uthread.new(_rmr_install_rush_job)
+
 '@
 
 function Start-LauncherUi {
@@ -2995,9 +3162,9 @@ namespace Rmr {
     $footer.Dock = 'Fill'
     $footer.Margin = New-Object System.Windows.Forms.Padding(0, 20, 0, 0)
     $footer.BackColor = [System.Drawing.Color]::Transparent
-    $footer.ColumnCount = 4
+    $footer.ColumnCount = 5
     $footer.RowCount = 1
-    foreach ($width in @(30, 25, 20, 25)) {
+    foreach ($width in @(22, 19, 17, 22, 20)) {
         $footer.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent', $width))) | Out-Null
     }
     $connectionLabel = New-Object System.Windows.Forms.Label
@@ -3013,8 +3180,9 @@ namespace Rmr {
     $clientButton = New-Object System.Windows.Forms.Button
     $dashboardButton = New-Object System.Windows.Forms.Button
     $logsButton = New-Object System.Windows.Forms.Button
+    $restartButton = New-Object System.Windows.Forms.Button
     $stopButton = New-Object System.Windows.Forms.Button
-    foreach ($button in @($clientButton, $dashboardButton, $logsButton, $stopButton)) {
+    foreach ($button in @($clientButton, $dashboardButton, $logsButton, $restartButton, $stopButton)) {
         $button.Dock = 'Fill'
         $button.FlatStyle = 'Flat'
         $button.FlatAppearance.BorderSize = 1
@@ -3040,13 +3208,16 @@ namespace Rmr {
     $dashboardButton.BackColor = [System.Drawing.Color]::FromArgb(36, 43, 52)
     $dashboardButton.ForeColor = [System.Drawing.Color]::FromArgb(137, 148, 161)
     $logsButton.Text = 'Open logs'
+    $restartButton.Text = 'Restart server'
+    $restartButton.Enabled = $false
     $stopButton.Text = 'Stop server'
     $stopButton.ForeColor = [System.Drawing.Color]::FromArgb(255, 174, 156)
     $stopButton.Margin = New-Object System.Windows.Forms.Padding(0)
     $footer.Controls.Add($clientButton, 0, 0)
     $footer.Controls.Add($dashboardButton, 1, 0)
     $footer.Controls.Add($logsButton, 2, 0)
-    $footer.Controls.Add($stopButton, 3, 0)
+    $footer.Controls.Add($restartButton, 3, 0)
+    $footer.Controls.Add($stopButton, 4, 0)
     $layout.Controls.Add($footer, 0, 4)
     $layout.Controls.Add($connectionLabel, 0, 5)
     $tooltip = New-Object System.Windows.Forms.ToolTip
@@ -3061,6 +3232,7 @@ namespace Rmr {
         Ready = $false
         StopRequested = $false
         CloseRequested = $false
+        RestartDeadline = $null
         Exited = $false
         LastLogLength = -1L
         LastLogWrite = [DateTime]::MinValue
@@ -3082,8 +3254,9 @@ namespace Rmr {
         $state.Ready = $Ready -and -not $state.StopRequested -and -not $state.Exited
         $clientButton.Enabled = $state.Ready -and [bool]$state.ClientPath
         $dashboardButton.Enabled = $state.Ready
+        $restartButton.Enabled = $state.Ready
         if ($state.Ready) {
-            $clientButton.Text = 'Launch EVE'
+            $clientButton.Text = if ($state.ClientPath) { 'Launch EVE' } else { 'No client selected' }
             $clientButton.BackColor = $cyan
             $clientButton.ForeColor = $background
             $clientButton.FlatAppearance.BorderSize = 0
@@ -3104,16 +3277,18 @@ namespace Rmr {
     }.GetNewClosure()
 
     $requestStop = {
+        param([bool]$Restart = $false)
         if ($state.StopRequested -or $state.Exited) { return }
-        & $setReadyState $false 'Stopping...'
         try {
             [System.IO.File]::WriteAllText($state.StopPath, $state.RunId, [System.Text.Encoding]::ASCII)
             $state.StopRequested = $true
+            if ($Restart) { $state.RestartDeadline = [DateTime]::UtcNow.AddMinutes(2) }
+            & $setReadyState $false 'Stopping...'
             $stageLabel.Text = 'Stopping Red Moon Rising'
             $form.Text = 'Red Moon Rising | Stopping'
             $statusEyebrow.Text = 'SAFE SHUTDOWN'
             $messageLabel.Text = 'Finishing the current operation and shutting down the database. Please keep this window open.'
-            $setupHint.Text = 'Your universe will be kept for the next launch.'
+            $setupHint.Text = if ($Restart) { 'The server will start again after shutdown.' } else { 'Your universe will be kept for the next launch.' }
             $stopButton.Enabled = $false
             $stopButton.Text = 'Stopping...'
             $dashboardButton.Enabled = $false
@@ -3141,6 +3316,9 @@ namespace Rmr {
         try { Start-Process explorer.exe -ArgumentList ('"{0}"' -f $Logs) | Out-Null }
         catch { $messageLabel.Text = 'Logs are saved in ' + $Logs }
     }.GetNewClosure())
+    $restartButton.Add_Click({
+        if ($state.Ready) { & $requestStop $true }
+    }.GetNewClosure())
     $stopButton.Add_Click({
         if ($state.Exited) { $form.Close() } else { & $requestStop }
     }.GetNewClosure())
@@ -3149,9 +3327,39 @@ namespace Rmr {
         if (-not $state.Exited -and $null -ne $state.Process) {
             $eventArgs.Cancel = $true
             $state.CloseRequested = $true
+            $state.RestartDeadline = $null
             & $requestStop
         }
     }.GetNewClosure())
+
+    $workerStopped = ${function:Test-RmrWorkerStopped}
+    $startWorker = {
+        param([bool]$Restart = $false)
+        # The worker owns stale-state cleanup after obtaining its exclusive lock.
+        # Environment variables avoid injecting a checkout path into executable code.
+        $bootstrap = '[AppContext]::SetSwitch("Switch.System.IO.UseLegacyPathHandling",$false); [AppContext]::SetSwitch("Switch.System.IO.BlockLongPaths",$false); $self = $env:RMR_LAUNCHER; $source = [IO.File]::ReadAllText($self); $parts = $source -split ''(?m)^#==RMR_POWERSHELL==\r?$'', 2; if ($parts.Count -ne 2) { throw "Launcher payload is missing" }; & ([ScriptBlock]::Create($parts[1]))'
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
+        $oldMode = $env:RMR_MODE
+        $oldLauncher = $env:RMR_LAUNCHER
+        $oldUiPid = $env:RMR_UI_PID
+        $oldRunId = $env:RMR_RUN_ID
+        $oldAutoClient = $env:RMR_NO_AUTO_CLIENT
+        try {
+            $env:RMR_MODE = 'worker'
+            $env:RMR_RUN_ID = $state.RunId
+            if ($Restart) { $env:RMR_NO_AUTO_CLIENT = '1' }
+            $env:RMR_LAUNCHER = $Self
+            $env:RMR_UI_PID = [string]$PID
+            $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+            $state.Process = Start-Process -FilePath $powershell -ArgumentList @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded) -WorkingDirectory $Root -WindowStyle Hidden -PassThru
+        } finally {
+            $env:RMR_MODE = $oldMode
+            $env:RMR_LAUNCHER = $oldLauncher
+            $env:RMR_UI_PID = $oldUiPid
+            $env:RMR_RUN_ID = $oldRunId
+            $env:RMR_NO_AUTO_CLIENT = $oldAutoClient
+        }
+    }.GetNewClosure()
 
     $timer = New-Object System.Windows.Forms.Timer
     $timer.Interval = 250
@@ -3209,7 +3417,7 @@ namespace Rmr {
                         $tooltip.SetToolTip($connectionLabel, $state.ClientPath)
                     }
                     $verifiedReady = [bool]$status.ready -and -not [bool]$status.error -and -not [bool]$status.stopped -and
-                        -not $state.StopRequested -and -not $state.Exited -and [bool]$state.ClientPath -and
+                        -not $state.StopRequested -and -not $state.Exited -and
                         $null -ne $state.Process -and -not $state.Process.HasExited
                     $disabledText = if ($state.StopRequested) { 'Stopping...' } elseif ($status.error -or $status.stopped) { 'Server offline' } else { 'Preparing...' }
                     & $setReadyState $verifiedReady $disabledText
@@ -3217,7 +3425,7 @@ namespace Rmr {
                         $stageLabel.ForeColor = $cyan
                         $statusEyebrow.Text = 'SETUP COMPLETE'
                         $stageLabel.Text = 'READY TO LAUNCH'
-                        $messageLabel.Text = 'All setup is complete. Your server is online. Click Launch EVE below to play.'
+                        $messageLabel.Text = if ($state.ClientPath) { 'Your server is online. Click Launch EVE below to play.' } else { 'Your server is online. Open the dashboard to manage it.' }
                         $tooltip.SetToolTip($messageLabel, $messageLabel.Text)
                         $progressCaption.Text = 'READY TO LAUNCH'
                         $progressPercent.Text = 'READY'
@@ -3289,6 +3497,37 @@ namespace Rmr {
         if ($null -ne $state.Process -and -not $state.Exited) {
             $state.Process.Refresh()
             if ($state.Process.HasExited) {
+                if ($state.RestartDeadline -and [DateTime]::UtcNow -lt $state.RestartDeadline) {
+                    # An attached window tracks the game process, which exits
+                    # before its worker finishes shutting down PostgreSQL.
+                    if (-not (& $workerStopped $Runtime)) { return }
+                    $state.RestartDeadline = $null
+                    try {
+                        $previous = [IO.File]::ReadAllText($state.StatusPath) | ConvertFrom-Json
+                        if ($previous.runId -ne $state.RunId -or $previous.error -or -not $previous.stopped) {
+                            throw 'The previous session did not shut down cleanly.'
+                        }
+                        $state.Process.Dispose()
+                        $state.Process = $null
+                        $state.Attached = $false
+                        $state.StopRequested = $false
+                        $state.RunId = [Guid]::NewGuid().ToString('N')
+                        $state.LastStatus = ''
+                        $state.LastLogLength = -1L
+                        $state.LastClientRequest = ''
+                        & $startWorker $true
+                        $stopButton.Enabled = $true
+                        $stopButton.Text = 'Stop server'
+                        $stageLabel.Text = 'Restarting Red Moon Rising'
+                        $messageLabel.Text = 'Starting a new server session.'
+                        $form.Text = 'Red Moon Rising | Restarting'
+                        return
+                    } catch {
+                        $restartError = $_.Exception.Message
+                    }
+                } elseif ($state.RestartDeadline) {
+                    $restartError = 'Timed out waiting for shutdown.'
+                }
                 $state.Exited = $true
                 & $setReadyState $false 'Server offline'
                 $dashboardButton.Enabled = $false
@@ -3301,7 +3540,10 @@ namespace Rmr {
                 $progressCaption.Text = 'SESSION FINISHED'
                 $progressPercent.Text = 'OFFLINE'
                 $setupHint.Text = 'Close this window when you are ready.'
-                if ($state.Attached -or $state.Process.ExitCode -eq 0) {
+                if ($restartError) {
+                    $stageLabel.Text = 'Could not restart Red Moon Rising'
+                    $messageLabel.Text = $restartError
+                } elseif ($state.Attached -or $state.Process.ExitCode -eq 0) {
                     $stageLabel.Text = 'Red Moon Rising stopped'
                     $messageLabel.Text = 'Your database is kept for next time. Run start.bat whenever you are ready.'
                 } else {
@@ -3351,32 +3593,11 @@ namespace Rmr {
                     }
                 }
             }
-            $lockPath = Join-Path $Runtime 'launcher.lock'
-            try {
-                $probe = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
-                $probe.Dispose()
-            } catch {
+            if (-not (& $workerStopped $Runtime)) {
                 throw 'Another Red Moon Rising launcher is already running from this folder. Use its window to manage the server.'
             }
 
-            # The worker owns stale-state cleanup after obtaining its exclusive lock.
-            # Environment variables avoid injecting a checkout path into executable code.
-            $bootstrap = '[AppContext]::SetSwitch("Switch.System.IO.UseLegacyPathHandling",$false); [AppContext]::SetSwitch("Switch.System.IO.BlockLongPaths",$false); $self = $env:RMR_LAUNCHER; $source = [IO.File]::ReadAllText($self); $parts = $source -split ''(?m)^#==RMR_POWERSHELL==\r?$'', 2; if ($parts.Count -ne 2) { throw "Launcher payload is missing" }; & ([ScriptBlock]::Create($parts[1]))'
-            $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
-            $oldMode = $env:RMR_MODE
-            $oldLauncher = $env:RMR_LAUNCHER
-            $oldUiPid = $env:RMR_UI_PID
-            try {
-                $env:RMR_MODE = 'worker'
-                $env:RMR_LAUNCHER = $Self
-                $env:RMR_UI_PID = [string]$PID
-                $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-                $state.Process = Start-Process -FilePath $powershell -ArgumentList @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded) -WorkingDirectory $Root -WindowStyle Hidden -PassThru
-            } finally {
-                $env:RMR_MODE = $oldMode
-                $env:RMR_LAUNCHER = $oldLauncher
-                $env:RMR_UI_PID = $oldUiPid
-            }
+            & $startWorker
             $timer.Start()
         } catch {
             $state.Exited = $true
@@ -3406,6 +3627,17 @@ if ($env:RMR_MODE -eq 'stop') {
     [IO.File]::WriteAllText($StopPath, 'stop', $Utf8)
     Write-Host 'Stop requested. The launcher will save and close its database.'
     exit 0
+}
+if ($env:RMR_RESTART -eq '1' -and -not (Test-RmrWorkerStopped $Runtime)) {
+    [IO.File]::WriteAllText($StopPath, 'stop', $Utf8)
+    Write-Host 'Restart requested. Waiting for the current server to save and stop...'
+    $deadline = [DateTime]::UtcNow.AddMinutes(2)
+    while (-not (Test-RmrWorkerStopped $Runtime)) {
+        if ([DateTime]::UtcNow -ge $deadline) { throw 'Timed out waiting for the current server to shut down.' }
+        Start-Sleep -Milliseconds 250
+    }
+    $previous = [IO.File]::ReadAllText($StatusPath) | ConvertFrom-Json
+    if ($previous.error -or -not $previous.stopped) { throw 'The previous session did not shut down cleanly. See logs/launcher.log.' }
 }
 if ($env:RMR_MODE -eq 'ui') {
     try { Start-LauncherUi }

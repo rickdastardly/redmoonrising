@@ -8,32 +8,55 @@
   <script type="module" src="/app.js"></script>
 </head>
 <body>
-  <header class="masthead"><div class="brand-mark">R</div><div><p class="eyebrow">NEW EDEN / LIVE INTELLIGENCE</p><h1>Red Moon Rising</h1><p class="subtitle">A living view of the universe</p></div><span class="live-pill">● LIVE SERVER</span></header>
-  <nav class="neocom" aria-label="Dashboard pages">
-    <a href="#home" title="Home">HOME</a>
-    <a href="#status" title="Server Status">STA</a>
-    <a href="#wars" title="War Report">WAR</a>
-    <a href="#pilots" title="Pilots Online">PIL</a>
-    <a href="#systems" title="Busiest Systems">MAP</a>
-    <a href="#alliances" title="Alliances">ALL</a>
-    <a href="#corporations" title="Corporations">CRP</a>
-    <a href="#sieges" title="Sieges">SIE</a>
-    <a href="#news" title="Galactic News">NEW</a>
-    <a href="#killboard" title="Killboard">KBD</a>
-    <a href="#downtime" title="Downtime">DT</a>
-    <a href="#market" title="Market">MKT</a>
-    <a href="#relations" title="Standings">STD</a>
-    <a href="#follow" title="Follow a Pilot">FOL</a>
-    <a href="#control" title="Events and Controls">CTL</a>
-    <a href="#users" title="User Accounts">USR</a>
-    <div class="clock" title="EVE time (UTC)"><span id="clock-time">--:--</span><span id="clock-date"></span></div>
-  </nav>
+  <a class="skip-link" href="#main-content">Skip to content</a>
+  <aside class="sidebar" aria-label="Red Moon Rising">
+    <a class="brand" href="#home">
+      <img class="brand-mark" src="/eve-icon.png" width="36" height="36" alt="">
+      <span><strong>Red Moon Rising</strong><small>Server administration</small></span>
+    </a>
+    <nav class="neocom" aria-label="Dashboard pages">
+      <div class="nav-group">
+        <p>Workspace</p>
+        <a href="#home">Overview</a>
+        <a href="#status">Server status</a>
+        <a href="#pilots">Pilots online</a>
+        <a href="#news">Galactic news</a>
+      </div>
+      <div class="nav-group">
+        <p>Universe</p>
+        <a href="#wars">War report</a>
+        <a href="#sieges">Sieges</a>
+        <a href="#systems">Busiest systems</a>
+        <a href="#alliances">Alliances</a>
+        <a href="#corporations">Corporations</a>
+        <a href="#killboard">Killboard</a>
+        <a href="#market">Market</a>
+        <a href="#relations">Standings</a>
+        <a href="#follow">Follow a pilot</a>
+      </div>
+      <div class="nav-group">
+        <p>Administration</p>
+        <a href="#control">Events and controls</a>
+        <a href="#users">User accounts</a>
+        <a href="#downtime">Server downtime</a>
+      </div>
+    </nav>
+    <div class="clock" title="EVE time (UTC)"><span>Universe time</span><span id="clock-time">--:--</span><span id="clock-date"></span></div>
+  </aside>
 
-  <main class="desktop">
-    <div class="page-heading"><p class="eyebrow" id="page-kicker">COMMAND CENTER</p><h2 id="page-title">Home</h2><p id="page-description">Live activity across New Eden.</p></div>
-    <div class="section-title"><span>01 / COMMAND OVERVIEW</span><strong>Universe at a glance</strong></div>
+  <main class="desktop" id="main-content" tabindex="-1">
+    <header class="page-heading">
+      <div><p class="eyebrow" id="page-kicker">COMMAND CENTER</p><h1 id="page-title">Command overview</h1><p id="page-description">Live activity across New Eden.</p></div>
+      <span class="live-pill" id="connection-state" data-state="connecting" role="status">Connecting</span>
+    </header>
+    <section class="overview-metrics" id="overview-metrics" aria-label="Live server metrics">
+      <div class="metric"><span>Players online</span><strong id="metric-players">—</strong><small>Connected capsuleers</small></div>
+      <div class="metric"><span>Simulated online</span><strong id="metric-bots">—</strong><small id="metric-simulation">Simulation activity</small></div>
+      <div class="metric"><span>Active wars</span><strong id="metric-wars">—</strong><small>Across New Eden</small></div>
+      <div class="metric"><span>Server uptime</span><strong id="metric-uptime">—</strong><small>Current server session</small></div>
+    </section>
     <section class="window narrow" id="w-status">
-      <header class="caption"><span class="glyph"></span><h2>Server Status</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Server Status</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
       <div class="body">
         <p class="statusline" id="statusline">STATUS: CONNECTING…</p>
         <dl class="info" id="status"></dl>
@@ -41,32 +64,32 @@
     </section>
 
     <section class="window wide" id="w-wars">
-      <header class="caption"><span class="glyph"></span><h2>War Report</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
+      <header class="caption"><span class="glyph"></span><h2>War Report</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
       <div class="body"><table id="wars"></table></div>
     </section>
 
     <section class="window" id="w-pilots">
-      <header class="caption"><span class="glyph"></span><h2>Pilots Online</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Pilots Online</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
       <div class="body"><table id="players"></table></div>
     </section>
 
     <section class="window" id="w-systems">
-      <header class="caption"><span class="glyph"></span><h2>Busiest Systems</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Busiest Systems</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
       <div class="body"><table id="systems"></table></div>
     </section>
 
     <section class="window" id="w-alliances">
-      <header class="caption"><span class="glyph"></span><h2>Alliances</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Alliances</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
       <div class="body"><table id="alliances"></table></div>
     </section>
 
     <section class="window" id="w-corporations">
-      <header class="caption"><span class="glyph"></span><h2>Corporations</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Corporations</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
       <div class="body"><table id="corporations"></table></div>
     </section>
 
     <section class="window wide" id="w-sieges">
-      <header class="caption"><span class="glyph"></span><h2>Sieges</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Sieges</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
       <div class="body"><table id="sieges"></table></div>
     </section>
 
@@ -85,11 +108,26 @@
     </section>
 
     <section class="window" id="w-news">
-      <header class="caption"><span class="glyph"></span><h2>Galactic News</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Galactic News</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
       <div class="body"><table id="news"></table></div>
     </section>
 
     <div class="section-title"><span>02 / CONFLICT INTELLIGENCE</span><strong>Killboard & reports</strong></div>
+
+    <section class="window wide" id="w-killboard">
+      <header class="caption"><span class="glyph"></span><h2>Killboard statistics</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
+      <div class="body">
+        <form id="killboard-search-form" class="killboard-search"><input id="killboard-search" type="search" placeholder="Search pilots across New Eden" aria-label="Search pilots" required minlength="2"><button type="submit">Search</button></form>
+        <div id="killboard-search-results" class="search-results"></div>
+        <div id="killboard-stats" class="killboard-stats"></div>
+        <h3 class="table-heading">Highest-value hulls lost · last 7 days</h3><div id="killboard-featured" class="featured-kills"></div>
+        <h3 class="table-heading">Top killers · all time</h3><table id="killboard-pilots"></table>
+        <h3 class="table-heading">Corporations & alliances</h3>
+        <table id="killboard"></table>
+        <h3 class="table-heading">Most lost hulls</h3>
+        <table id="killboard-ships"></table>
+      </div>
+    </section>
 
     <section class="window wide" id="w-kills">
       <header class="caption"><span class="glyph"></span><h2>Recent killmails</h2><div class="kill-search"><input id="kill-search" type="search" placeholder="Search these kills" aria-label="Search kills"></div></header>
@@ -104,21 +142,6 @@
     <section class="window wide" id="w-pilot-profile" hidden>
       <header class="caption"><span class="glyph"></span><h2>Pilot record</h2><a class="caption-link" href="#killboard">← Killboard</a></header>
       <div class="body" id="pilot-profile"></div>
-    </section>
-
-    <section class="window wide" id="w-killboard">
-      <header class="caption"><span class="glyph"></span><h2>Killboard statistics</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
-      <div class="body">
-        <form id="killboard-search-form" class="killboard-search"><input id="killboard-search" type="search" placeholder="Search pilots across New Eden" aria-label="Search pilots" required minlength="2"><button type="submit">Search</button></form>
-        <div id="killboard-search-results" class="search-results"></div>
-        <div id="killboard-stats" class="killboard-stats"></div>
-        <h3 class="table-heading">Highest-value hulls lost · last 7 days</h3><div id="killboard-featured" class="featured-kills"></div>
-        <h3 class="table-heading">Top killers · all time</h3><table id="killboard-pilots"></table>
-        <h3 class="table-heading">Corporations & alliances</h3>
-        <table id="killboard"></table>
-        <h3 class="table-heading">Most lost hulls</h3>
-        <table id="killboard-ships"></table>
-      </div>
     </section>
 
     <section class="window wide" id="w-downtime">
@@ -136,7 +159,7 @@
     </section>
 
     <section class="window wide" id="w-market">
-      <header class="caption"><span class="glyph"></span><h2>Market</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Market</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
       <div class="body">
         <div class="toolbar"><label>Hub <select id="hub"></select></label><span class="note" id="market-summary"></span></div>
         <table id="market"></table>
@@ -145,7 +168,7 @@
     </section>
 
     <section class="window" id="w-relations">
-      <header class="caption"><span class="glyph"></span><h2>Standings</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Standings</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
       <div class="body">
         <p class="note" id="relations-summary"></p>
         <table id="relations"></table>
@@ -154,7 +177,7 @@
     </section>
 
     <section class="window wide" id="w-follow">
-      <header class="caption"><span class="glyph"></span><h2>Follow a Pilot</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Follow a Pilot</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
       <div class="body">
         <div class="toolbar">
           <input id="pilot-search" type="search" placeholder="Pilot name" autocomplete="off">
@@ -166,7 +189,7 @@
     </section>
 
     <section class="window" id="w-control">
-      <header class="caption"><span class="glyph"></span><h2>Events and Controls</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Events and Controls</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
       <div class="body">
         <p class="note" id="controls-state"></p>
         <div class="toolbar" id="event-buttons">

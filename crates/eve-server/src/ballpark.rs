@@ -336,6 +336,8 @@ pub struct Park {
     pub landed: Vec<i64>,
     /// Ships that entered warp since the last heartbeat update.
     pub entered_warp: Vec<i64>,
+    /// Ships whose alignment a mobile disruptor interrupted.
+    pub bubble_stopped: Vec<i64>,
     /// Asteroids, by ID.
     pub rocks: BTreeMap<i64, Rock>,
     /// Cargo containers floating here, by item ID.
@@ -383,6 +385,7 @@ impl Park {
             visible_objects: BTreeMap::new(),
             landed: Vec::new(),
             entered_warp: Vec::new(),
+            bubble_stopped: Vec::new(),
             rocks: BTreeMap::new(),
             cans: BTreeMap::new(),
             structures: BTreeMap::new(),
@@ -426,6 +429,19 @@ impl Park {
         self.ships.values().filter(|s| s.is_player())
     }
 
+    pub fn inside_force_field(&self, pos: Vec3) -> bool {
+        self.structures.values().any(|s| {
+            s.field.as_ref().is_some_and(|f| (pos - s.pos).len_sq() < f.radius * f.radius)
+        })
+    }
+
+    /// Force fields protect ships. The tower itself remains targetable.
+    pub fn field_blocks_lock(&self, source: i64, target: i64) -> bool {
+        [source, target].into_iter().any(|id| {
+            self.ships.get(&id).is_some_and(|ship| self.inside_force_field(ship.pos))
+        })
+    }
+
     /// Surface-to-surface distance between two balls.
     pub fn surface_distance(&self, a: i64, b: i64) -> Option<f64> {
         let (pa, ra) = self.ball(a)?;
@@ -444,6 +460,10 @@ impl Park {
         }
     }
 
+    pub fn inside_warp_bubble(&self, pos: Vec3) -> bool {
+        inside_warp_bubble(&self.structures, pos, crate::bulkdata::filetime_now())
+    }
+
     /// Gives a ship a new command at the park's current tick, as destiny's
     /// FollowBall, Orbit, GotoPoint, GotoDirection, WarpTo and Stop take it.
     pub fn command(&mut self, ship_id: i64, command: Command) {
@@ -452,10 +472,15 @@ impl Park {
         // leaves its AU/s velocity on a normal ball, launching it across space.
         if ship.in_warp() { return; }
         let command = match command {
+            Command::Warp { .. } if inside_warp_bubble(&self.structures, ship.pos, crate::bulkdata::filetime_now()) => return,
             // Stop on a stopped ship changes nothing (0x10017800).
             Command::Stop if ship.command == Command::Stop && ship.warp.is_none() => return,
             // Too close to warp: destiny goes there instead (0x10017bb0).
             Command::Warp { target, .. } if (target - ship.pos).len_sq() < MIN_WARP_DISTANCE_SQ => Command::Point(target),
+            Command::Warp { target, range } => {
+                bubble_warp_command(&self.structures, ship.pos, target, range, crate::bulkdata::filetime_now())
+                    .unwrap_or(Command::Warp { target, range })
+            }
             other => other,
         };
         ship.warp = None;
@@ -537,6 +562,7 @@ impl Park {
         // destiny walks its balls in ID order, and a warp that starts changes
         // its followers on the spot, so later ones see it the same tick.
         let ids: Vec<i64> = self.ships.keys().copied().collect();
+        let filetime = crate::bulkdata::filetime_now();
         for id in ids {
             let Some(ship) = self.ships.get_mut(&id) else { continue };
             let mut warped = false;
@@ -558,6 +584,11 @@ impl Park {
                     None => lose_target(ship),
                 },
                 Command::Warp { range, .. } => match ship.warp {
+                    Some(WarpState::Aligning) if inside_warp_bubble(&self.structures, ship.pos, filetime) => {
+                        ship.warp = None;
+                        self.bubble_stopped.push(id);
+                        lose_target(ship)
+                    }
                     Some(WarpState::Aligning) if aligned(ship) => {
                         enter_warp(ship, range, now);
                         warped = true;
@@ -663,6 +694,47 @@ impl Park {
             }
         }
         out
+    }
+}
+
+fn inside_warp_bubble(structures: &BTreeMap<i64, crate::pos::Structure>, pos: Vec3, now: i64) -> bool {
+    structures.values().any(|s| {
+        s.warp_bubble(now).is_some_and(|radius| (pos - s.pos).len_sq() <= radius * radius)
+    })
+}
+
+/// End a warp just inside the first active sphere it enters.
+fn bubble_warp_command(
+    structures: &BTreeMap<i64, crate::pos::Structure>, from: Vec3, target: Vec3, range: f64, now: i64,
+) -> Option<Command> {
+    let course = target - from;
+    let reach = course.len() - f64::from(range as f32);
+    if !reach.is_finite() || reach <= 0.0 {
+        return None;
+    }
+    let direction = course.unit();
+    let (entry, half_chord) = structures.values().filter_map(|s| {
+        let radius = s.warp_bubble(now)?;
+        let offset = s.pos - from;
+        let center = offset.dot(direction);
+        let perpendicular = offset - direction * center;
+        let chord_sq = radius * radius - perpendicular.len_sq();
+        if chord_sq <= 0.0 {
+            return None;
+        }
+        let half_chord = chord_sq.sqrt();
+        let entry = center - half_chord;
+        (entry >= 0.0 && entry < reach).then_some((entry, half_chord))
+    }).min_by(|a, b| a.0.total_cmp(&b.0))?;
+
+    let landing = (entry + 1.0_f64.min(half_chord)).min(reach);
+    if landing * landing < MIN_WARP_DISTANCE_SQ {
+        // Destiny interprets a nearby warp point as an approach. Aim beyond
+        // that threshold and use the warp range to stop at the bubble edge.
+        let aim = MIN_WARP_DISTANCE_SQ.sqrt() + 10_000.0;
+        Some(Command::Warp { target: from + direction * aim, range: aim - landing })
+    } else {
+        Some(Command::Warp { target: from + direction * landing, range: 0.0 })
     }
 }
 

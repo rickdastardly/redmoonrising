@@ -258,6 +258,7 @@ mod tests {
             delays: [0; 3],
             vitals: crate::pos::vitals(None, 0),
             signature: 0.0,
+            warp_disruption_radius: 0.0,
             last_attacker: None,
             reinforce_asked: false,
             field_radius: 30_000.0,

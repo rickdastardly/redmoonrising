@@ -101,7 +101,9 @@ impl PendingDock {
         }
 
         if gap > DOCK_WARP_DISTANCE {
-            if ship.fight.as_ref().is_some_and(|fight| fight.afflictions.scrambled >= 1.0) {
+            if park.inside_warp_bubble(ship.pos)
+                || ship.fight.as_ref().is_some_and(|fight| fight.afflictions.scrambled >= 1.0)
+            {
                 return Err("Your ship cannot warp to the station while warp scrambled.");
             }
             let target = space::station_warp_point(ship, at, radius, 0.0);

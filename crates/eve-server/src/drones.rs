@@ -9,7 +9,7 @@
 //! hears what it is doing as OnDroneStateChange, with the activity states of
 //! drone.py (idle, fighting, mining, returning...).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use eve_marshal::Value;
 use tokio_postgres::Client;
@@ -37,6 +37,9 @@ const SCOOP_RANGE: f64 = 2_500.0;
 /// How far beyond its ship's hull a drone comes out.
 const LAUNCH_CLEARANCE: f64 = 150.0;
 const THINK_MS: i64 = 1_000;
+const COMBAT_DRONE_GROUP: i64 = 100;
+/// Legacy combat drones omit scan resolution. Give them frigate-class sensors.
+const DEFAULT_COMBAT_DRONE_SCAN_RESOLUTION: f64 = 400.0;
 const FIGHTER_GROUP: i64 = 549;
 const FIGHTER_ARRIVAL_MS: i64 = 60_000;
 const CONTROLLER_GRID_RANGE: f64 = 1_000_000.0;
@@ -74,6 +77,7 @@ pub struct Drone {
     /// Whether the miner has run since the last Mine order.
     mined: bool,
     orbit: f64,
+    cruise_fraction: f64,
     next_think_ms: i64,
     transit: Option<Transit>,
 }
@@ -133,14 +137,18 @@ pub async fn launch(ctx: &Ctx<'_>, ids: Vec<i64>) -> Outcome {
     let (Some(char_id), Some(ship_id), Some(system)) = (ctx.session.char_id, ctx.session.ship_id, ctx.session.solar_system_id) else {
         return Outcome::custom("Drones can only be launched in space.");
     };
-    let (ship_pos, ship_radius, out_already) = {
+    let (ship_pos, ship_radius, out_already, active) = {
         let world = ctx.world.lock();
         let Some(park) = world.parks.get(&system) else { return Outcome::custom("You are not in space.") };
         let Some(ship) = park.ships.get(&ship_id) else { return Outcome::custom("You are not in space.") };
+        if park.inside_force_field(ship.pos) {
+            return Outcome::custom("You cannot launch drones inside a starbase force field.");
+        }
         let out = park.ships.values().filter(|s| s.drone.as_ref().is_some_and(|d| d.owner == char_id)).count();
-        (ship.pos, ship.stats.radius, out)
+        let active = ship.fight.iter().flat_map(|f| &f.modules).map(|m| m.module_id).collect();
+        (ship.pos, ship.stats.radius, out, active)
     };
-    let limit = match max_drones(ctx, char_id, ship_id).await {
+    let limit = match max_drones(ctx, char_id, ship_id, &active).await {
         Ok(l) => l,
         Err(e) => {
             error!("launching drones: {}", crate::logging::chain(&e));
@@ -248,9 +256,9 @@ pub async fn launch(ctx: &Ctx<'_>, ids: Vec<i64>) -> Outcome {
 }
 
 /// How many drones the pilot can run: the character's computed
-/// maxActiveDrones, including carrier skills and online control units.
-async fn max_drones(ctx: &Ctx<'_>, char_id: i64, ship_id: i64) -> Result<usize, tokio_postgres::Error> {
-    let loadout = crate::dogma::Loadout::load(ctx.db, ctx.dogma, char_id, Some(ship_id), &Default::default()).await?;
+/// maxActiveDrones, including carrier skills and active control units.
+async fn max_drones(ctx: &Ctx<'_>, char_id: i64, ship_id: i64, active: &HashSet<i64>) -> Result<usize, tokio_postgres::Error> {
+    let loadout = crate::dogma::Loadout::load(ctx.db, ctx.dogma, char_id, Some(ship_id), active).await?;
     Ok(loadout.character().map_or(0.0, |c| loadout.value(c, attr::MAX_ACTIVE_DRONES)).max(0.0) as usize)
 }
 
@@ -262,6 +270,9 @@ fn make(t: &npc::NpcType, id: i64, pilot: Pilot, client_id: i64, controller: i64
     let mass = if t.mass > 0.0 { t.mass } else { 3_000.0 };
     let stats = ShipStats::new(t.radius.max(5.0), mass, agility, top, 1.0);
     let mut fighter = npc::entity_fighter(t, 60_000.0, 1, top, now);
+    if t.group_id == COMBAT_DRONE_GROUP && a(attr::SCAN_RESOLUTION) <= 0.0 {
+        fighter.scan_resolution = DEFAULT_COMBAT_DRONE_SCAN_RESOLUTION;
+    }
     if fighter.vitals.hull_max <= 1.0 {
         fighter.vitals.hull_max = 50.0;
     }
@@ -272,16 +283,34 @@ fn make(t: &npc::NpcType, id: i64, pilot: Pilot, client_id: i64, controller: i64
         m
     });
     let orbit = if a(attr::ORBIT_RANGE) > 0.0 { a(attr::ORBIT_RANGE) } else { a(attr::ENTITY_FLY_RANGE).max(500.0) };
+    let mut weapons = npc::weapons(t, &HashMap::new(), id, rng);
+    let mut cruise_fraction = 1.0;
+    if t.group_id == COMBAT_DRONE_GROUP {
+        let cruise = a(attr::ENTITY_CRUISE_SPEED);
+        if cruise > 0.0 {
+            cruise_fraction = (cruise / top).min(1.0);
+        }
+        for weapon in &mut weapons {
+            if let Action::Turret { gun, .. } = weapon.action {
+                let range = a(attr::ENTITY_ATTACK_RANGE);
+                let range = if range > 0.0 { range } else { gun.optimal + gun.falloff };
+                if range > 0.0 {
+                    weapon.reach = Some((range, 0.0));
+                }
+            }
+        }
+    }
     let drone = Drone {
         owner: pilot.char_id,
         client_id,
         controller: Some(controller),
         order: Order::Idle,
         activity: activity::IDLE,
-        weapons: npc::weapons(t, &HashMap::new(), id, rng),
+        weapons,
         miner,
         mined: false,
         orbit,
+        cruise_fraction,
         next_think_ms: now,
         transit: None,
     };
@@ -602,12 +631,24 @@ fn think_one(park: &mut Park, id: i64, now: i64, out: &mut Out) {
     let tick = park.tick;
     let system = park.solar_system_id;
     let signature = work.and_then(|t| park.ships.get(&t)).and_then(|s| s.fight.as_ref()).map_or(100.0, |f| f.sig());
+    let blocked = work.is_some_and(|t| park.field_blocks_lock(id, t));
+    let distance = work.and_then(|t| park.surface_distance(id, t)).unwrap_or(f64::INFINITY);
+    let within_reach = |weapon: &Active| {
+        !matches!(weapon.action, Action::Turret { .. }) || weapon.reach.is_none_or(|(range, _)| distance <= range)
+    };
+    let speed = if matches!(order, Order::Engage(_))
+        && drone.weapons.iter().any(|w| matches!(w.action, Action::Turret { .. }) && within_reach(w))
+    {
+        drone.cruise_fraction
+    } else {
+        1.0
+    };
     let Some(ship) = park.ships.get_mut(&id) else { return };
     let Some(fight) = ship.fight.as_mut() else { return };
     match work {
         Some(t) => {
             fight.locks.retain(|l, _| *l == t);
-            if !fight.locks.contains_key(&t) {
+            if !blocked && !fight.locks.contains_key(&t) {
                 let ms = (combat::lock_seconds(fight.scan_res(), signature) * 1_000.0) as i64;
                 fight.locks.insert(t, Lock::Pending(now + ms));
             }
@@ -615,7 +656,7 @@ fn think_one(park: &mut Park, id: i64, now: i64, out: &mut Out) {
         None => fight.locks.clear(),
     }
     let mut started = Vec::new();
-    if let Some(t) = work.filter(|t| fight.is_locked(*t)) {
+    if let Some(t) = work.filter(|t| !blocked && fight.is_locked(*t)) {
         let tools: Vec<Active> = match order {
             Order::Mine { repeat, .. } if !drone.mined => {
                 drone.miner.iter().cloned().map(|mut m| {
@@ -623,7 +664,7 @@ fn think_one(park: &mut Park, id: i64, now: i64, out: &mut Out) {
                     m
                 }).collect()
             }
-            Order::Engage(_) => drone.weapons.clone(),
+            Order::Engage(_) => drone.weapons.iter().filter(|w| within_reach(w)).cloned().collect(),
             _ => Vec::new(),
         };
         for mut m in tools {
@@ -656,9 +697,9 @@ fn think_one(park: &mut Park, id: i64, now: i64, out: &mut Out) {
         out.destiny(system, crate::fight::module_fx(tick, id, m, true));
     }
     let course = course.unwrap_or(Command::Stop);
-    if ship.command != course {
+    if ship.command != course || ship.speed_fraction != speed {
         park.command(id, course);
-        park.set_speed_fraction(id, 1.0);
+        park.set_speed_fraction(id, speed);
         if let Some(s) = park.ships.get(&id) {
             space::queue_ship_entries(park, id, space::course_entries(s, tick), out);
             if s.command == Command::Stop {
@@ -764,7 +805,7 @@ mod tests {
             let mut ship = Ship::new(id, 2, stats, pilot(23055, group), Vec3::new(1_000.0, 0.0, 0.0), Vec3::ZERO);
             ship.drone = Some(Drone { owner: 200, client_id: 2, controller: Some(30), order: Order::Idle,
                 activity: activity::IDLE, weapons: Vec::new(), miner: None, mined: false,
-                orbit: 1_000.0, next_think_ms: 0, transit: None });
+                orbit: 1_000.0, cruise_fraction: 1.0, next_think_ms: 0, transit: None });
             park.ships.insert(id, ship);
         }
         let mut out = Out::default();
@@ -783,7 +824,8 @@ mod tests {
         let fighter_pilot = Pilot { type_id: 23057, group_id: FIGHTER_GROUP, name: "Einherji".into(), char_id: 200, corp_id: 2, alliance_id: None, security: 0.0, bounty: 0.0 };
         let mut fighter = Ship::new(20, 2, stats, fighter_pilot, Vec3::new(1_000.0, 0.0, 0.0), Vec3::ZERO);
         fighter.drone = Some(Drone { owner: 200, client_id: 2, controller: Some(30), order: Order::Engage(10), activity: activity::COMBAT,
-            weapons: Vec::new(), miner: None, mined: false, orbit: 1_000.0, next_think_ms: 0, transit: None });
+            weapons: Vec::new(), miner: None, mined: false, orbit: 1_000.0, cruise_fraction: 1.0,
+            next_think_ms: 0, transit: None });
         park.ships.insert(20, fighter);
         let mut out = Out::default();
         on_warp_entered(&mut park, 10, 0, &mut out);
@@ -811,7 +853,7 @@ mod tests {
             name: "Dragonfly".into(), ..pilot(200) }, Vec3::new(1_000.0, 0.0, 0.0), Vec3::ZERO);
         fighter.drone = Some(Drone { owner: 200, client_id: 2, controller: Some(30), order: Order::Engage(10),
             activity: activity::COMBAT, weapons: Vec::new(), miner: None, mined: false, orbit: 1_000.0,
-            next_think_ms: 0, transit: None });
+            cruise_fraction: 1.0, next_think_ms: 0, transit: None });
         park.ships.insert(20, fighter);
         let mut out = Out::default();
         on_warp_entered(&mut park, 10, 0, &mut out);
@@ -840,7 +882,7 @@ mod tests {
         let mut fighter = Ship::new(20, 2, stats, fighter_pilot, Vec3::ZERO, Vec3::ZERO);
         fighter.drone = Some(Drone { owner: 200, client_id: 2, controller: Some(30), order: Order::Engage(10),
             activity: activity::DEPARTING_2, weapons: Vec::new(), miner: None, mined: false, orbit: 1_000.0,
-            next_think_ms: 0, transit: Some(Transit { target: 10, arrival_ms: None }) });
+            cruise_fraction: 1.0, next_think_ms: 0, transit: Some(Transit { target: 10, arrival_ms: None }) });
         park.ships.insert(20, fighter);
         let mut out = Out::default();
         arrive_following_fighters(&mut park, 1_000, &mut out);
@@ -849,6 +891,69 @@ mod tests {
         arrive_following_fighters(&mut park, 61_000, &mut out);
         assert!(!in_transit(&park.ships[&20]));
         assert!(park.surface_distance(20, 30).unwrap() <= DOCK_RANGE);
+    }
+
+    #[test]
+    fn light_and_medium_drones_close_range_then_fire_and_report_hits() {
+        for (type_id, mass, radius, top, cruise, orbit, falloff, tracking, sig, damage) in [
+            (2205, 3_000.0, 15.0, 4_560.0, 780.0, 500.0, 2_000.0, 2.964, 25.0, 10.35),
+            (2185, 5_000.0, 20.0, 1_680.0, 480.0, 750.0, 3_000.0, 0.768, 60.0, 23.04),
+        ] {
+            let mut park = Park::new(30000001, Vec::new(), 0);
+            let pilot = |type_id, group_id, char_id| Pilot {
+                type_id, group_id, char_id, name: "Pilot".into(), corp_id: char_id,
+                alliance_id: None, security: 0.0, bounty: 0.0,
+            };
+            let stats = ShipStats::new(50.0, 1_000_000.0, 1.0, 300.0, 1.0);
+            let target_type = npc::NpcType::with(587, 25, 50.0, 1_000_000.0, &[
+                (attr::SHIELD_CAPACITY, 10_000.0), (attr::ARMOR_HP, 1_000.0), (attr::HP, 1_000.0),
+                (attr::SIGNATURE_RADIUS, 40.0),
+            ]);
+            let mut target = Ship::new(10, 1, stats, pilot(587, 25, 100), Vec3::ZERO, Vec3::ZERO);
+            target.fight = Some(npc::entity_fighter(&target_type, 60_000.0, 1, 300.0, 0));
+            park.ships.insert(10, target);
+            let launch_pos = Vec3::new(49_000.0, 0.0, 0.0);
+            park.ships.insert(30, Ship::new(30, 2, stats, pilot(587, 25, 200), launch_pos, Vec3::ZERO));
+            let drone_type = npc::NpcType::with(type_id, COMBAT_DRONE_GROUP, radius, mass, &[
+                (attr::MAX_VELOCITY, top), (attr::AGILITY, 100.0), (attr::ENTITY_CRUISE_SPEED, cruise),
+                (attr::ENTITY_FLY_RANGE, orbit), (attr::ENTITY_ATTACK_RANGE, 1_000.0 + falloff),
+                (attr::DAMAGE_MULTIPLIER, 1.0), (attr::SPEED, 2_000.0), (attr::THERMAL_DAMAGE, damage),
+                (attr::MAX_RANGE, 1_000.0), (attr::FALLOFF, falloff), (attr::TRACKING_SPEED, tracking),
+                (attr::OPTIMAL_SIG_RADIUS, sig),
+            ]);
+            let mut drone = make(&drone_type, 20, pilot(type_id, COMBAT_DRONE_GROUP, 200),
+                2, 30, launch_pos, 0, &mut park.rng);
+            order_drone(drone.drone.as_mut().unwrap(), &Order::Engage(10), Some(10), false, 0);
+            park.ships.insert(20, drone);
+
+            let mut out = Out::default();
+            let mut locked_promptly = false;
+            let mut fired = false;
+            let mut reported_hit = false;
+            for now in (0..60_000).step_by(250) {
+                park.advance(now / 1_000);
+                crate::fight::step(&mut park, now, &mut out);
+                if now <= 6_000 {
+                    locked_promptly |= park.ships[&20].fight.as_ref().unwrap().is_locked(10);
+                }
+                if !fired && out.destiny_entries().iter().any(|(_, entry)| {
+                    let event = &entry.seq().unwrap()[1].seq().unwrap();
+                    event[0] == Value::bytes("OnSpecialFX")
+                }) {
+                    assert!(park.surface_distance(20, 10).unwrap() <= 1_000.0 + falloff);
+                    assert_eq!(park.ships[&20].speed_fraction, cruise / top);
+                    fired = true;
+                }
+                reported_hit |= out.notes().iter().any(|(client, event, args)| {
+                    *client == 2 && *event == "OnDamageMessage"
+                        && args.seq().unwrap()[0].as_bytes().is_some_and(|key| key.starts_with(b"AttackHit"))
+                });
+                out = Out::default();
+            }
+            assert!(locked_promptly, "drone {type_id} should lock a frigate-sized target within six seconds");
+            assert!(fired && reported_hit, "drone {type_id} should fire and report a hit");
+            assert!(park.ships[&10].fight.as_ref().unwrap().vitals.shield.at(60_000) < 10_000.0);
+        }
     }
 
     #[test]

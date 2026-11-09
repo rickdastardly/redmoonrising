@@ -152,10 +152,15 @@ const ALLIANCE_SHORTNAME_SQL: &str = r#"
      WHERE "allianceID" = ANY($1)"#;
 
 const INV_TYPES_SQL: &str = r#"
-    SELECT "typeID", "groupID", "typeName", "description", "graphicID", "radius", "mass",
-           "volume", "capacity", "portionSize", "raceID", "basePrice", "published",
-           "marketGroupID", "chanceOfDuplicating"
-      FROM "invTypes" WHERE "typeID" = ANY($1)"#;
+    SELECT t."typeID", t."groupID", t."typeName",
+           CASE WHEN p."typeName" IS NOT NULL AND NULLIF(btrim(t."description"), '') IS NULL
+                THEN concat_ws(E'\n\n', 'Blueprint for manufacturing ' || p."typeName" || '.', NULLIF(btrim(p."description"), ''))
+                ELSE t."description" END AS "description",
+           t."graphicID", t."radius", t."mass", t."volume", t."capacity", t."portionSize",
+           t."raceID", t."basePrice", t."published", t."marketGroupID", t."chanceOfDuplicating"
+      FROM "invTypes" t LEFT JOIN "invBlueprintTypes" b ON b."blueprintTypeID" = t."typeID"
+      LEFT JOIN "invTypes" p ON p."typeID" = b."productTypeID"
+     WHERE t."typeID" = ANY($1)"#;
 
 const INV_GROUPS_SQL: &str = r#"
     SELECT "groupID", "categoryID", "groupName", "description", "graphicID", "useBasePrice",
@@ -172,7 +177,9 @@ const INV_METAGROUPS_SQL: &str = r#"
 
 const BPTYPES_SQL: &str = r#"
     SELECT "blueprintTypeID", "parentBlueprintTypeID", "productTypeID", "productionTime",
-           "techLevel"
+           "techLevel", "researchProductivityTime", "researchMaterialTime", "researchCopyTime",
+           "researchTechTime", "productivityModifier", "materialModifier", "wasteFactor",
+           "chanceOfReverseEngineering", "maxProductionLimit"
       FROM "invBlueprintTypes" WHERE "blueprintTypeID" = ANY($1)"#;
 
 const GRAPHICS_SQL: &str = r#"

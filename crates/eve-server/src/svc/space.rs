@@ -20,6 +20,8 @@ const TYPE_SOLAR_SYSTEM: i64 = 5;
 const OWNER_SYSTEM: i64 = 1;
 const GROUP_STARGATE: i64 = 10;
 const GROUP_STATION: i64 = 15;
+pub(super) const GROUP_MOON: i64 = 8;
+pub(super) const MOON_WARP_RANGE: f64 = 1_000_000.0;
 /// Sun, planet, moon, asteroid belt, stargate, station.
 const CELESTIAL_GROUPS: [i32; 6] = [6, 7, 8, 9, 10, 15];
 /// WarpToStuff without minRange (menusvc's default warp-to distance).
@@ -908,7 +910,8 @@ fn steer(ctx: &Ctx<'_>, system: i64, ship_id: i64, order: Order, method: &str) -
         Some(ship) if ship.in_warp() => return Outcome::Value(Value::None),
         Some(ship)
             if matches!(order, Order::Command(Command::Warp { .. }))
-                && ship.fight.as_ref().is_some_and(|f| f.afflictions.scrambled >= 1.0) =>
+                && (park.inside_warp_bubble(ship.pos)
+                    || ship.fight.as_ref().is_some_and(|f| f.afflictions.scrambled >= 1.0)) =>
         {
             return Outcome::UserError { msg: "WarpScrambled".into(), args: Vec::new() };
         }
@@ -967,9 +970,10 @@ async fn parse_order(ctx: &Ctx<'_>, call: &Call) -> Option<Order> {
         "WarpToStuff" => {
             let kind = call.arg_text(0)?;
             let id = call.arg_i64(1)?;
-            let range = call.kwarg("minRange").and_then(|v| v.as_f64()).unwrap_or(DEFAULT_WARP_RANGE);
-            let (at, radius, station) = warp_target(ctx, &kind, id).await?;
-            let target = if station {
+            let requested_range = call.kwarg("minRange").and_then(|v| v.as_f64());
+            let (at, radius, group) = warp_target(ctx, &kind, id).await?;
+            let range = target_warp_range(group, requested_range);
+            let target = if group == GROUP_STATION {
                 let world = ctx.world.lock();
                 let ship = world.parks.get(&ctx.session.solar_system_id?)?.ships.get(&ctx.session.ship_id?)?;
                 station_warp_point(ship, at, radius, range)
@@ -984,20 +988,21 @@ async fn parse_order(ctx: &Ctx<'_>, call: &Call) -> Option<Order> {
 
 /// What WarpToStuff(kind, id) goes to, as its centre and radius: an item in
 /// the system, a bookmark, or another character's ship.
-async fn warp_target(ctx: &Ctx<'_>, kind: &str, id: i64) -> Option<(Vec3, f64, bool)> {
+async fn warp_target(ctx: &Ctx<'_>, kind: &str, id: i64) -> Option<(Vec3, f64, i64)> {
     let point = |r: &tokio_postgres::Row, i: usize| {
         Some(Vec3::new(float(r, i)?, float(r, i + 1)?, float(r, i + 2)?))
     };
     match kind {
         "item" => {
             if let Some(ball) = ctx.world.lock().parks.get(&ctx.session.solar_system_id?).and_then(|p| {
-                p.ball(id).map(|(at, radius)| (at, radius, is_station(p, id)))
+                let group = p.celestials.iter().find(|c| c.id == id).map_or(0, |c| c.group_id);
+                p.ball(id).map(|(at, radius)| (at, radius, group))
             }) {
                 return Some(ball);
             }
             let sql = r#"SELECT "x","y","z", COALESCE("radius", 0), "groupID" FROM "mapDenormalize" WHERE "itemID" = $1"#;
             let r = ctx.query_one(sql, &[&(id as i32)]).await?;
-            Some((point(&r, 0)?, float(&r, 3).unwrap_or(0.0), int(&r, 4) == Some(GROUP_STATION)))
+            Some((point(&r, 0)?, float(&r, 3).unwrap_or(0.0), int(&r, 4).unwrap_or(0)))
         }
         "bookmark" => {
             let sql = r#"SELECT b."x", b."y", b."z", d."x", d."y", d."z", COALESCE(d."radius", 0), d."groupID"
@@ -1010,19 +1015,27 @@ async fn warp_target(ctx: &Ctx<'_>, kind: &str, id: i64) -> Option<(Vec3, f64, b
             // Map objects use local celestial coordinates. A coordinate bookmark
             // names its system, whose map row is in galaxy coordinates, so use its own XYZ.
             match point(&r, 3) {
-                Some(at) => Some((at, float(&r, 6).unwrap_or(0.0), int(&r, 7) == Some(GROUP_STATION))),
-                None => Some((point(&r, 0)?, 0.0, false)),
+                Some(at) => Some((at, float(&r, 6).unwrap_or(0.0), int(&r, 7).unwrap_or(0))),
+                None => Some((point(&r, 0)?, 0.0, 0)),
             }
         }
         "char" => {
             let world = ctx.world.lock();
             let park = world.parks.get(&ctx.session.solar_system_id?)?;
-            park.ships.values().find(|s| s.pilot.char_id == id).map(|s| (s.pos, s.stats.radius, false))
+            park.ships.values().find(|s| s.pilot.char_id == id).map(|s| (s.pos, s.stats.radius, 0))
         }
         _ => {
             warn!("WarpToStuff to a {kind:?} is not supported");
             None
         }
+    }
+}
+
+fn target_warp_range(group: i64, requested: Option<f64>) -> f64 {
+    if group == GROUP_MOON {
+        MOON_WARP_RANGE + requested.unwrap_or(0.0).max(0.0)
+    } else {
+        requested.unwrap_or(DEFAULT_WARP_RANGE)
     }
 }
 
@@ -1161,6 +1174,14 @@ pub fn is_station(park: &Park, id: i64) -> bool {
 mod tests {
     use super::*;
     use crate::ballpark::{Pilot, ShipStats};
+
+    #[test]
+    fn moon_warps_land_at_the_surface_offset_for_zero_or_default_range() {
+        assert_eq!(target_warp_range(GROUP_MOON, Some(0.0)), 1_000_000.0);
+        assert_eq!(target_warp_range(GROUP_MOON, None), 1_000_000.0);
+        assert_eq!(target_warp_range(GROUP_MOON, Some(20_000.0)), 1_020_000.0);
+        assert_eq!(target_warp_range(GROUP_STATION, Some(0.0)), 0.0);
+    }
 
     #[test]
     fn station_warp_keeps_a_zero_range_inside_dock_range_but_clear_of_the_hull() {

@@ -297,6 +297,9 @@ fn user_error(msg: &str, args: Vec<(&str, Value)>) -> Outcome {
 fn add_target(ctx: &Ctx<'_>, target: i64) -> Outcome {
     let now = combat::now_ms();
     let result = with_fight(ctx, |park, fight, me| -> Result<Value, Outcome> {
+        if park.field_blocks_lock(me, target) {
+            return Err(Outcome::custom("A starbase force field blocks that target lock."));
+        }
         let locked: Vec<Value> = fight.locked().map(Value::Int).collect();
         if fight.locks.contains_key(&target) {
             return Ok(Value::Tuple(vec![Value::Int(i64::from(!fight.is_locked(target))), Value::List(locked)]));
@@ -384,7 +387,7 @@ fn targeters(ctx: &Ctx<'_>) -> Vec<i64> {
     let Some(park) = world.parks.get(&system) else { return Vec::new() };
     park.ships
         .values()
-        .filter(|s| s.fight.as_ref().is_some_and(|f| f.is_locked(ship_id)))
+        .filter(|s| s.fight.as_ref().is_some_and(|f| f.is_locked(ship_id)) && !park.field_blocks_lock(s.id, ship_id))
         .map(|s| s.id)
         .collect()
 }
@@ -523,6 +526,9 @@ async fn activate(ctx: &Ctx<'_>, call: &Call) -> Outcome {
 /// Whether the module's target makes sense for what it does.
 fn check_target(park: &crate::ballpark::Park, ship_id: i64, m: &Active) -> Result<(), String> {
     let Some(t) = m.target else { return Ok(()) };
+    if park.field_blocks_lock(ship_id, t) {
+        return Err("A starbase force field blocks that target lock.".into());
+    }
     match m.action {
         Action::Turret { .. } | Action::Missile { .. } => {
             if !park.ships.get(&t).is_some_and(|s| s.fight.is_some()) && !park.structures.contains_key(&t) {

@@ -308,6 +308,7 @@ fn hunt(park: &mut Park, now: i64, out: &mut Out) {
     let (tick, system) = (park.tick, park.solar_system_id);
     for (id, criminal) in cops {
         let target = quarry(park, criminal);
+        let field_blocked = target.is_some_and(|t| park.field_blocks_lock(id, t));
         let Some(cop) = park.ships.get_mut(&id) else { continue };
         let (Some(brain), Some(fight)) = (cop.npc.as_mut(), cop.fight.as_mut()) else { continue };
         let Some(police) = brain.police.as_mut() else { continue };
@@ -322,7 +323,7 @@ fn hunt(park: &mut Park, now: i64, out: &mut Out) {
         };
         police.leave_ms = now + crate::npc::POLICE_LINGER_MS;
         brain.target = Some(t);
-        if !fight.locks.contains_key(&t) {
+        if !field_blocked && !fight.locks.contains_key(&t) {
             fight.locks.clear();
             fight.locks.insert(t, Lock::Pending(now + 1_000));
         }

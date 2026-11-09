@@ -630,7 +630,20 @@ const price = (n: number) => (n >= 1000 ? compact.format(n) : n.toFixed(2));
 
 // ---- windows ----------------------------------------------------------------------
 
+function showConnection(online: boolean): void {
+  const badge = document.getElementById("connection-state")!;
+  badge.dataset.state = online ? "online" : "unavailable";
+  const label = online ? "Server online" : "Connection lost";
+  if (badge.textContent !== label) badge.textContent = label;
+}
+
 function showStatus(s: Summary): void {
+  showConnection(true);
+  setText("metric-players", numbers.format(s.players));
+  setText("metric-bots", numbers.format(s.bots.online));
+  setText("metric-simulation", s.bots.running ? `${numbers.format(s.bots.inSpace)} simulated pilots in space` : "Simulation paused");
+  setText("metric-wars", numbers.format(s.wars));
+  setText("metric-uptime", uptime(s.uptimeSeconds));
   const rows: [string, string][] = [
     ["Pilots online", numbers.format(s.players)],
     ["Capsuleers simulated", numbers.format(s.bots.total)],
@@ -653,9 +666,8 @@ function showStatus(s: Summary): void {
       return [dt, dd];
     }),
   );
-  const online = s.players + s.bots.online;
   const line = document.getElementById("statusline") as HTMLElement;
-  line.textContent = `Status: OK, ${numbers.format(online)} players${s.bots.running ? "" : " (simulation paused)"}`;
+  line.textContent = s.bots.running ? "Simulation running" : "Simulation paused";
 }
 
 function uptime(seconds: number): string {
@@ -666,9 +678,13 @@ function uptime(seconds: number): string {
 }
 
 async function refresh(): Promise<void> {
+  const summary = get<Summary>("/api/summary").then(showStatus, () => {
+    showConnection(false);
+    setText("statusline", "Waiting for the server to reconnect.");
+  });
   try {
-    const [summary, wars, players, systems, alliances, corporations, kills, news, sieges] = await Promise.all([
-      get<Summary>("/api/summary"),
+    const [, wars, players, systems, alliances, corporations, kills, news, sieges] = await Promise.all([
+      summary,
       get<War[]>("/api/wars"),
       get<Player[]>("/api/players"),
       get<SystemRow[]>("/api/systems"),
@@ -678,8 +694,6 @@ async function refresh(): Promise<void> {
       get<NewsItem[]>("/api/news"),
       get<SiegeRow[]>("/api/sieges"),
     ]);
-    showStatus(summary);
-
     list<War>("wars", [
       { title: "Aggressor", key: (w) => w.declaredBy, cell: (w) => [w.declaredBy, allianceTicker(w.declaredByTicker)] },
       { title: "", key: () => "", cell: () => [span("vs", "hostile")] },
@@ -742,8 +756,7 @@ async function refresh(): Promise<void> {
     showKillList();
     await refreshBots();
   } catch (e) {
-    const line = document.getElementById("statusline") as HTMLElement;
-    line.textContent = `Status: unreachable, retrying (${e instanceof Error ? e.message : String(e)})`;
+    console.warn("Dashboard data refresh failed", e);
   }
 }
 
@@ -1027,7 +1040,13 @@ function tick(): void {
 }
 
 for (const button of document.querySelectorAll<HTMLButtonElement>(".window .min")) {
-  button.addEventListener("click", () => button.closest(".window")?.classList.toggle("minimized"));
+  button.setAttribute("aria-expanded", "true");
+  button.addEventListener("click", () => {
+    const collapsed = button.closest(".window")?.classList.toggle("minimized") ?? false;
+    button.setAttribute("aria-expanded", String(!collapsed));
+    button.setAttribute("aria-label", collapsed ? "Expand panel" : "Collapse panel");
+    button.textContent = collapsed ? "+" : "−";
+  });
 }
 
 const pages: Record<string, { title: string; description: string; windows: string[] }> = {
@@ -1050,7 +1069,8 @@ const pages: Record<string, { title: string; description: string; windows: strin
 };
 
 function route(): void {
-  const hash = window.location.hash.slice(1) || "home";
+  const fragment = window.location.hash.slice(1);
+  const hash = fragment || "home";
   const killID = Number(hash.match(/^kill-(\d+)$/)?.[1] ?? 0);
   const pilotID = Number(hash.match(/^pilot-(\d+)$/)?.[1] ?? 0);
   const page = killID > 0 ? { title: `Killmail #${killID}`, description: "Fitting, loss and involved pilots.", windows: ["w-kill-detail"] }
@@ -1060,19 +1080,28 @@ function route(): void {
   setText("page-description", page.description);
   setText("page-kicker", killID > 0 || pilotID > 0 || hash === "killboard" ? "KILLBOARD / NEW EDEN" : "COMMAND CENTER / NEW EDEN");
   document.title = `${page.title} · Red Moon Rising`;
+  const overview = page === pages.home;
+  document.getElementById("overview-metrics")!.hidden = !overview;
+  document.querySelector(".desktop")!.classList.toggle("overview", overview);
   for (const window of document.querySelectorAll<HTMLElement>(".desktop .window")) {
     window.classList.toggle("page-hidden", !page.windows.includes(window.id));
   }
   (document.getElementById("w-kill-detail") as HTMLElement).hidden = killID === 0;
   (document.getElementById("w-pilot-profile") as HTMLElement).hidden = pilotID === 0;
   for (const link of document.querySelectorAll<HTMLAnchorElement>(".neocom a")) {
-    link.classList.toggle("active", link.hash === (killID > 0 || pilotID > 0 ? "#killboard" : `#${hash}`));
+    const active = link.hash === (killID > 0 || pilotID > 0 ? "#killboard" : `#${pages[hash] ? hash : "home"}`);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
   }
   if (killID > 0) void showKill(killID);
   if (pilotID > 0) void showPilot(pilotID);
   if (hash === "users") void refreshUsers();
-  window.scrollTo(0, 0);
+  if (fragment !== "main-content") window.scrollTo(0, 0);
 }
+document.querySelector(".skip-link")?.addEventListener("click", (event) => {
+  event.preventDefault();
+  document.getElementById("main-content")?.focus();
+});
 window.addEventListener("hashchange", route);
 
 tick();

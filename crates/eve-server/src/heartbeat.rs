@@ -212,11 +212,24 @@ fn pulse(world: &World, now: i64) -> Vec<Job> {
         crate::pos::step(park, &mut out);
         if park.players().next().is_none() {
             park.entered_warp.clear();
+            park.bubble_stopped.clear();
             park.landed.clear();
             continue;
         }
         park.advance(tick);
         crate::drones::recover_distant_nonfighters(park, now, &mut out);
+        for ship_id in std::mem::take(&mut park.bubble_stopped) {
+            let Some(ship) = park.ships.get(&ship_id).filter(|s| s.command == crate::ballpark::Command::Stop) else { continue };
+            let stop = space::command_entry(ship, park.tick);
+            let mut viewers = space::ship_viewers(park, ship_id);
+            if ship.is_player() {
+                if !viewers.contains(&ship.client_id) { viewers.push(ship.client_id); }
+                out.note(ship.client_id, "OnRemoteMessage", Value::Tuple(vec![Value::bytes("WarpScrambled"), Value::Dict(Vec::new())]));
+            }
+            for client in viewers {
+                out.destiny_to(park.solar_system_id, client, stop.clone());
+            }
+        }
         let entered_warp = std::mem::take(&mut park.entered_warp);
         for ship_id in entered_warp {
             let effect = space::warp_fx(park.tick, ship_id, true);

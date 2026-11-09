@@ -466,7 +466,20 @@ const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFra
 const isk = (n) => `${compact.format(n)} ISK`;
 const price = (n) => (n >= 1000 ? compact.format(n) : n.toFixed(2));
 // ---- windows ----------------------------------------------------------------------
+function showConnection(online) {
+    const badge = document.getElementById("connection-state");
+    badge.dataset.state = online ? "online" : "unavailable";
+    const label = online ? "Server online" : "Connection lost";
+    if (badge.textContent !== label)
+        badge.textContent = label;
+}
 function showStatus(s) {
+    showConnection(true);
+    setText("metric-players", numbers.format(s.players));
+    setText("metric-bots", numbers.format(s.bots.online));
+    setText("metric-simulation", s.bots.running ? `${numbers.format(s.bots.inSpace)} simulated pilots in space` : "Simulation paused");
+    setText("metric-wars", numbers.format(s.wars));
+    setText("metric-uptime", uptime(s.uptimeSeconds));
     const rows = [
         ["Pilots online", numbers.format(s.players)],
         ["Capsuleers simulated", numbers.format(s.bots.total)],
@@ -487,9 +500,8 @@ function showStatus(s) {
         dd.textContent = value;
         return [dt, dd];
     }));
-    const online = s.players + s.bots.online;
     const line = document.getElementById("statusline");
-    line.textContent = `Status: OK, ${numbers.format(online)} players${s.bots.running ? "" : " (simulation paused)"}`;
+    line.textContent = s.bots.running ? "Simulation running" : "Simulation paused";
 }
 function uptime(seconds) {
     const d = Math.floor(seconds / 86400);
@@ -498,9 +510,13 @@ function uptime(seconds) {
     return d > 0 ? `${d}d ${h}h ${m}m` : h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 async function refresh() {
+    const summary = get("/api/summary").then(showStatus, () => {
+        showConnection(false);
+        setText("statusline", "Waiting for the server to reconnect.");
+    });
     try {
-        const [summary, wars, players, systems, alliances, corporations, kills, news, sieges] = await Promise.all([
-            get("/api/summary"),
+        const [, wars, players, systems, alliances, corporations, kills, news, sieges] = await Promise.all([
+            summary,
             get("/api/wars"),
             get("/api/players"),
             get("/api/systems"),
@@ -510,7 +526,6 @@ async function refresh() {
             get("/api/news"),
             get("/api/sieges"),
         ]);
-        showStatus(summary);
         list("wars", [
             { title: "Aggressor", key: (w) => w.declaredBy, cell: (w) => [w.declaredBy, allianceTicker(w.declaredByTicker)] },
             { title: "", key: () => "", cell: () => [span("vs", "hostile")] },
@@ -566,8 +581,7 @@ async function refresh() {
         await refreshBots();
     }
     catch (e) {
-        const line = document.getElementById("statusline");
-        line.textContent = `Status: unreachable, retrying (${e instanceof Error ? e.message : String(e)})`;
+        console.warn("Dashboard data refresh failed", e);
     }
 }
 function showKillList() {
@@ -840,7 +854,13 @@ function tick() {
     document.getElementById("clock-date").textContent = `${now.getUTCFullYear()}.${pad(now.getUTCMonth() + 1)}.${pad(now.getUTCDate())}`;
 }
 for (const button of document.querySelectorAll(".window .min")) {
-    button.addEventListener("click", () => button.closest(".window")?.classList.toggle("minimized"));
+    button.setAttribute("aria-expanded", "true");
+    button.addEventListener("click", () => {
+        const collapsed = button.closest(".window")?.classList.toggle("minimized") ?? false;
+        button.setAttribute("aria-expanded", String(!collapsed));
+        button.setAttribute("aria-label", collapsed ? "Expand panel" : "Collapse panel");
+        button.textContent = collapsed ? "+" : "−";
+    });
 }
 const pages = {
     home: { title: "Command overview", description: "Live activity across New Eden.", windows: ["w-status", "w-wars", "w-pilots", "w-news"] },
@@ -861,7 +881,8 @@ const pages = {
     users: { title: "User accounts", description: "Account roles and in-game staff colours.", windows: ["w-users"] },
 };
 function route() {
-    const hash = window.location.hash.slice(1) || "home";
+    const fragment = window.location.hash.slice(1);
+    const hash = fragment || "home";
     const killID = Number(hash.match(/^kill-(\d+)$/)?.[1] ?? 0);
     const pilotID = Number(hash.match(/^pilot-(\d+)$/)?.[1] ?? 0);
     const page = killID > 0 ? { title: `Killmail #${killID}`, description: "Fitting, loss and involved pilots.", windows: ["w-kill-detail"] }
@@ -871,13 +892,20 @@ function route() {
     setText("page-description", page.description);
     setText("page-kicker", killID > 0 || pilotID > 0 || hash === "killboard" ? "KILLBOARD / NEW EDEN" : "COMMAND CENTER / NEW EDEN");
     document.title = `${page.title} · Red Moon Rising`;
+    const overview = page === pages.home;
+    document.getElementById("overview-metrics").hidden = !overview;
+    document.querySelector(".desktop").classList.toggle("overview", overview);
     for (const window of document.querySelectorAll(".desktop .window")) {
         window.classList.toggle("page-hidden", !page.windows.includes(window.id));
     }
     document.getElementById("w-kill-detail").hidden = killID === 0;
     document.getElementById("w-pilot-profile").hidden = pilotID === 0;
     for (const link of document.querySelectorAll(".neocom a")) {
-        link.classList.toggle("active", link.hash === (killID > 0 || pilotID > 0 ? "#killboard" : `#${hash}`));
+        const active = link.hash === (killID > 0 || pilotID > 0 ? "#killboard" : `#${pages[hash] ? hash : "home"}`);
+        if (active)
+            link.setAttribute("aria-current", "page");
+        else
+            link.removeAttribute("aria-current");
     }
     if (killID > 0)
         void showKill(killID);
@@ -885,8 +913,13 @@ function route() {
         void showPilot(pilotID);
     if (hash === "users")
         void refreshUsers();
-    window.scrollTo(0, 0);
+    if (fragment !== "main-content")
+        window.scrollTo(0, 0);
 }
+document.querySelector(".skip-link")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    document.getElementById("main-content")?.focus();
+});
 window.addEventListener("hashchange", route);
 tick();
 setInterval(tick, 1000);

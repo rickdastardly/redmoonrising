@@ -210,7 +210,11 @@ impl Service {
                     args,
                     kwargs: Vec::new(),
                 };
-                bound::piggyback_value(self.name, self.call(&inner, ctx).await)
+                let outcome = self.call(&inner, ctx).await;
+                if self.name == "posMgr" && inner.method == "AnchorStructure" && matches!(outcome, Outcome::UserError { .. }) {
+                    return outcome;
+                }
+                bound::piggyback_value(self.name, outcome)
             }
             None => Value::None,
         };

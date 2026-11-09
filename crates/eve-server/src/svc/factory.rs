@@ -16,12 +16,13 @@ const ACTIVITY_MANUFACTURING: i32 = 1;
 pub async fn factory(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
     let value = match call.method.as_str() {
         "GetBlueprintAttributes" => blueprint_attributes(ctx, call.arg_id(0)).await,
-        // (blueprintTypeID, activity); activity -1 means every activity.
+        // Activity -1 is Show Info's request for all activities it can label.
         "GetMaterialsForTypeWithActivity" => {
             let activity = call.arg_i64(1).unwrap_or(-1) as i32;
             let sql = r#"SELECT "activity","requiredTypeID","quantity","damagePerJob"
                            FROM "TL2MaterialsForTypeWithActivity"
-                          WHERE "typeID" = $1 AND ($2 = -1 OR "activity" = $2)
+                          WHERE "typeID" = $1 AND "quantity" > 0
+                            AND ("activity" = $2 OR ($2 = -1 AND "activity" IN (1, 3, 4, 5, 6, 7)))
                           ORDER BY "activity","requiredTypeID""#;
             let header = ["activity", "requiredTypeID", "quantity", "damagePerJob"];
             ctx.rowset(&header, sql, &[&(call.arg_id(0) as i32), &activity]).await

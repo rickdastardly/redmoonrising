@@ -60,7 +60,7 @@ fn locks(park: &mut Park, now: i64, out: &mut Out) {
                 None => !park.rocks.contains_key(&t) && !park.structures.contains_key(&t),
             };
             let far = park.surface_distance(id, t).map_or(true, |d| d > fight.lock_range() * LOCK_SLACK);
-            if gone || far || ship.in_warp() || fight.afflictions.jammed {
+            if gone || far || ship.in_warp() || fight.afflictions.jammed || park.field_blocks_lock(id, t) {
                 changes.push((t, lock, None));
             } else if let Lock::Pending(ready) = lock {
                 if now >= ready {

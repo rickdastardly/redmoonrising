@@ -353,11 +353,19 @@ impl<'c> Loadout<'c> {
             };
         }
 
+        // The snapshot carries two generations of cargo expander modifiers.
+        // The newer multiplier reads an attribute missing from these legacy
+        // modules, so its zero default would stop the ship entirely.
         let rows = db
             .query(
-                r#"SELECT "typeID","effectCategory",func,domain,"modifiedAttributeID","modifyingAttributeID",
-                          operation,"groupID","skillTypeID","offWhileActive"
-                     FROM "dgmTypeModifiers" WHERE "typeID" = ANY($1)"#,
+                r#"SELECT m."typeID",m."effectCategory",m.func,m.domain,m."modifiedAttributeID",m."modifyingAttributeID",
+                          m.operation,m."groupID",m."skillTypeID",m."offWhileActive"
+                     FROM "dgmTypeModifiers" m
+                    WHERE m."typeID" = ANY($1)
+                      AND (m."effectName" IS DISTINCT FROM 'modifyMaxVelocityOfShipPassive' OR NOT EXISTS (
+                          SELECT 1 FROM "dgmTypeModifiers" legacy
+                           WHERE legacy."typeID" = m."typeID" AND legacy."effectName" = 'maxVelocityBonus'
+                      ))"#,
                 &[&type_ids],
             )
             .await?;
@@ -586,7 +594,7 @@ impl<'c> Loadout<'c> {
         let units: f64 = self.pieces
             .iter()
             .enumerate()
-            .filter(|(_, piece)| piece.role == Role::Module && piece.type_id == DRONE_CONTROL_UNIT_I && piece.state != State::Offline)
+            .filter(|(_, piece)| piece.role == Role::Module && piece.type_id == DRONE_CONTROL_UNIT_I && piece.state == State::Active)
             .map(|(i, _)| self.value(i, attr::MAX_ACTIVE_DRONE_BONUS))
             .sum();
         base + levels + units
@@ -667,6 +675,41 @@ pub fn stacking_penalised(factors: &[f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_active_drone_control_units_increase_the_carrier_limit() {
+        let catalog = Catalog { attributes: HashMap::new() };
+        let piece = |item_id, type_id, group_id, role, state, base| Piece {
+            item_id, type_id, group_id, role, state, base,
+            category_id: 0, flag: 0, effects: HashSet::new(),
+        };
+        let unit = |id, state| piece(
+            id, DRONE_CONTROL_UNIT_I, 0, Role::Module, state,
+            HashMap::from([(attr::MAX_ACTIVE_DRONE_BONUS, 1.0)]),
+        );
+        for (first, second, expected) in [
+            (State::Offline, State::Online, 5.0),
+            (State::Active, State::Online, 6.0),
+            (State::Active, State::Active, 7.0),
+            (State::Online, State::Active, 6.0),
+            (State::Online, State::Online, 5.0),
+        ] {
+            let loadout = Loadout {
+                catalog: &catalog,
+                pieces: vec![
+                    piece(1, 0, 0, Role::Character, State::Online, HashMap::new()),
+                    piece(2, 0, GROUP_CARRIER, Role::Ship, State::Online, HashMap::new()),
+                    unit(3, first),
+                    unit(4, second),
+                ],
+                modifiers: Vec::new(),
+                incoming: HashMap::new(),
+                memo: RefCell::default(),
+                busy: RefCell::default(),
+            };
+            assert_eq!(loadout.value(0, attr::MAX_ACTIVE_DRONES), expected);
+        }
+    }
 
     #[test]
     fn the_strongest_bonus_counts_in_full_and_the_rest_less() {

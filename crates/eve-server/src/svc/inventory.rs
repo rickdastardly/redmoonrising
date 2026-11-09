@@ -249,15 +249,15 @@ pub async fn list_station_items(
 }
 
 pub async fn list_stations(ctx: &Ctx<'_>, blueprints_only: bool, for_corp: bool) -> Value {
-    const HEADER: &[&str] = &["stationID", "itemCount"];
+    let header = if blueprints_only { &["stationID", "blueprintCount"] } else { &["stationID", "itemCount"] };
     let owner = match if for_corp { ctx.session.corp_id } else { ctx.session.char_id } {
         Some(o) => o,
-        None => return rowset(HEADER, Vec::new()),
+        None => return rowset(header, Vec::new()),
     };
     let mut vals: Vec<i32> = vec![owner as i32, STATION_ID_MIN, STATION_ID_MAX];
     let sql = if blueprints_only {
         vals.push(CATEGORY_BLUEPRINT);
-        r#"SELECT e."locationID", count(*)::int AS "itemCount"
+        r#"SELECT e."locationID", count(*)::int AS "blueprintCount"
              FROM "entity" e
              JOIN "invTypes" t ON t."typeID" = e."typeID"
              JOIN "invGroups" g ON g."groupID" = t."groupID"
@@ -277,11 +277,11 @@ pub async fn list_stations(ctx: &Ctx<'_>, blueprints_only: bool, for_corp: bool)
                 .iter()
                 .map(|r| Value::List(vec![int_at(r, 0), int_at(r, 1)]))
                 .collect();
-            rowset(HEADER, lines)
+            rowset(header, lines)
         }
         Err(e) => {
             error!("invbroker ListStations: {err}", err = crate::logging::chain(&e));
-            rowset(HEADER, Vec::new())
+            rowset(header, Vec::new())
         }
     }
 }

@@ -217,6 +217,7 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
             respond(&mut stream, 200, "text/html; charset=utf-8", page.as_bytes()).await
         }
         "/style.css" => respond(&mut stream, 200, "text/css; charset=utf-8", STYLE.as_bytes()).await,
+        "/eve-icon.png" => respond(&mut stream, 200, "image/png", include_bytes!("../web/eve-icon.png")).await,
         "/app.js" => respond(&mut stream, 200, "text/javascript; charset=utf-8", SCRIPT.as_bytes()).await,
         api if api.starts_with("/api/") => {
             let body = match api {

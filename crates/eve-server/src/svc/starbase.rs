@@ -31,13 +31,15 @@ use crate::session::CORP_ROLE_DIRECTOR;
 use crate::svc::membership::{access_denied, db_failed, message, Refused};
 use crate::svc::moonmining;
 use crate::svc::rows::{float, int, line, rowset};
-use crate::svc::space::{self, entry};
+use crate::svc::space::{self, entry, GROUP_MOON, MOON_WARP_RANGE};
 use crate::world::World;
 
 /// dgmEffects: onlineForStructures, anchorLiftForStructures.
 const EFFECT_ONLINE: i64 = 901;
 const EFFECT_ANCHOR: i64 = 1022;
 const EFFECT_UNANCHOR: i64 = 1023;
+const EFFECT_DEPLOYABLE_ANCHOR: i64 = 649;
+const EFFECT_DEPLOYABLE_UNANCHOR: i64 = 650;
 const ATTR_POWER: i32 = 30;
 const ATTR_CPU: i32 = 50;
 const ATTR_POWER_OUTPUT: i32 = 11;
@@ -59,13 +61,12 @@ pub const STRONTIUM: i64 = 16275;
 pub const TOWER_FUEL_CAPACITY_RATIO: f64 = 2.8;
 /// eveConstants corpRoleStarbaseConfig.
 const CORP_ROLE_STARBASE_CONFIG: i64 = 1 << 53;
-const GROUP_MOON: i64 = 8;
 const FLAG_CARGO: i64 = 5;
 /// eveConstants maxConfigureDistance, with slack for the two simulations.
 const CONFIGURE_RANGE: f64 = 5_000.0 * 1.25;
 /// How far from the ship a structure may be anchored (pwn.CheckAnchoringPosition).
 const ANCHOR_REACH: f64 = 30_000.0;
-/// How close to a moon's surface a control tower must anchor.
+/// How far from a moon's normal warp-in point a control tower may anchor.
 const MOON_RANGE: f64 = 100_000.0;
 /// No anchoring at or above this security ('clean spacelanes').
 const CONCORD_ANCHOR_LIMIT: f64 = 0.8;
@@ -87,9 +88,9 @@ pub async fn launch(ctx: &Ctx<'_>, ids: &[i64], owner: Option<i64>) -> Option<Ou
         let sql = r#"SELECT e."itemID" FROM entity e
                        JOIN "invTypes" t ON t."typeID" = e."typeID"
                        JOIN "invGroups" g ON g."groupID" = t."groupID"
-                      WHERE e."itemID" = ANY($1) AND g."categoryID" = $2"#;
+                      WHERE e."itemID" = ANY($1) AND (g."categoryID" = $2 OR t."groupID" = $3)"#;
         let wanted: Vec<i32> = ids.iter().map(|i| *i as i32).collect();
-        ctx.query(sql, &[&wanted, &pos::CATEGORY_STRUCTURE]).await.iter().filter_map(|r| int(r, 0)).collect()
+        ctx.query(sql, &[&wanted, &pos::CATEGORY_STRUCTURE, &(pos::GROUP_MOBILE_WARP_DISRUPTOR as i32)]).await.iter().filter_map(|r| int(r, 0)).collect()
     };
     if structures.is_empty() {
         return None;
@@ -210,14 +211,10 @@ async fn anchor(ctx: &Ctx<'_>, id: i64, mut at: Vec3) -> Refused<Value> {
     if !allowed(ctx, &s, deploy_flag(ctx.db, s.tower.unwrap_or(s.id), "deployAnchor").await) || distance > ANCHOR_REACH {
         return Err(access_denied("you may not anchor that structure from here"));
     }
-    let reach = (at - ship_pos).len();
-    if !reach.is_finite() || reach > ANCHOR_REACH {
-        return Err(message_with(
-            "CantAnchorTooDistant",
-            &[("structure", Value::text(&s.name)), ("limit", Value::Int(ANCHOR_REACH as i64)), ("actual", Value::Int(reach as i64))],
-        ));
-    }
     let security = (system_security(ctx.db, system).await * 10.0).round() / 10.0;
+    if s.is_mobile_disruptor() && security > 0.0 {
+        return Err(Outcome::custom("Mobile warp disruptors can only be anchored in null-security space."));
+    }
     if security >= CONCORD_ANCHOR_LIMIT {
         return Err(message("CantAnchorConcordRestriction"));
     }
@@ -240,19 +237,26 @@ async fn anchor(ctx: &Ctx<'_>, id: i64, mut at: Vec3) -> Refused<Value> {
         }
     }
 
+    let moon_range = attrs.get(&(s.type_id, ATTR_MOON_ANCHOR_DISTANCE)).copied().unwrap_or(MOON_RANGE);
+    // The 30 km interaction limit is measured to the launched tower. The
+    // placement cursor can choose a point farther away on the same moon grid.
+    let placement_limit = if s.is_tower() { moon_range.max(ANCHOR_REACH) } else { ANCHOR_REACH };
+    let reach = (at - ship_pos).len();
+    if !reach.is_finite() || reach > placement_limit {
+        return Err(Outcome::custom(format!(
+            "The selected anchoring position is {reach:.0} m away. Choose a point within {placement_limit:.0} m."
+        )));
+    }
+
     let (tower, moon) = if s.is_tower() {
         if (0.4..0.8).contains(&security) {
             check_empire_anchor(ctx, &s, system, security).await?;
         }
-        let range = attrs.get(&(s.type_id, ATTR_MOON_ANCHOR_DISTANCE)).copied().unwrap_or(MOON_RANGE);
-        let moon = moon_for(ctx, system, at, range)?;
-        let from_moon = at - moon.pos;
-        let clearance = moon.radius + s.radius + LAUNCH_CLEARANCE;
-        if from_moon.len() < clearance {
-            let outward = if from_moon.len() > 0.0 { from_moon.unit() } else { (ship_pos - moon.pos).unit() };
-            at = moon.pos + outward * clearance;
-        }
+        let moon = moon_for(ctx, system, at, ship_pos, moon_range)?;
+        at = tower_anchor_point(&moon, at, ship_pos, s.radius, moon_range);
         (None, Some(moon))
+    } else if s.is_mobile_disruptor() {
+        (None, None)
     } else {
         (Some(tower_for(ctx, system, &s, at, now).await?), None)
     };
@@ -295,7 +299,9 @@ async fn anchor(ctx: &Ctx<'_>, id: i64, mut at: Vec3) -> Refused<Value> {
         s.tower = tower;
         s.pos = at;
         let mut out = vec![entry(tick, "SetBallPosition", vec![Value::Int(id), Value::Double(at.x), Value::Double(at.y), Value::Double(at.z)])];
-        out.extend(pos::free_entries(tick, id, false));
+        if !s.is_mobile_disruptor() {
+            out.extend(pos::free_entries(tick, id, false));
+        }
         out
     });
     info!("anchoring {} ({id}) in {system}{}", s.name, tower.map(|t| format!(" at tower {t}")).unwrap_or_default());
@@ -340,15 +346,42 @@ async fn check_empire_anchor(ctx: &Ctx<'_>, tower: &Structure, system: i64, secu
     Ok(())
 }
 
-fn moon_for(ctx: &Ctx<'_>, system: i64, at: Vec3, range: f64) -> Refused<crate::ballpark::Celestial> {
+fn moon_for(ctx: &Ctx<'_>, system: i64, at: Vec3, ship_pos: Vec3, range: f64) -> Refused<crate::ballpark::Celestial> {
     let world = ctx.world.lock();
     let park = world.parks.get(&system).ok_or_else(|| Outcome::custom("You are not in space."))?;
-    park.celestials.iter().filter(|c| c.group_id == GROUP_MOON)
-        .map(|moon| (moon, ((moon.pos - at).len() - moon.radius).abs()))
-        .filter(|(_, distance)| *distance <= range)
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(moon, _)| moon.clone())
+    anchor_moon(&park.celestials, at, ship_pos, range)
+        .cloned()
         .ok_or_else(|| message("CantAnchorNoMoonNearby"))
+}
+
+fn anchor_moon(
+    celestials: &[crate::ballpark::Celestial], at: Vec3, ship_pos: Vec3, range: f64,
+) -> Option<&crate::ballpark::Celestial> {
+    celestials.iter().filter(|c| c.group_id == GROUP_MOON)
+        .filter_map(|moon| {
+            let shell = (moon.radius - range)..=(moon.radius + MOON_WARP_RANGE + range);
+            let placement = (at - moon.pos).len();
+            let ship = (ship_pos - moon.pos).len();
+            // Keep existing near-surface sites valid as well as the new warp-in.
+            (shell.contains(&placement) || shell.contains(&ship))
+                .then_some((moon, (placement - moon.radius).abs()))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(moon, _)| moon)
+}
+
+fn tower_anchor_point(moon: &crate::ballpark::Celestial, at: Vec3, ship_pos: Vec3, tower_radius: f64, range: f64) -> Vec3 {
+    let offset = at - moon.pos;
+    let distance = offset.len();
+    let inner = moon.radius + tower_radius + LAUNCH_CLEARANCE;
+    let outer = (moon.radius + MOON_WARP_RANGE + range).max(inner);
+    let clamped = distance.clamp(inner, outer);
+    if distance == clamped {
+        return at;
+    }
+    let direction = if distance > 0.0 { offset } else { ship_pos - moon.pos };
+    let outward = if direction.len_sq() > 0.0 { direction.unit() } else { Vec3::new(1.0, 0.0, 0.0) };
+    moon.pos + outward * clamped
 }
 
 /// Hold the moon until the caller commits its tower placement.
@@ -394,13 +427,16 @@ pub async fn dogma_im(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
     let id = call.arg_id(0);
     let effect = call.arg_i64(1)?;
     if !matches!(call.method.as_str(), "Activate" | "Deactivate")
-        || !matches!(effect, EFFECT_ONLINE | EFFECT_ANCHOR | EFFECT_UNANCHOR) {
+        || !matches!(effect, EFFECT_ONLINE | EFFECT_ANCHOR | EFFECT_UNANCHOR | EFFECT_DEPLOYABLE_ANCHOR | EFFECT_DEPLOYABLE_UNANCHOR) {
         return None;
     }
     let s = seen(ctx, id)?.s;
+    if !s.is_mobile_disruptor() && matches!(effect, EFFECT_DEPLOYABLE_ANCHOR | EFFECT_DEPLOYABLE_UNANCHOR) {
+        return None;
+    }
     let result = match (call.method.as_str(), effect) {
-        ("Activate", EFFECT_ANCHOR) => anchor(ctx, id, s.pos).await,
-        ("Activate", EFFECT_UNANCHOR) => unanchor(ctx, id).await,
+        ("Activate", EFFECT_DEPLOYABLE_ANCHOR | EFFECT_ANCHOR) => anchor(ctx, id, s.pos).await,
+        ("Activate", EFFECT_DEPLOYABLE_UNANCHOR | EFFECT_UNANCHOR) => unanchor(ctx, id).await,
         ("Activate", EFFECT_ONLINE) => online(ctx, id).await,
         ("Deactivate", EFFECT_ONLINE) => offline(ctx, id).await,
         _ => Ok(Value::None),
@@ -541,7 +577,8 @@ async fn unanchor(ctx: &Ctx<'_>, id: i64) -> Refused<Value> {
     if holding {
         return Err(message_with("CantUnanchorContainerNotEmpty", &[("structure", Value::text(&s.name))]));
     }
-    let stamp = pos::timer_start(now, s.delays[2]);
+    let delay = s.delays[if s.is_mobile_disruptor() { 0 } else { 2 }];
+    let stamp = pos::timer_start(now, delay);
     set_state(ctx, system, id, state::UNANCHORED, Some(stamp)).await?;
     info!("unanchoring {} ({id}) in {system}", s.name);
     Ok(Value::None)
@@ -624,9 +661,14 @@ async fn set_state(ctx: &Ctx<'_>, system: i64, id: i64, new: i16, stamp: Option<
         error!("saving the state of structure {id}: {}", crate::logging::chain(&e));
         return Err(Outcome::custom("The structure could not do that just now."));
     }
-    update(ctx.world, system, id, |s, _| {
+    update(ctx.world, system, id, |s, tick| {
         s.state = new;
         s.stamp = stamp;
+        if s.is_mobile_disruptor() && new == state::UNANCHORED {
+            let mut entries = pos::free_entries(tick, id, true);
+            entries.push(pos::disruptor_effect(tick, id, false));
+            return entries;
+        }
         Vec::new()
     });
     Ok(())
@@ -1119,7 +1161,7 @@ async fn resolve_sovereignty(db: &mut Client, claim_delay_secs: i64) -> Result<(
     for (system, _, winner) in &changes {
         tx.execute(
             r#"UPDATE "mapSolarSystems" SET "allianceID" = $2,
-                   "sovereigntySince" = CASE WHEN $2 IS NULL THEN NULL ELSE $3 END
+                   "sovereigntySince" = CASE WHEN $2::integer IS NULL THEN NULL ELSE $3::bigint END
                WHERE "solarSystemID" = $1"#,
             &[&(*system as i32), &winner.map(|a| a as i32), &now],
         ).await?;
@@ -1293,7 +1335,7 @@ fn ship_password(ctx: &Ctx<'_>, password: &str) -> Refused<Value> {
     let mut world = ctx.world.lock();
     let Some(park) = world.parks.get_mut(&system) else { return Err(Outcome::custom("You are not in space.")) };
     let Some(pos) = park.ships.get(&ship_id).map(|s| s.pos) else { return Err(Outcome::custom("You are not in space.")) };
-    let inside = park.structures.values().any(|s| s.field.as_ref().is_some_and(|f| (pos - s.pos).len() < f.radius));
+    let inside = park.inside_force_field(pos);
     if inside {
         return Err(message("CantChangeShipHarmonicWithinForceField"));
     }
@@ -1426,6 +1468,24 @@ pub async fn may(ctx: &Ctx<'_>, id: i64, access: Access) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tower_placement_near_a_moon_uses_the_warp_in_range() {
+        let moons = [crate::ballpark::Celestial {
+            id: 1, type_id: 14, group_id: GROUP_MOON, name: "Moon".into(),
+            pos: Vec3::ZERO, radius: 130_000.0, undock: None, jump: None,
+        }];
+        let ship = Vec3::new(1_130_000.0, 0.0, 0.0);
+        let at = Vec3::new(1_180_000.0, 20_000.0, 0.0);
+        assert!((at - ship).len() > ANCHOR_REACH);
+        let moon = anchor_moon(&moons, at, ship, MOON_RANGE).unwrap();
+        assert_eq!(tower_anchor_point(moon, at, ship, 3_394.0, MOON_RANGE), at);
+        let far = Vec3::new(1_300_000.0, 0.0, 0.0);
+        assert!(anchor_moon(&moons, far, far, MOON_RANGE).is_none());
+        let surface = Vec3::new(130_000.0, 0.0, 0.0);
+        let moon = anchor_moon(&moons, surface, surface, MOON_RANGE).unwrap();
+        assert_eq!(tower_anchor_point(moon, surface, surface, 3_394.0, MOON_RANGE), Vec3::new(133_894.0, 0.0, 0.0));
+    }
 
     #[test]
     fn the_most_claims_win_and_a_tie_keeps_the_holder() {

@@ -60,11 +60,20 @@ pub const SPECS: &[Spec] = &[
     s("config.BulkData.groups", Shape::Tuple,
       r#"SELECT "groupID","categoryID","groupName","description","graphicID","useBasePrice","allowManufacture","allowRecycler","anchored","anchorable","fittableNonSingleton" FROM "invGroups""#),
     s("config.BulkData.types", Shape::Tuple,
-      r#"SELECT "typeID","groupID","typeName","description","graphicID","radius","mass","volume",
-                CASE WHEN "groupID" = 365 THEN "capacity" * 3.8 ELSE "capacity" END AS "capacity",
-                "portionSize","raceID","basePrice","published","marketGroupID","chanceOfDuplicating" FROM "invTypes""#),
+      r#"SELECT t."typeID",t."groupID",t."typeName",
+                CASE WHEN p."typeName" IS NOT NULL AND NULLIF(btrim(t."description"), '') IS NULL
+                     THEN concat_ws(E'\n\n', 'Blueprint for manufacturing ' || p."typeName" || '.', NULLIF(btrim(p."description"), ''))
+                     ELSE t."description" END AS "description",
+                t."graphicID",t."radius",t."mass",t."volume",
+                CASE WHEN t."groupID" = 365 THEN t."capacity" * 3.8 ELSE t."capacity" END AS "capacity",
+                t."portionSize",t."raceID",t."basePrice",t."published",t."marketGroupID",t."chanceOfDuplicating"
+           FROM "invTypes" t LEFT JOIN "invBlueprintTypes" b ON b."blueprintTypeID" = t."typeID"
+           LEFT JOIN "invTypes" p ON p."typeID" = b."productTypeID""#),
     s("config.BulkData.bptypes", Shape::Tuple,
-      r#"SELECT "blueprintTypeID","parentBlueprintTypeID","productTypeID","productionTime","techLevel" FROM "invBlueprintTypes""#),
+      r#"SELECT "blueprintTypeID","parentBlueprintTypeID","productTypeID","productionTime","techLevel",
+                "researchProductivityTime","researchMaterialTime","researchCopyTime","researchTechTime",
+                "productivityModifier","materialModifier","wasteFactor","chanceOfReverseEngineering","maxProductionLimit"
+           FROM "invBlueprintTypes""#),
     s("config.BulkData.invtypereactions", Shape::Tuple,
       r#"SELECT "reactionTypeID","input","typeID","quantity" FROM "invTypeReactions""#),
     s("config.BulkData.invmetatypes", Shape::Tuple,
@@ -85,9 +94,13 @@ pub const SPECS: &[Spec] = &[
     s("config.BulkData.ramaltypes", Shape::Tuple,
       r#"SELECT "assemblyLineTypeID","assemblyLineTypeName","description","baseTimeMultiplier","baseMaterialMultiplier","volume","activityID","minCostPerHour" FROM "ramAssemblyLineTypes""#),
     s("config.BulkData.ramaltypesdetailpercategory", Shape::Tuple,
-      r#"SELECT "assemblyLineTypeID","categoryID","timeMultiplier","materialMultiplier" FROM "ramAssemblyLineTypeDetailPerCategory""#),
+      r#"SELECT d."assemblyLineTypeID",d."categoryID",d."timeMultiplier",d."materialMultiplier"
+           FROM "ramAssemblyLineTypeDetailPerCategory" d JOIN "invCategories" c USING ("categoryID")"#),
+    // The client resolves every supported group when rendering an installation.
+    // Some assembly line records reference groups absent from this data set.
     s("config.BulkData.ramaltypesdetailpergroup", Shape::Tuple,
-      r#"SELECT "assemblyLineTypeID","groupID","timeMultiplier","materialMultiplier" FROM "ramAssemblyLineTypeDetailPerGroup""#),
+      r#"SELECT d."assemblyLineTypeID",d."groupID",d."timeMultiplier",d."materialMultiplier"
+           FROM "ramAssemblyLineTypeDetailPerGroup" d JOIN "invGroups" g USING ("groupID")"#),
     s("config.BulkData.ramactivities", Shape::Tuple,
       r#"SELECT "activityID","activityName","iconNo","description","published" FROM "ramActivities""#),
     s("config.BulkData.ramcompletedstatuses", Shape::Tuple,
