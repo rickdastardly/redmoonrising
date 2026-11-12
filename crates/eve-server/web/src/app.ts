@@ -2100,6 +2100,9 @@ const sov = {
   signature: "",
   timer: 0,
   queued: false,
+  stars: [] as [number, number, number, number][],
+  marked: null as MapSystem | null,
+  markedAt: 0,
 };
 
 function hslToRgb(css: string): [number, number, number] {
@@ -2145,7 +2148,7 @@ async function openSovMap(): Promise<void> {
 async function loadSovStatic(): Promise<void> {
   try {
     const data = await get<SovStatic>("/api/sovmap/static");
-    sov.systems = data.systems.map(([id, name, region, x, z, sec]) => ({ id, name, region, x, y: -z, sec, holder: null, since: null }));
+    sov.systems = data.systems.map(([id, name, region, x, z, sec]) => ({ id, name, region, x, y: z, sec, holder: null, since: null }));
     sov.byId = new Map(sov.systems.map((s) => [s.id, s]));
     sov.byName = new Map(sov.systems.map((s) => [s.name, s]));
     sov.jumps = data.jumps.flatMap(([a, b]) => {
@@ -2166,6 +2169,8 @@ async function loadSovStatic(): Promise<void> {
       sov.regions.set(id, { name: names.get(id) ?? "", x: sum.x / sum.n, y: sum.y / sum.n, nullsec: sum.nullsec > sum.n / 2 });
     }
     sov.sigma = typicalSpacing() * 2.3;
+    const systemNames = document.getElementById("sov-system-names");
+    if (systemNames) systemNames.replaceChildren(...sov.systems.map((s) => { const o = document.createElement("option"); o.value = s.name; return o; }).sort((a, b) => a.value.localeCompare(b.value)));
     sov.loaded = true;
   } catch (e) {
     sov.loading = null;
@@ -2403,6 +2408,18 @@ function paintSov(): void {
   const showEmpire = (document.getElementById("sov-empire") as HTMLInputElement).checked;
   const visible = (sx: number, sy: number) => sx > -40 && sy > -40 && sx < rect.width + 40 && sy < rect.height + 40;
 
+  // A faint starfield that drifts slowly as the map pans.
+  if (!sov.stars.length) {
+    for (let i = 0; i < 420; i++) sov.stars.push([Math.random(), Math.random(), Math.random() * 0.9 + 0.3, Math.random() * 0.45 + 0.08]);
+  }
+  const driftX = -sov.view.cx * sov.view.scale * 0.02, driftY = -sov.view.cy * sov.view.scale * 0.02;
+  for (const [fx, fy, size, alpha] of sov.stars) {
+    const x = ((fx * rect.width + driftX) % rect.width + rect.width) % rect.width;
+    const y = ((fy * rect.height + driftY) % rect.height + rect.height) % rect.height;
+    ctx.fillStyle = `rgba(190,215,235,${alpha})`;
+    ctx.fillRect(x, y, size, size);
+  }
+
   if (sov.influence) {
     const { minX, maxX, minY, maxY } = sov.bounds;
     const [x0, y0] = toScreen(minX, minY, rect);
@@ -2514,6 +2531,25 @@ function paintSov(): void {
     ctx.fillText(text, sx, sy);
   }
 
+  if (sov.marked) {
+    const age = Date.now() - sov.markedAt;
+    if (age < 6000) {
+      const [sx, sy] = toScreen(sov.marked.x, sov.marked.y, rect);
+      const r = dot + 6 + 10 * ((age % 1200) / 1200);
+      ctx.strokeStyle = `rgba(90,184,214,${1 - (age % 1200) / 1200})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.font = `600 13px Bahnschrift, "Segoe UI", sans-serif`;
+      ctx.textAlign = "left";
+      ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,0,0,0.85)";
+      ctx.strokeText(sov.marked.name, sx + dot + 8, sy - 10);
+      ctx.fillStyle = "#bfe9f7";
+      ctx.fillText(sov.marked.name, sx + dot + 8, sy - 10);
+      ctx.textAlign = "center";
+      drawSov();
+    } else sov.marked = null;
+  }
+
   if (sov.hover) {
     const [sx, sy] = toScreen(sov.hover.x, sov.hover.y, rect);
     ctx.strokeStyle = "#ffffff";
@@ -2597,6 +2633,8 @@ function centreSovOn(systemID: number): void {
   if (!s) return;
   sov.view = { cx: s.x, cy: s.y, scale: Math.max(sov.view.scale, 40) };
   sov.hover = s;
+  sov.marked = s;
+  sov.markedAt = Date.now();
   drawSov();
 }
 
@@ -2685,8 +2723,41 @@ function wireSovMap(): void {
   canvas.addEventListener("pointerleave", () => { sov.hover = null; showSovTooltip(null, 0, 0); drawSov(); });
   canvas.addEventListener("dblclick", () => { fitSov(sov.bounds); setSovFocus(null); });
   for (const id of ["sov-gates", "sov-regions", "sov-names", "sov-empire"]) {
-    (document.getElementById(id) as HTMLInputElement).addEventListener("change", drawSov);
+    const box = document.getElementById(id) as HTMLInputElement;
+    try { const saved = localStorage.getItem(`rmr.${id}`); if (saved !== null) box.checked = saved === "1"; } catch { /* storage unavailable */ }
+    box.addEventListener("change", () => {
+      try { localStorage.setItem(`rmr.${id}`, box.checked ? "1" : "0"); } catch { /* storage unavailable */ }
+      drawSov();
+    });
   }
+  const find = document.getElementById("sov-find") as HTMLInputElement | null;
+  const findSystem = () => {
+    if (!find) return;
+    const wanted = find.value.trim().toLowerCase();
+    if (!wanted) return;
+    const s = sov.byName.get(find.value.trim()) ?? sov.systems.find((x) => x.name.toLowerCase() === wanted) ?? sov.systems.find((x) => x.name.toLowerCase().startsWith(wanted));
+    if (s) { centreSovOn(s.id); find.classList.remove("not-found"); } else find.classList.add("not-found");
+  };
+  find?.addEventListener("change", findSystem);
+  find?.addEventListener("keydown", (e) => { if (e.key === "Enter") findSystem(); });
+  const zoomBy = (factor: number) => {
+    if (!sov.loaded) return;
+    sov.view = { ...sov.view, scale: Math.max(2, Math.min(600, sov.view.scale * factor)) };
+    drawSov();
+  };
+  document.getElementById("sov-zoom-in")?.addEventListener("click", () => zoomBy(1.4));
+  document.getElementById("sov-zoom-out")?.addEventListener("click", () => zoomBy(1 / 1.4));
+  document.addEventListener("keydown", (e) => {
+    if (document.body.dataset.page !== "sovereignty" || e.ctrlKey || e.metaKey || e.altKey) return;
+    const target = e.target as HTMLElement | null;
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) return;
+    if (e.key === "+" || e.key === "=") zoomBy(1.4);
+    else if (e.key === "-" || e.key === "_") zoomBy(1 / 1.4);
+    else if (e.key === "r" || e.key === "R" || e.key === "Home") { fitSov(sov.bounds); setSovFocus(null); }
+    else if (e.key === "Escape") setSovFocus(null);
+    else if (e.key === "/") { e.preventDefault(); find?.focus(); find?.select(); }
+    else return;
+  });
   (document.getElementById("sov-reset") as HTMLButtonElement).addEventListener("click", () => { fitSov(sov.bounds); setSovFocus(null); });
   (document.getElementById("sov-filter") as HTMLInputElement).addEventListener("input", showSovAlliances);
   new ResizeObserver(() => { if (document.body.dataset.page === "sovereignty") resizeSovCanvas(); }).observe(document.getElementById("sov-stage") as HTMLElement);

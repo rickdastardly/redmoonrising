@@ -733,3 +733,63 @@ button:disabled { color: var(--faint); border-color: var(--edge); background: tr
 #group-kills tr.kill-row.is-loss:hover { background: rgba(150, 26, 26, 0.48); }
 .zp-description { margin: 0; color: #aaa; font-size: 12.5px; line-height: 1.45; max-height: 6em; overflow: hidden; }
 .km-involved .party .small { display: block; font-size: 11.5px; }
+
+/* ---- polish: client-style scrollbars, window sheen, map extras -------------------- */
+
+* { scrollbar-width: thin; scrollbar-color: rgba(90, 184, 214, 0.35) rgba(0, 0, 0, 0.3); }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.3); }
+::-webkit-scrollbar-thumb { background: rgba(90, 184, 214, 0.28); border: 1px solid rgba(90, 184, 214, 0.15); }
+::-webkit-scrollbar-thumb:hover { background: rgba(90, 184, 214, 0.5); }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* A thin lit edge along the top of each window, as on the client's glass. */
+.caption { position: relative; }
+.caption::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(90, 184, 214, 0.55), rgba(90, 184, 214, 0.08) 60%, transparent);
+  pointer-events: none;
+}
+.window:hover::before, .window:hover::after { opacity: 1; }
+
+/* Windows slide in when a page opens. */
+@media (prefers-reduced-motion: no-preference) {
+  .desktop .window:not(.page-hidden) { animation: window-in 0.22s ease-out both; }
+  @keyframes window-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+}
+
+button:hover:not(:disabled) { border-color: var(--accent); color: var(--bright); box-shadow: 0 0 10px var(--accent-soft); }
+
+/* Sovereignty map toolbar and compass. */
+.sov-toolbar #sov-find { flex: 0 1 170px; min-height: 24px; padding: 2px 7px; font-size: 12px; }
+.sov-toolbar #sov-find.not-found { border-color: var(--hostile); }
+.sov-toolbar #sov-zoom-in, .sov-toolbar #sov-zoom-out { width: 26px; padding: 0; font-size: 15px; letter-spacing: 0; }
+.sov-compass {
+  position: absolute;
+  right: 14px; bottom: 14px;
+  width: 38px; height: 38px;
+  border: 1px solid var(--edge-strong);
+  border-radius: 50%;
+  background: rgba(5, 8, 11, 0.7);
+  pointer-events: none;
+}
+.sov-compass::before {
+  content: "";
+  position: absolute;
+  left: 50%; top: 5px;
+  margin-left: -4px;
+  border: 4px solid transparent;
+  border-bottom: 13px solid var(--accent);
+  border-top-width: 0;
+}
+.sov-compass span {
+  position: absolute;
+  left: 0; right: 0; bottom: 3px;
+  text-align: center;
+  color: var(--bright);
+  font: 600 10px var(--display);
+  letter-spacing: 0.1em;
+}

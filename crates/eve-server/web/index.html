@@ -117,10 +117,15 @@
             <label><input type="checkbox" id="sov-regions" checked> Regions</label>
             <label><input type="checkbox" id="sov-names"> System names</label>
             <label><input type="checkbox" id="sov-empire"> Empire space</label>
-            <button type="button" id="sov-reset">Reset view</button>
+            <input id="sov-find" type="search" list="sov-system-names" placeholder="Find system ( / )" aria-label="Find a system">
+            <datalist id="sov-system-names"></datalist>
+            <button type="button" id="sov-zoom-out" title="Zoom out (-)">−</button>
+            <button type="button" id="sov-zoom-in" title="Zoom in (+)">+</button>
+            <button type="button" id="sov-reset" title="Reset view (R)">Reset view</button>
           </div>
           <div class="sov-tooltip" id="sov-tooltip" hidden></div>
-          <div class="sov-hint">Scroll to zoom · drag to pan · click an alliance to focus it</div>
+          <div class="sov-compass" aria-hidden="true"><span>N</span></div>
+          <div class="sov-hint">Scroll or +/− to zoom · drag to pan · click an alliance to focus it · Esc clears focus · R resets · / finds a system</div>
         </div>
         <aside class="sov-side">
           <div class="sov-stats" id="sov-stats"></div>

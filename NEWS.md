@@ -2,6 +2,27 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Sovereignty map the right way up, and dashboard polish
+
+*2026-11-12 02:35 UTC*
+
+### Fixed
+
+- **The sovereignty map is the right way up.** Northern regions such as Venal, Tribute and Vale of the Silent are at the top again, and the south at the bottom. A small compass in the corner shows north.
+
+### Sovereignty map
+
+- **Find a system:** type a name in the map's toolbar (or press `/`). The map flies there and marks the system with a pulsing ring.
+- Zoom buttons, plus keyboard shortcuts: `+` and `-` zoom, `R` resets the view, `Esc` clears the alliance focus.
+- Your Stargates, Regions, System names and Empire space choices are remembered between visits.
+- A faint starfield sits behind the map and drifts as you pan.
+
+### Dashboard
+
+- Client-style thin scrollbars, a lit edge along the top of every window, and corner brackets that brighten on hover.
+- Windows slide in gently when you change page. This is skipped if your system asks for reduced motion.
+- Buttons glow when you hover over them.
+
 ## Code review: Local roster and /maxstandings
 
 *2026-11-12 02:28 UTC*

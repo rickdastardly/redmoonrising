@@ -94,5 +94,11 @@
     "publishedMs": 1794450522471,
     "title": "Code review: Local roster and /maxstandings",
     "body": "<h3>Fixes</h3>\n<ul>\n<li><b>Local member list:</b> the client hook that keeps Local's pilot list and war-target badges up to date no longer errors on every refresh. Local now refreshes its list and badges as intended.</li>\n<li><b>/maxstandings</b> now updates your Standings window live for every NPC corporation and faction. Before, you had to relog to see the new standings.</li>\n</ul>\n<h3>Checked</h3>\n<ul>\n<li>Starbases (POS), warp disruptors and interdiction bubbles, deployables and pirate NPCs from the earlier merge are all still in place.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-12 02:35 UTC",
+    "publishedMs": 1794450941177,
+    "title": "Sovereignty map the right way up, and dashboard polish",
+    "body": "<h3>Fixed</h3>\n<ul>\n<li><b>The sovereignty map is the right way up.</b> Northern regions such as Venal, Tribute and Vale of the Silent are at the top again, and the south at the bottom. A small compass in the corner shows north.</li>\n</ul>\n<h3>Sovereignty map</h3>\n<ul>\n<li><b>Find a system:</b> type a name in the map's toolbar (or press <code>/</code>). The map flies there and marks the system with a pulsing ring.</li>\n<li>Zoom buttons, plus keyboard shortcuts: <code>+</code> and <code>-</code> zoom, <code>R</code> resets the view, <code>Esc</code> clears the alliance focus.</li>\n<li>Your Stargates, Regions, System names and Empire space choices are remembered between visits.</li>\n<li>A faint starfield sits behind the map and drifts as you pan.</li>\n</ul>\n<h3>Dashboard</h3>\n<ul>\n<li>Client-style thin scrollbars, a lit edge along the top of every window, and corner brackets that brighten on hover.</li>\n<li>Windows slide in gently when you change page. This is skipped if your system asks for reduced motion.</li>\n<li>Buttons glow when you hover over them.</li>\n</ul>"
   }
 ]
