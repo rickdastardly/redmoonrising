@@ -1724,11 +1724,12 @@ async function refreshBots() {
             b.disabled = !events.controls;
         }
         list("raids", [
-            { title: "Raid on", key: (r) => r.system, cell: (r) => [span(r.system, "hostile")] },
-            { title: "Raiders", num: true, key: (r) => r.raiders, cell: (r) => count(r.raiders) },
+            { title: "Fleet", key: (r) => r.kind ?? "Raid", cell: (r) => [span(r.kind ?? "Raid", "")] },
+            { title: "Where", key: (r) => r.system, cell: (r) => [span(r.system, "hostile")] },
+            { title: "Pilots", num: true, key: (r) => r.raiders, cell: (r) => count(r.raiders) },
             { title: "Kills", num: true, key: (r) => r.kills, cell: (r) => count(r.kills) },
             { title: "Lost", num: true, key: (r) => r.lost, cell: (r) => count(r.lost) },
-        ], events.raids, "No raids under way.");
+        ], events.raids, "No raids or roaming gangs out.");
         list("events", [
             { title: "Time", key: (n) => n.time, cell: (n) => [eveTime(n.time)] },
             { title: "What happened", key: (n) => n.text, cell: (n) => [n.text] },
@@ -2746,7 +2747,7 @@ const pages = {
     seeding: { title: "Market seeding", description: "Pick a station, such as a newly built outpost, and stock its market.", windows: ["w-seeding"] },
     relations: { title: "Standings", description: "Bot relationships and grudges.", windows: ["w-relations"] },
     follow: { title: "Follow a pilot", description: "Track a pilot's current activity.", windows: ["w-follow"] },
-    control: { title: "Events and controls", description: "Simulation events and commands.", windows: ["w-control"] },
+    control: { title: "Events, raids and gangs", description: "Pirate raids and roaming gangs out now, and political events. Start one with the buttons below.", windows: ["w-control"] },
     users: { title: "User accounts", description: "Account roles and in-game staff colours.", windows: ["w-users"] },
     gm: { title: "GM commands", description: "Slash commands for staff, typed into any chat channel in game.", windows: ["w-gm"] },
 };

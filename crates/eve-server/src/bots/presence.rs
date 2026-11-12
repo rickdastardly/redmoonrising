@@ -104,6 +104,8 @@ pub struct Presence {
     hunts: HashMap<u32, i64>,
     /// Pirates raiding high-sec (`events`): they attack players anywhere.
     pub raiders: HashSet<u32>,
+    /// Roaming gangs (`events`): they attack players outside high-sec.
+    pub roamers: HashSet<u32>,
     /// Bots answering a fight call in Local: where they meet (`talk`).
     meets: HashMap<u32, Meet>,
     /// What bots fly and fit.
@@ -149,6 +151,7 @@ impl Presence {
             escort: HashMap::new(),
             hunts: HashMap::new(),
             raiders: HashSet::new(),
+            roamers: HashSet::new(),
             meets: HashMap::new(),
             yard: None,
             kills: Vec::new(),
@@ -531,7 +534,7 @@ impl Presence {
                 }
                 let ship = park.ships.get(ship_id)?;
                 if ship.warping() || ship.npc.as_ref()?.engaged() { return None; }
-                let belt = pick(park, GROUP_BELT, bots[*index as usize].id)?;
+                let belt = pick(park, GROUP_BELT, belt_key(&bots[*index as usize]))?;
                 ((ship.pos - belt.pos).len() < 100_000.0)
                     .then_some((ship.id, ship.pilot.corp_id, belt.id, ship.pos))
             }).collect();
@@ -549,6 +552,64 @@ impl Presence {
                 }
                 if let Some(brain) = park.ships.get_mut(&target).and_then(|s| s.npc.as_mut()) {
                     brain.provoked(attacker);
+                }
+            }
+        }
+
+        // Miners work the asteroids they orbit, about one cycle a minute each:
+        // the ore comes off the rock until it is mined out and gone, and its
+        // miners move on to another.
+        if super::clear_belts() {
+            let mut cycles: Vec<(i64, i64, i64)> = Vec::new();
+            for (index, (system, ship_id)) in &self.shown {
+                let b = &bots[*index as usize];
+                if b.activity != Activity::Mining || b.pod.is_some() || rng.unit() > 1.0 / 60.0 {
+                    continue;
+                }
+                let Some(park) = w.parks.get(&(*system as i64)) else { continue };
+                let Some(ship) = park.ships.get(ship_id) else { continue };
+                if ship.warping() || ship.npc.as_ref().is_some_and(|brain| brain.engaged()) {
+                    continue;
+                }
+                if let Command::Orbit { target, .. } = &ship.command {
+                    if park.rocks.contains_key(target) {
+                        cycles.push((*system as i64, *ship_id, *target));
+                    }
+                }
+            }
+            for (system, ship_id, rock_id) in cycles {
+                let (entries, gone) = {
+                    let Some(park) = w.parks.get_mut(&system) else { continue };
+                    let tick = park.tick;
+                    let Some(rock) = park.rocks.get_mut(&rock_id) else { continue };
+                    let units = ((rng.range(400.0, 1_600.0) / rock.volume.max(0.01)).floor() as i64).clamp(1, rock.quantity.max(1));
+                    rock.quantity -= units;
+                    let gone = rock.quantity <= 0;
+                    let mut entries = vec![space::special_fx(tick, ship_id, Some(rock_id), "effects.Mining")];
+                    if gone {
+                        park.rocks.remove(&rock_id);
+                        entries.push(space::entry(tick, "RemoveBalls", vec![eve_marshal::Value::List(vec![eve_marshal::Value::Int(rock_id)])]));
+                    }
+                    (entries, gone)
+                };
+                space::broadcast(&w, system, None, entries);
+                if gone {
+                    let movers: Vec<(i64, Command)> = self
+                        .shown
+                        .iter()
+                        .filter_map(|(index, (at, ship))| {
+                            let b = &bots[*index as usize];
+                            if *at as i64 != system || b.activity != Activity::Mining {
+                                return None;
+                            }
+                            let park = w.parks.get(&system)?;
+                            let s = park.ships.get(ship)?;
+                            matches!(&s.command, Command::Orbit { target, .. } if *target == rock_id).then(|| (*ship, command_for(b, park, s.pos)))
+                        })
+                        .collect();
+                    for (ship, command) in movers {
+                        steer(&mut w, system, ship, command);
+                    }
                 }
             }
         }
@@ -623,7 +684,8 @@ impl Presence {
         let pos = beside_player.or(at).unwrap_or_else(|| appear_at(bot, park));
         let command = self.course(i, bot, park, pos);
         let pirate = bot.role == super::behaviour::Role::Pirate && PIRATES_ATTACK_PLAYERS.load(Ordering::Relaxed);
-        let hostile = self.raiders.contains(&i) || self.meets.contains_key(&i) || (pirate && park.wildlife.security < HIGH_SEC);
+        let roaming = self.roamers.contains(&i) && park.wildlife.security < HIGH_SEC;
+        let hostile = self.raiders.contains(&i) || self.meets.contains_key(&i) || roaming || (pirate && park.wildlife.security < HIGH_SEC);
         // Its fitting and what it carries, for its wreck and its killmail.
         let mut loot: Vec<(i64, i64)> = Vec::new();
         let mut punch = 1.0;
@@ -731,6 +793,19 @@ fn beside(c: &Celestial, bot: i32, gap: f64) -> Vec3 {
 }
 
 /// One of a park's celestials of a group, chosen by the bot.
+/// Which belt a bot works: miners from the same station share one, as a
+/// mining fleet (when that is on); everyone else spreads out.
+fn belt_key(bot: &Bot) -> i32 {
+    if bot.activity == Activity::Mining && super::mining_fleets() { bot.home } else { bot.id }
+}
+
+/// An asteroid of the belt at `belt` for a miner to work, and its radius.
+fn rock_near(park: &Park, belt: Vec3, bot: i32) -> Option<(i64, f64)> {
+    let mut rocks: Vec<(i64, f64)> = park.rocks.values().filter(|r| (r.pos - belt).len() < 40_000.0).map(|r| (r.id, r.radius)).collect();
+    rocks.sort_by_key(|r| r.0);
+    rocks.get(bot.unsigned_abs() as usize % rocks.len().max(1)).copied()
+}
+
 fn pick(park: &Park, group: i64, bot: i32) -> Option<&Celestial> {
     let all: Vec<&Celestial> = park.celestials.iter().filter(|c| c.group_id == group).collect();
     all.get(bot as usize % all.len().max(1)).copied()
@@ -739,7 +814,7 @@ fn pick(park: &Park, group: i64, bot: i32) -> Option<&Celestial> {
 /// Where a bot already in space is found when someone starts watching.
 fn appear_at(bot: &Bot, park: &Park) -> Vec3 {
     let near = match bot.activity {
-        Activity::Mining | Activity::Ratting => pick(park, GROUP_BELT, bot.id),
+        Activity::Mining | Activity::Ratting => pick(park, GROUP_BELT, belt_key(bot)),
         Activity::Camping => pick(park, GROUP_STARGATE, bot.id),
         _ => park.celestials.get(bot.id as usize % park.celestials.len().max(1)),
     };
@@ -754,9 +829,13 @@ fn command_for(bot: &Bot, park: &Park, from: Vec3) -> Command {
         Command::Warp { target: c.pos + dir * (c.radius + gap), range: 0.0 }
     };
     match bot.activity {
-        Activity::Mining | Activity::Ratting => match pick(park, GROUP_BELT, bot.id) {
+        Activity::Mining | Activity::Ratting => match pick(park, GROUP_BELT, belt_key(bot)) {
             Some(belt) if (belt.pos - from).len() > 200_000.0 => warp_to(belt, 5_000.0),
-            Some(belt) => Command::Orbit { target: belt.id, range: 4_000.0 + (bot.id % 7) as f64 * 1_000.0 },
+            // Miners orbit an asteroid of the belt, ratters the belt itself.
+            Some(belt) => match rock_near(park, belt.pos, bot.id).filter(|_| bot.activity == Activity::Mining) {
+                Some((rock, radius)) => Command::Orbit { target: rock, range: radius + 1_500.0 + (bot.id % 5) as f64 * 500.0 },
+                None => Command::Orbit { target: belt.id, range: 4_000.0 + (bot.id % 7) as f64 * 1_000.0 },
+            },
             None => Command::Stop,
         },
         Activity::Camping => match pick(park, GROUP_STARGATE, bot.id) {

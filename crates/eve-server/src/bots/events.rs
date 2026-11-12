@@ -13,6 +13,12 @@
 //!   sight (CONCORD answers them as it would anyone) and pick off the bots
 //!   they find.
 //!
+//! - **Roam**: a pirate or null-sec alliance sends a gang of its fighters
+//!   roaming through low and null-sec for a couple of hours, a few systems
+//!   at a time, looking for a fight. With `hunt_players` on they head for
+//!   systems where players are in space. They attack players outside
+//!   high-sec on sight.
+//!
 //! Each happens by chance on the politics tick, or when asked for from the
 //! dashboard or `/bots event`.
 
@@ -37,6 +43,15 @@ const RAID_CHANCE: f64 = 0.006;
 /// A raid's size and length (bots' clock).
 const RAIDERS: (usize, usize) = (15, 45);
 const RAID_SECS: u32 = 2 * 3_600;
+/// A roaming gang: its chance on a politics tick at the Normal setting, its
+/// size, how long it is out, the systems it moves on to, how far it looks
+/// for the next, and how many may be out at once.
+const ROAM_CHANCE: f64 = 0.08;
+const ROAMERS: (usize, usize) = (5, 12);
+const ROAM_SECS: u32 = 2 * 3_600;
+const ROAM_STOPS: (usize, usize) = (3, 6);
+const ROAM_REACH: i64 = 5;
+const ROAMS_AT_ONCE: usize = 3;
 const DAY: u32 = 86_400;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +61,7 @@ pub enum Kind {
     Collapse,
     Coalition,
     Raid,
+    Roam,
 }
 
 impl Kind {
@@ -56,6 +72,7 @@ impl Kind {
             "collapse" => Some(Kind::Collapse),
             "coalition" => Some(Kind::Coalition),
             "raid" | "invasion" | "invade" => Some(Kind::Raid),
+            "roam" | "roaming" | "gang" => Some(Kind::Roam),
             _ => None,
         }
     }
@@ -70,6 +87,12 @@ pub struct Raid {
     pub kills: u32,
     pub lost: u32,
     pub name: String,
+    /// A roaming gang rather than a raid: it moves on after a while.
+    pub roam: bool,
+    /// Systems a roaming gang still moves on to.
+    pub stops: usize,
+    /// When a roaming gang that has arrived moves on (0 until it arrives).
+    pub settle_at: u32,
 }
 
 #[derive(Default)]
@@ -116,8 +139,9 @@ pub async fn tick(
         (Kind::Collapse, COLLAPSE_CHANCE),
         (Kind::Coalition, COALITION_CHANCE),
         (Kind::Raid, RAID_CHANCE),
+        (Kind::Roam, ROAM_CHANCE * crate::bots::roaming().factor()),
     ] {
-        if roll && rng.unit() < chance {
+        if roll && chance > 0.0 && rng.unit() < chance {
             due.push(kind);
         }
     }
@@ -128,6 +152,7 @@ pub async fn tick(
             Kind::Collapse => collapse(ev, db, p, ids, &mut news).await?,
             Kind::Coalition => coalition(ev, db, p, rng, clock, &mut news).await?,
             Kind::Raid => moved.extend(raid(ev, db, atlas, p, bots, ids, presence, rng, clock, &mut news).await?),
+            Kind::Roam => moved.extend(roam(ev, db, atlas, p, bots, ids, presence, rng, clock, &mut news).await?),
         }
     }
     Ok((news, moved))
@@ -386,8 +411,97 @@ async fn raid(
     let name = super::sov::system_name(db, system).await;
     let who = super::sov::alliance_name(db, alliance).await;
     ev.tell(news, format!("Raid: {} pirates of {who} are on their way to {name}, in high-sec", fit.len()));
-    ev.raids.push(Raid { alliance, system, until: clock + RAID_SECS, raiders: fit, kills: 0, lost: 0, name });
+    ev.raids.push(Raid { alliance, system, until: clock + RAID_SECS, raiders: fit, kills: 0, lost: 0, name, roam: false, stops: 0, settle_at: 0 });
     Ok(moved)
+}
+
+/// Where a roaming gang goes next: a low or null-sec system within reach,
+/// the nearest with a player in space when hunting, else any.
+fn roam_target(atlas: &Atlas, watched: &HashSet<i32>, from: i32, reach: i64, rng: &mut Rng) -> Option<i32> {
+    let mut near: Vec<(i32, i64)> = crate::gates::reach_on(atlas.graph, from as i64, reach)
+        .into_iter()
+        .map(|(s, n)| (s as i32, n))
+        .filter(|(s, n)| *n > 0 && atlas.systems.get(s).is_some_and(|x| x.security < 0.45))
+        .collect();
+    near.sort_unstable();
+    if crate::bots::hunt_players() {
+        if let Some(&(s, _)) = near.iter().filter(|(s, _)| watched.contains(s)).min_by_key(|(s, n)| (*n, *s)) {
+            return Some(s);
+        }
+    }
+    near.get(rng.below(near.len().max(1))).map(|(s, _)| *s)
+}
+
+/// A pirate or null-sec alliance sends a gang out roaming.
+#[allow(clippy::too_many_arguments)]
+async fn roam(
+    ev: &mut Events,
+    db: &Client,
+    atlas: &Atlas,
+    p: &Politics,
+    bots: &mut [Bot],
+    ids: &[Identity],
+    presence: &mut Presence,
+    rng: &mut Rng,
+    clock: u32,
+    news: &mut Vec<News>,
+) -> Result<Vec<(u32, u32)>, tokio_postgres::Error> {
+    if ev.raids.iter().filter(|r| r.roam).count() >= ROAMS_AT_ONCE {
+        return Ok(Vec::new());
+    }
+    let busy: HashSet<u32> = ev.raids.iter().flat_map(|r| r.raiders.iter().copied()).collect();
+    let mut sides: Vec<(i32, i32)> = p
+        .alliances
+        .iter()
+        .filter(|(_, a)| a.kind == KIND_PIRATE_ALLIANCE || a.kind == KIND_NULL_ALLIANCE)
+        .filter_map(|(id, a)| a.region.map(|r| (*id, r)))
+        .filter(|(id, _)| !ev.raids.iter().any(|r| r.alliance == *id))
+        .collect();
+    sides.sort_unstable();
+    let watched = presence.watched().clone();
+    // A few tries: the first alliance picked may have too few fighters about.
+    for _ in 0..6 {
+        if sides.is_empty() {
+            break;
+        }
+        let (alliance, region) = sides.swap_remove(rng.below(sides.len()));
+        let Some(start) = atlas.systems.iter().filter(|(_, s)| s.region == region).map(|(id, _)| *id).min() else { continue };
+        let Some(system) = roam_target(atlas, &watched, start, ROAM_REACH * 2, rng) else { continue };
+        let want = ROAMERS.0 + rng.below(ROAMERS.1 - ROAMERS.0 + 1);
+        let mut fit: Vec<u32> = (0..bots.len() as u32)
+            .filter(|i| {
+                let (b, id) = (&bots[*i as usize], &ids[*i as usize]);
+                id.alliance == Some(alliance)
+                    && matches!(b.role, Role::Pirate | Role::Ratter)
+                    && b.pod.is_none()
+                    && !busy.contains(i)
+                    && !matches!(b.activity, Activity::Sieging | Activity::Escorting)
+                    && presence.armed(id.hull)
+            })
+            .collect();
+        fit.sort_by_key(|i| (u8::from(!bots[*i as usize].online), *i));
+        fit.truncate(want);
+        if fit.len() < ROAMERS.0 {
+            continue;
+        }
+        let mut moved = Vec::new();
+        for &i in &fit {
+            let b = &mut bots[i as usize];
+            b.online = true;
+            b.session_end = b.session_end.max(clock + ROAM_SECS);
+            let wait = behaviour::go(b, atlas, system, 0, rng);
+            moved.push((i, wait));
+            presence.roamers.insert(i);
+        }
+        let name = super::sov::system_name(db, system).await;
+        let who = super::sov::alliance_name(db, alliance).await;
+        let hunting = if crate::bots::hunt_players() && watched.contains(&system) { ", hunting the capsuleers there" } else { "" };
+        ev.tell(news, format!("Roaming gang: {} pilots of {who} are heading out to {name}{hunting}", fit.len()));
+        let stops = ROAM_STOPS.0 + rng.below(ROAM_STOPS.1 - ROAM_STOPS.0 + 1);
+        ev.raids.push(Raid { alliance, system, until: clock + ROAM_SECS, raiders: fit, kills: 0, lost: 0, name, roam: true, stops, settle_at: 0 });
+        return Ok(moved);
+    }
+    Ok(Vec::new())
 }
 
 /// Every minute of the bots' clock: raiders in their target system, where
@@ -406,13 +520,45 @@ pub fn raids(ev: &mut Events, atlas: &Atlas, p: &mut Politics, bots: &mut [Bot],
                 bots[i as usize].activity = Activity::Camping;
             }
         }
+        // A roaming gang moves on once it has spent a while where it is.
+        if r.roam {
+            let flying = r.raiders.iter().filter(|i| bots[**i as usize].pod.is_none()).count().max(1);
+            if r.settle_at == 0 && here.len() * 2 >= flying {
+                r.settle_at = clock + 480 + rng.below(600) as u32;
+            }
+            if r.settle_at != 0 && clock >= r.settle_at {
+                match (r.stops, roam_target(atlas, &watched, r.system, ROAM_REACH, rng)) {
+                    (0, _) | (_, None) => r.until = clock,
+                    (_, Some(next)) => {
+                        r.stops -= 1;
+                        r.settle_at = 0;
+                        r.system = next;
+                        for &i in &r.raiders {
+                            let b = &mut bots[i as usize];
+                            if b.station == 0 && b.pod.is_none() && b.activity != Activity::Sieging {
+                                moved.push((i, behaviour::go(b, atlas, next, 0, rng)));
+                            }
+                        }
+                        continue;
+                    }
+                }
+            }
+            // Strays (off ratting, or wandered a gate over) rejoin the gang.
+            for &i in &r.raiders {
+                let b = &mut bots[i as usize];
+                let joining = b.activity == Activity::Travelling && b.route.first() == Some(&r.system);
+                if b.station == 0 && b.pod.is_none() && b.system != r.system && !joining && !matches!(b.activity, Activity::Sieging | Activity::Escorting) {
+                    moved.push((i, behaviour::go(b, atlas, r.system, 0, rng)));
+                }
+            }
+        }
         if here.is_empty() || watched.contains(&r.system) {
             continue;
         }
         let victims: Vec<u32> = (0..bots.len() as u32)
             .filter(|i| {
                 let b = &bots[*i as usize];
-                b.online && b.system == r.system && b.station == 0 && b.role != Role::Pirate && b.activity != Activity::Escorting
+                b.online && b.system == r.system && b.station == 0 && b.role != Role::Pirate && b.activity != Activity::Escorting && !r.raiders.contains(i)
             })
             .collect();
         if let Some(&v) = victims.get(rng.below(victims.len().max(1))).filter(|_| rng.unit() < (0.1 * here.len() as f64).min(0.9)) {
@@ -423,8 +569,9 @@ pub fn raids(ev: &mut Events, atlas: &Atlas, p: &mut Politics, bots: &mut [Bot],
             r.kills += 1;
             p.lost += 1;
         }
-        // CONCORD takes its toll of criminals.
-        if rng.unit() < 0.15 {
+        // CONCORD takes its toll of criminals, in high-sec.
+        let high = atlas.systems.get(&r.system).is_some_and(|x| x.security >= 0.45);
+        if (!r.roam || high) && rng.unit() < 0.15 {
             let i = here[rng.below(here.len())];
             let wait = behaviour::reclone(&mut bots[i as usize], atlas, rng);
             moved.push((i, wait));
@@ -437,12 +584,17 @@ pub fn raids(ev: &mut Events, atlas: &Atlas, p: &mut Politics, bots: &mut [Bot],
     for r in over {
         for &i in &r.raiders {
             presence.raiders.remove(&i);
+            presence.roamers.remove(&i);
             let b = &mut bots[i as usize];
             if b.station == 0 && b.pod.is_none() && b.activity != Activity::Sieging {
                 moved.push((i, behaviour::release(b, atlas, rng)));
             }
         }
-        let text = format!("The raid on {} is over: the pirates killed {} and lost {}", r.name, r.kills, r.lost);
+        let text = if r.roam {
+            format!("A roaming gang that set out for {} has gone home: it killed {} and lost {}", r.name, r.kills, r.lost)
+        } else {
+            format!("The raid on {} is over: the pirates killed {} and lost {}", r.name, r.kills, r.lost)
+        };
         let at = crate::bulkdata::filetime_now();
         ev.log.push((at, text.clone()));
         news.push((at, text));

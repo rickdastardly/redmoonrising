@@ -184,6 +184,12 @@ struct BotsSection {
     join_player_alliances: String,
     accept_applications: String,
     online_activity: f64,
+    roaming_gangs: String,
+    hunt_players: bool,
+    mining_fleets: bool,
+    clear_belts: bool,
+    wingmen: String,
+    bot_market: String,
 }
 
 impl Default for ServerSection {
@@ -210,7 +216,8 @@ impl Default for BotsSection {
     fn default() -> Self {
         BotsSection { count: 0, speed: 1.0, shown_per_system: 120, pirates_attack_players: true, dashboard_controls: false, aggression: "some".into(),
             chat: "normal".into(), trash_talk: true, join_player_corps: "normal".into(), join_player_alliances: "normal".into(),
-            accept_applications: "selective".into(), online_activity: 1.0 }
+            accept_applications: "selective".into(), online_activity: 1.0, roaming_gangs: "normal".into(), hunt_players: true,
+            mining_fleets: true, clear_belts: true, wingmen: "paid".into(), bot_market: "normal".into() }
     }
 }
 
@@ -234,6 +241,15 @@ impl Config {
             door: crate::bots::Door::parse(&file.bots.accept_applications)
                 .ok_or_else(|| bad("acceptApplications", "closed, selective or open", &file.bots.accept_applications))?,
             activity: file.bots.online_activity.clamp(crate::bots::ACTIVITY_RANGE.0, crate::bots::ACTIVITY_RANGE.1),
+            roaming: crate::bots::Rate::parse(&file.bots.roaming_gangs)
+                .ok_or_else(|| bad("roamingGangs", "off, low, normal or high", &file.bots.roaming_gangs))?,
+            hunt_players: file.bots.hunt_players,
+            mining_fleets: file.bots.mining_fleets,
+            clear_belts: file.bots.clear_belts,
+            wingmen: crate::bots::Wingmen::parse(&file.bots.wingmen)
+                .ok_or_else(|| bad("wingmen", "off, free, cheap or paid", &file.bots.wingmen))?,
+            market: crate::bots::Rate::parse(&file.bots.bot_market)
+                .ok_or_else(|| bad("botMarket", "off, low, normal or high", &file.bots.bot_market))?,
         };
         let mut c = Config {
             bind: file.server.bind,

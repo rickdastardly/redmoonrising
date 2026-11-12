@@ -44,7 +44,7 @@ pub fn take() -> Vec<Request> {
 pub fn parse(words: &[&str]) -> Result<Request, String> {
     let rest = words.get(1..).unwrap_or(&[]).join(" ");
     match words.first().map(|w| w.to_ascii_lowercase()).as_deref() {
-        Some("event") => events::Kind::parse(rest.trim()).map(Request::Event).ok_or_else(|| "Events: betrayal, merger, collapse, coalition, raid.".to_string()),
+        Some("event") => events::Kind::parse(rest.trim()).map(Request::Event).ok_or_else(|| "Events: betrayal, merger, collapse, coalition, raid, roam.".to_string()),
         Some("war") => {
             let (a, b) = rest.split_once('|').ok_or("war <alliance> | <alliance>")?;
             Ok(Request::War(a.trim().to_string(), b.trim().to_string()))

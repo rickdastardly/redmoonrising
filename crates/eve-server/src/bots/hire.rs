@@ -74,7 +74,8 @@ pub async fn run(
         let Some(&i) = by_char.get(&bot_char) else { continue };
         let (b, id) = (&bots[i as usize], &ids[i as usize]);
         let here = world.lock().presence_of(player).filter(|p| !p.docked).map(|p| p.solar_system_id as i32);
-        let fee = rate(yard, id.hull);
+        let terms = crate::bots::wingmen();
+        let fee = rate(yard, id.hull) * terms.price_factor();
         let pilot = crate::ballpark::Pilot {
             type_id: id.hull,
             group_id: 0,
@@ -85,7 +86,9 @@ pub async fn run(
             security: id.security as f64,
             bounty: 0.0,
         };
-        let why = if here.is_none() || here != Some(b.system) || b.station != 0 || !b.online {
+        let why = if terms == crate::bots::Wingmen::Off {
+            Some("I'm not taking on wingman work right now.".to_string())
+        } else if here.is_none() || here != Some(b.system) || b.station != 0 || !b.online {
             Some("I'm not where you are.".to_string())
         } else if b.pod.is_some() || !presence.armed(id.hull) {
             Some("I've nothing to fight with right now.".to_string())
@@ -114,10 +117,14 @@ pub async fn run(
                 presence.escort(i, player);
                 touched.push((i, 60));
                 info!("bots: {} hired by {player} at {fee} ISK an hour", ids[i as usize].name);
-                let body = format!(
-                    "Glad to fly with you. My rate is {} ISK an hour, paid at the start of each hour; I've taken the first. I'll stay on your wing, follow you through gates, and shoot whatever shoots you or whatever you lock. Kick me from the gang when you're done.",
-                    whole(fee)
-                );
+                let body = if fee <= 0.0 {
+                    "Glad to fly with you, no charge. I'll stay on your wing, follow you through gates, and shoot whatever shoots you or whatever you lock. Kick me from the gang when you're done.".to_string()
+                } else {
+                    format!(
+                        "Glad to fly with you. My rate is {} ISK an hour, paid at the start of each hour; I've taken the first. I'll stay on your wing, follow you through gates, and shoot whatever shoots you or whatever you lock. Kick me from the gang when you're done.",
+                        whole(fee)
+                    )
+                };
                 letter(db, world, b_id(bots, i), player, "On your wing", &body).await;
             }
             (why, _, _) => {
@@ -205,6 +212,9 @@ fn whole(amount: f64) -> String {
 
 /// An hour's pay, from the player to the bot. Whether it went through.
 async fn charge(db: &Client, db_url: &str, world: &World, player: i64, bot: i32, amount: f64) -> bool {
+    if amount <= 0.0 {
+        return true;
+    }
     use crate::svc::wallet::{move_cash, Payment};
     let payment = Payment { payer: player, payee: Some(bot as i64), amount, ref_type: REF_PLAYER_DONATION, arg_id1: "", reason: "Wingman's hourly rate" };
     let ok = move_cash(db_url, payment).await.is_ok();

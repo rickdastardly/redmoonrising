@@ -158,7 +158,14 @@ pub async fn followed(db: &Client, f: &Following, bots: &[Bot], ids: &[Identity]
 }
 
 pub fn events(ev: &Events, names: &Names) -> Json {
-    let raids: Vec<Json> = ev.raids.iter().map(|r| json!({ "system": names.system(r.system), "raiders": r.raiders.len(), "kills": r.kills, "lost": r.lost })).collect();
+    let raids: Vec<Json> = ev
+        .raids
+        .iter()
+        .map(|r| {
+            let kind = if r.roam { "Roaming gang" } else { "Raid" };
+            json!({ "kind": kind, "system": names.system(r.system), "raiders": r.raiders.len(), "kills": r.kills, "lost": r.lost })
+        })
+        .collect();
     let log: Vec<Json> = ev.log.iter().rev().map(|(t, l)| json!({ "time": ms(*t), "text": l })).collect();
     json!({ "raids": raids, "log": log })
 }

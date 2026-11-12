@@ -328,6 +328,112 @@ pub fn set_pirates_attack_players(on: bool) {
     changed();
 }
 
+// ---- what the bots get up to: roaming gangs, wingmen, mining fleets, the market ----
+
+/// What a bot charges to fly as a player's wingman.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Wingmen {
+    /// Bots turn gang invitations down.
+    Off = 0,
+    Free = 1,
+    /// A quarter of the usual rate.
+    Cheap = 2,
+    Paid = 3,
+}
+
+impl Wingmen {
+    pub fn parse(word: &str) -> Option<Wingmen> {
+        match word.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" | "never" => Some(Wingmen::Off),
+            "free" => Some(Wingmen::Free),
+            "cheap" | "discount" => Some(Wingmen::Cheap),
+            "paid" | "normal" | "default" => Some(Wingmen::Paid),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        ["off", "free", "cheap", "paid"][self as usize]
+    }
+
+    /// The share of the usual hourly rate charged.
+    pub fn price_factor(self) -> f64 {
+        [0.0, 0.0, 0.25, 1.0][self as usize]
+    }
+}
+
+static ROAMING: AtomicU8 = AtomicU8::new(Rate::Normal as u8);
+static HUNT_PLAYERS: AtomicBool = AtomicBool::new(true);
+static MINING_FLEETS: AtomicBool = AtomicBool::new(true);
+static CLEAR_BELTS: AtomicBool = AtomicBool::new(true);
+static WINGMEN: AtomicU8 = AtomicU8::new(Wingmen::Paid as u8);
+static BOT_MARKET: AtomicU8 = AtomicU8::new(Rate::Normal as u8);
+
+/// How often bot alliances send gangs out roaming low and null-sec.
+pub fn roaming() -> Rate {
+    rate_of(ROAMING.load(Ordering::Relaxed))
+}
+
+pub fn set_roaming(r: Rate) {
+    ROAMING.store(r as u8, Ordering::Relaxed);
+    changed();
+}
+
+/// Whether roaming gangs head for systems where players are in space.
+pub fn hunt_players() -> bool {
+    HUNT_PLAYERS.load(Ordering::Relaxed)
+}
+
+pub fn set_hunt_players(on: bool) {
+    HUNT_PLAYERS.store(on, Ordering::Relaxed);
+    changed();
+}
+
+/// Whether miners from the same station work the same belt together.
+pub fn mining_fleets() -> bool {
+    MINING_FLEETS.load(Ordering::Relaxed)
+}
+
+pub fn set_mining_fleets(on: bool) {
+    MINING_FLEETS.store(on, Ordering::Relaxed);
+    changed();
+}
+
+/// Whether bot miners in view mine the asteroids down, clearing belts.
+pub fn clear_belts() -> bool {
+    CLEAR_BELTS.load(Ordering::Relaxed)
+}
+
+pub fn set_clear_belts(on: bool) {
+    CLEAR_BELTS.store(on, Ordering::Relaxed);
+    changed();
+}
+
+pub fn wingmen() -> Wingmen {
+    match WINGMEN.load(Ordering::Relaxed) {
+        0 => Wingmen::Off,
+        1 => Wingmen::Free,
+        2 => Wingmen::Cheap,
+        _ => Wingmen::Paid,
+    }
+}
+
+pub fn set_wingmen(w: Wingmen) {
+    WINGMEN.store(w as u8, Ordering::Relaxed);
+    changed();
+}
+
+/// How busily bot traders keep sell and buy orders on the market.
+pub fn bot_market() -> Rate {
+    rate_of(BOT_MARKET.load(Ordering::Relaxed))
+}
+
+pub fn set_bot_market(r: Rate) {
+    BOT_MARKET.store(r as u8, Ordering::Relaxed);
+    changed();
+}
+
 /// The settings above as the config file sets them at start.
 #[derive(Debug, Clone, Copy)]
 pub struct Settings {
@@ -337,15 +443,30 @@ pub struct Settings {
     pub alliance_applying: Rate,
     pub door: Door,
     pub activity: f64,
+    pub roaming: Rate,
+    pub hunt_players: bool,
+    pub mining_fleets: bool,
+    pub clear_belts: bool,
+    pub wingmen: Wingmen,
+    pub market: Rate,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { chatter: Chatter::Normal, trash_talk: true, recruiting: Rate::Normal, alliance_applying: Rate::Normal, door: Door::Selective, activity: 1.0 }
+        Settings {
+            chatter: Chatter::Normal, trash_talk: true, recruiting: Rate::Normal, alliance_applying: Rate::Normal, door: Door::Selective, activity: 1.0,
+            roaming: Rate::Normal, hunt_players: true, mining_fleets: true, clear_belts: true, wingmen: Wingmen::Paid, market: Rate::Normal,
+        }
     }
 }
 
 pub fn apply_settings(s: &Settings, shown: usize) {
+    set_roaming(s.roaming);
+    set_hunt_players(s.hunt_players);
+    set_mining_fleets(s.mining_fleets);
+    set_clear_belts(s.clear_belts);
+    set_wingmen(s.wingmen);
+    set_bot_market(s.market);
     set_chatter(s.chatter);
     set_trash_talk(s.trash_talk);
     set_recruiting(s.recruiting);

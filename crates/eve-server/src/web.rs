@@ -562,6 +562,12 @@ fn bot_settings() -> Json {
         "onlineActivity": (crate::bots::activity_factor() * 100.0).round() / 100.0,
         "shownPerSystem": crate::bots::shown_per_system(),
         "piratesAttackPlayers": crate::bots::pirates_attack_players(),
+        "roamingGangs": crate::bots::roaming().as_str(),
+        "huntPlayers": crate::bots::hunt_players(),
+        "miningFleets": crate::bots::mining_fleets(),
+        "clearBelts": crate::bots::clear_belts(),
+        "wingmen": crate::bots::wingmen().as_str(),
+        "botMarket": crate::bots::bot_market().as_str(),
         "countOverridden": crate::config::overridden("RMR_BOTS"),
         "aggressionOverridden": crate::config::overridden("RMR_BOTS_AGGRESSION"),
         "restartAvailable": restart_available(),
@@ -579,7 +585,7 @@ fn save_bots_setting(key: &str, value: &str) -> Result<(), (u16, String)> {
 /// Changes the bots: the count (saved for the next start, optionally
 /// restarting now) and their behaviour (at once, and saved).
 async fn change_bots(server: &Server, body: &[u8]) -> EditResult {
-    use crate::bots::{Aggression, Chatter, Door, Rate};
+    use crate::bots::{Aggression, Chatter, Door, Rate, Wingmen};
     let input: Json = serde_json::from_slice(body).map_err(|_| (400, "Invalid bot settings.".to_string()))?;
     let mut said: Vec<String> = Vec::new();
     let choice = |key: &str, choices: &str| (400, format!("{key}: choose {choices}."));
@@ -644,6 +650,44 @@ async fn change_bots(server: &Server, body: &[u8]) -> EditResult {
         crate::bots::set_pirates_attack_players(on);
         save_bots_setting("piratesAttackPlayers", if on { "true" } else { "false" })?;
         said.push(if on { "Pirates attack players outside high-sec." } else { "Pirates leave players alone unless angered." }.to_string());
+    }
+    if let Some(word) = input["roamingGangs"].as_str() {
+        let r = Rate::parse(word).ok_or_else(|| choice("Roaming gangs", "off, low, normal or high"))?;
+        crate::bots::set_roaming(r);
+        save_bots_setting("roamingGangs", r.as_str())?;
+        said.push(format!("Roaming gangs: {}.", r.as_str()));
+    }
+    if let Some(on) = input["huntPlayers"].as_bool() {
+        crate::bots::set_hunt_players(on);
+        save_bots_setting("huntPlayers", if on { "true" } else { "false" })?;
+        said.push(if on { "Roaming gangs hunt for players in low and null-sec." } else { "Roaming gangs wander without looking for players." }.to_string());
+    }
+    if let Some(on) = input["miningFleets"].as_bool() {
+        crate::bots::set_mining_fleets(on);
+        save_bots_setting("miningFleets", if on { "true" } else { "false" })?;
+        said.push(if on { "Miners from the same station mine together in fleets." } else { "Miners spread out over the belts." }.to_string());
+    }
+    if let Some(on) = input["clearBelts"].as_bool() {
+        crate::bots::set_clear_belts(on);
+        save_bots_setting("clearBelts", if on { "true" } else { "false" })?;
+        said.push(if on { "Bot miners mine asteroids down and clear belts." } else { "Bot miners leave the asteroids as they are." }.to_string());
+    }
+    if let Some(word) = input["wingmen"].as_str() {
+        let w = Wingmen::parse(word).ok_or_else(|| choice("Wingmen", "off, free, cheap or paid"))?;
+        crate::bots::set_wingmen(w);
+        save_bots_setting("wingmen", w.as_str())?;
+        said.push(match w {
+            Wingmen::Off => "Bots turn down gang invitations.",
+            Wingmen::Free => "Bots join players' gangs for free.",
+            Wingmen::Cheap => "Bots join players' gangs at a quarter of their usual rate.",
+            Wingmen::Paid => "Bots join players' gangs at their usual hourly rate.",
+        }.to_string());
+    }
+    if let Some(word) = input["botMarket"].as_str() {
+        let r = Rate::parse(word).ok_or_else(|| choice("Bot market", "off, low, normal or high"))?;
+        crate::bots::set_bot_market(r);
+        save_bots_setting("botMarket", r.as_str())?;
+        said.push(format!("Bot traders' market orders: {}.", r.as_str()));
     }
     let restart = input["restart"].as_bool().unwrap_or(false);
     if !input["count"].is_null() {

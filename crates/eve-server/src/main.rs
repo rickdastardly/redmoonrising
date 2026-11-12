@@ -1,4 +1,5 @@
 mod ballpark;
+mod bot_market;
 mod bots;
 mod bulkdata;
 mod combat;
@@ -144,6 +145,7 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(losses::reslot_bot_kills(server.db_url.clone()));
     tokio::spawn(losses::fix_drone_attackers(server.db_url.clone()));
     tokio::spawn(svc::missions::run_bot_escrows(Arc::clone(&server)));
+    tokio::spawn(bot_market::run(Arc::clone(&server)));
     let listener = TcpListener::bind(&config.bind).await?;
     info!("listening on {} as node {}", config.bind, config.node_id);
 

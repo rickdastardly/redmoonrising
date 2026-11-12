@@ -2,6 +2,34 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Bots that play: roaming gangs, wingmen, mining fleets and traders
+
+*2026-11-12 15:35 UTC*
+
+### Roaming gangs
+
+- Pirate and null-sec bot alliances now send **gangs of 5 to 12 fighters roaming** low and null-sec for about two hours, staying 8 to 18 minutes in each system before moving on, 3 to 6 systems in all.
+- With hunting on, they head for **systems where players are in space**. They attack players outside high-sec on sight and leave high-sec alone, and stragglers regroup with their gang.
+- Gangs show on the dashboard's Events, raids and gangs page beside raids, with what they killed and lost, and in the news when they set out and go home. Start one yourself with the **Roaming gang** button or `/bots event roam`.
+
+### Wingmen
+
+- Invite an armed bot ship in your system to your gang and it flies with you, follows you through gates and fights what you fight. You can now choose whether bots join **for free**, for a quarter of their rate, at their usual hourly rate, or not at all.
+
+### Mining fleets
+
+- Miners from the same station now **mine together** in the same belt, each on its own asteroid, instead of spreading out.
+- Where you can see them, bot miners **mine the asteroids down**, with mining beams. Rocks shrink and vanish when they are mined out, and the miners move on to the next, so busy belts get cleared.
+
+### Bot traders
+
+- Trader bots now keep **sell and buy orders** at the ten busiest hubs and at any station where a player is docked, for everything the NPC market there sells: ships, modules, ammunition, drones, implants, deployables, minerals and ore.
+- Their prices sit around the market's, a little over or under, and buy orders bid below it. Each order stands for one to three days, and new ones go up every five minutes or so. Buy from them and sell to them like any player's order.
+
+### Dashboard
+
+- The **Bots** page has new **Gangs and fleets** and **Mining and the market** sections: how often gangs roam, whether they hunt players, what wingmen cost, mining fleets, belt clearing, and how busy the bot traders are. Changes take effect at once and are saved to rmr.yml.
+
 ## Server health on the Overview
 
 *2026-11-12 15:08 UTC*
