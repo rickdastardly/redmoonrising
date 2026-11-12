@@ -793,3 +793,87 @@ button:hover:not(:disabled) { border-color: var(--accent); color: var(--bright);
   font: 600 10px var(--display);
   letter-spacing: 0.1em;
 }
+
+/* ---- Red Moon Rising: the crimson moon over the cluster ------------------------- */
+
+:root {
+  --moon: #c8342b;
+  --moon-bright: #ff6a4d;
+  --moon-soft: rgba(200, 52, 43, 0.14);
+  --moon-glow: rgba(220, 60, 45, 0.4);
+}
+
+body {
+  background:
+    radial-gradient(circle at 92% -6%, rgba(200, 52, 43, 0.28), transparent 32%),
+    radial-gradient(ellipse 70% 55% at 75% 0%, rgba(42, 74, 96, 0.3), transparent 70%),
+    radial-gradient(ellipse 60% 50% at 0% 100%, rgba(110, 24, 20, 0.3), transparent 70%),
+    linear-gradient(rgba(90, 184, 214, 0.03) 1px, transparent 1px) 0 0 / 100% 48px,
+    linear-gradient(90deg, rgba(90, 184, 214, 0.03) 1px, transparent 1px) 0 0 / 48px 100%,
+    var(--bg);
+  background-attachment: fixed;
+}
+
+/* The red moon rising behind the masthead. */
+.masthead { overflow: hidden; }
+.masthead::before {
+  content: "";
+  position: absolute;
+  left: -34px; top: -58px;
+  width: 150px; height: 150px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 36%, rgba(255, 140, 110, 0.9), rgba(200, 52, 43, 0.75) 32%, rgba(90, 12, 10, 0.55) 60%, transparent 71%);
+  box-shadow: 0 0 60px 10px rgba(200, 52, 43, 0.22);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.masthead::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, var(--moon), rgba(200, 52, 43, 0.2) 30%, var(--accent) 75%, transparent);
+  pointer-events: none;
+}
+.brand { position: relative; z-index: 1; }
+.brand-text small { color: var(--moon-bright); text-shadow: 0 0 10px var(--moon-glow); }
+.masthead-status { position: relative; z-index: 1; }
+
+.page-heading { border-bottom: 0; position: relative; }
+.page-heading::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--moon), var(--edge-strong) 35%, transparent);
+}
+.eyebrow { color: var(--moon-bright); }
+.page-heading h1 { text-shadow: 0 0 18px rgba(200, 52, 43, 0.25); }
+
+/* Window corners: cyan where the window starts, crimson where it ends. */
+.window::after { border-color: var(--moon); }
+.neocom a[aria-current="page"] { box-shadow: inset 0 -1px 0 rgba(200, 52, 43, 0.25); }
+
+/* ---- portraits and logos ---------------------------------------------------------- */
+
+.badge.has-logo { background: rgba(0, 0, 0, 0.55); clip-path: none; border: 1px solid var(--edge-strong); }
+.badge.has-logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.pilot-avatar.has-portrait { background: #000; }
+.pilot-avatar img { display: block; }
+.km-portrait { width: 96px; height: 96px; font-size: 40px; }
+.km-mini-portrait { width: 48px; height: 48px; font-size: 20px; }
+.party-portrait { width: 40px; height: 40px; font-size: 16px; }
+.zp-portrait.has-portrait { box-shadow: 0 0 0 1px var(--moon), 0 0 22px var(--moon-soft); }
+
+/* ---- GM commands ------------------------------------------------------------------ */
+
+.gm-commands { width: 100%; border-collapse: collapse; }
+.gm-commands th, .gm-commands td { padding: 7px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid rgba(255, 255, 255, 0.05); }
+.gm-commands thead th { color: var(--dim); font-family: var(--display); font-size: 10.5px; font-weight: 500; letter-spacing: 0.2em; text-transform: uppercase; }
+.gm-commands td { white-space: normal; }
+.gm-commands td:first-child { white-space: nowrap; }
+.gm-commands tr.gm-group th { padding-top: 16px; color: var(--moon-bright); font-family: var(--display); font-size: 11px; font-weight: 600; letter-spacing: 0.24em; text-transform: uppercase; border-bottom: 1px solid var(--moon-soft); }
+.gm-commands tbody tr:not(.gm-group):hover { background: var(--row-hover); }
+.gm-cmd { color: var(--bright); font-size: 12.5px; }
+.gm-example { color: var(--accent); font-size: 12px; background: rgba(0, 0, 0, 0.35); padding: 1px 6px; border: 1px solid var(--edge); user-select: all; }
+#gm-filter { flex: 0 1 260px; }

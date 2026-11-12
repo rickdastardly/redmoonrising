@@ -722,8 +722,8 @@ const allianceLink = (id: number | null | undefined, name: string | null | undef
 /// A badge that opens the alliance's page, else the corporation's.
 function groupBadge(allianceID: number | null | undefined, alliance: string | null | undefined,
   corpID: number | null | undefined, corp: string | null | undefined, ticker: string | null | undefined, small = false): HTMLElement {
-  const b = badge(alliance || corp, ticker, small);
-  const [kind, id] = alliance && allianceID ? ["alliance", allianceID] : ["corporation", corpID];
+  const [kind, id] = alliance && allianceID ? ["alliance", allianceID] as const : ["corporation", corpID] as const;
+  const b = badge(alliance || corp, ticker, small, { kind, id });
   if (!id || id <= 0) return b;
   const a = document.createElement("a"); a.href = `#${kind}-${id}`; a.className = "badge-link";
   a.addEventListener("click", (event) => event.stopPropagation());
@@ -870,15 +870,42 @@ function colourFor(key: string | number): string {
   return `hsl(${hue} ${sat}% ${light}%)`;
 }
 
-/// A hexagonal emblem standing in for corporation and alliance logos, which
-/// the public image server does not have for this cluster.
-function badge(name: string | null | undefined, ticker: string | null | undefined, small = false): HTMLElement {
+/// Images the server has none of, so each is asked for once per visit.
+const missingPictures = new Set<string>();
+
+/// Loads a server picture (/img/<kind>/<id>) and hands it over once it
+/// arrives; nothing happens if there is none.
+function loadPicture(kind: "portrait" | "corporation" | "alliance", id: number | null | undefined, size: number, done: (img: HTMLImageElement) => void): void {
+  if (!id || id <= 0) return;
+  const key = `${kind}/${id}`;
+  if (missingPictures.has(key)) return;
+  const img = document.createElement("img");
+  img.alt = "";
+  img.decoding = "async";
+  img.addEventListener("load", () => done(img));
+  img.addEventListener("error", () => missingPictures.add(key));
+  img.src = `/img/${key}?size=${size}`;
+}
+
+/// A hexagonal emblem for a corporation or alliance: its real logo where the
+/// server has one (alliance logos, NPC corporations), else its ticker.
+function badge(name: string | null | undefined, ticker: string | null | undefined, small = false,
+  logo?: { kind: "corporation" | "alliance"; id: number | null | undefined }): HTMLElement {
   const e = document.createElement("span");
   e.className = small ? "badge small-badge" : "badge";
   const label = (ticker || name || "?").replace(/[^A-Za-z0-9.\-]/g, "").slice(0, small ? 3 : 5) || "?";
   e.textContent = label.toUpperCase();
   e.style.setProperty("--badge", colourFor(name || ticker || "?"));
   e.title = name || ticker || "";
+  if (logo) loadPicture(logo.kind, logo.id, small ? 64 : 128, (img) => { e.classList.add("has-logo"); e.replaceChildren(img); });
+  return e;
+}
+
+/// A pilot's portrait from the game client's cache, else their initial.
+function pilotPortrait(id: number | null | undefined, name: string | null | undefined, size: number, className = ""): HTMLElement {
+  const e = span((name || "?").slice(0, 1).toUpperCase(), `pilot-avatar ${className}`.trim());
+  e.title = name || "";
+  loadPicture("portrait", id, size, (img) => { img.alt = name || ""; e.classList.add("has-portrait"); e.replaceChildren(img); });
   return e;
 }
 
@@ -977,7 +1004,7 @@ async function showKill(id: number): Promise<void> {
     const victimBlock = document.createElement("div"); victimBlock.className = "km-victim";
     const victimNames = document.createElement("div");
     victimNames.append(pilotLink(k.victimID, k.victim), corpLink(k.victimCorpID, k.victimCorporation), allianceLink(k.victimAllianceID, k.victimAlliance));
-    victimBlock.append(groupBadge(k.victimAllianceID, k.victimAlliance, k.victimCorpID, k.victimCorporation, null), victimNames);
+    victimBlock.append(pilotPortrait(k.victimID, k.victim, 128, "km-portrait"), groupBadge(k.victimAllianceID, k.victimAlliance, k.victimCorpID, k.victimCorporation, null), victimNames);
     const victimRow = body.insertRow();
     const victimCell = victimRow.insertCell(); victimCell.colSpan = 2; victimCell.append(victimBlock);
     row("Ship:", span(k.ship, "ship-name"), span(k.shipClass ? ` ( ${k.shipClass} )` : "", "dim"));
@@ -996,7 +1023,7 @@ async function showKill(id: number): Promise<void> {
     for (const [label, p] of [["Final Blow", finalBlow], ["Top Damage", topDamage]] as [string, typeof finalBlow][]) {
       const cell = document.createElement("div");
       cell.append(span(label, ""));
-      if (p) cell.append(p.npc ? badge(p.pilot, null) : groupBadge(p.allianceID, p.alliance, p.corporationID, p.corporation, null), partyName(p));
+      if (p) cell.append(p.npc || p.id <= 0 ? badge(p.pilot, null) : pilotPortrait(p.id, p.pilot, 64, "km-mini-portrait"), partyName(p));
       else cell.append(span("—", "dim"));
       highlights.append(cell);
     }
@@ -1008,6 +1035,7 @@ async function showKill(id: number): Promise<void> {
     for (const p of parties) {
       const party = document.createElement("div");
       party.className = p.finalBlow ? "party final-blow" : "party";
+      if (!p.npc && p.id > 0) party.append(pilotPortrait(p.id, p.pilot, 64, "party-portrait"));
       if (p.shipTypeID) party.append(typeImage(p.shipTypeID, "icon", 64));
       const names = document.createElement("div");
       const corpName = corpLink(p.corporationID, p.corporation); corpName.classList.add("small");
@@ -1132,11 +1160,7 @@ async function showPilot(id: number): Promise<void> {
     // Who: portrait and identity, as zKillboard's character block.
     const head = document.createElement("div"); head.className = "zp-head";
     const who = document.createElement("div"); who.className = "zp-who";
-    const avatar = span(p.name.slice(0, 1).toUpperCase(), "pilot-avatar zp-portrait");
-    const portrait = document.createElement("img");
-    portrait.src = `https://images.evetech.net/characters/${p.id}/portrait?size=128`;
-    portrait.alt = p.name;
-    portrait.addEventListener("load", () => avatar.replaceChildren(portrait));
+    const avatar = pilotPortrait(p.id, p.name, 256, "zp-portrait");
     const facts = document.createElement("table"); facts.className = "zp-facts";
     const fact = (label: string, ...value: (Node | string)[]) => {
       const tr = facts.insertRow();
@@ -1329,7 +1353,7 @@ async function showGroup(kind: "corporation" | "alliance", id: number): Promise<
 
     const head = document.createElement("div"); head.className = "zp-head";
     const who = document.createElement("div"); who.className = "zp-who";
-    const logo = badge(info.name, info.ticker); logo.classList.add("zp-logo");
+    const logo = badge(info.name, info.ticker, false, { kind, id }); logo.classList.add("zp-logo");
     const facts = document.createElement("table"); facts.className = "zp-facts";
     const fact = (label: string, ...value: (Node | string)[]) => {
       const tr = facts.insertRow();
@@ -2797,7 +2821,16 @@ const pages: Record<string, { title: string; description: string; windows: strin
   follow: { title: "Follow a pilot", description: "Track a pilot's current activity.", windows: ["w-follow"] },
   control: { title: "Events and controls", description: "Simulation events and commands.", windows: ["w-control"] },
   users: { title: "User accounts", description: "Account roles and in-game staff colours.", windows: ["w-users"] },
+  gm: { title: "GM commands", description: "Slash commands for staff, typed into any chat channel in game.", windows: ["w-gm"] },
 };
+
+// The GM command list: filter as you type.
+document.getElementById("gm-filter")?.addEventListener("input", (event) => {
+  const wanted = (event.target as HTMLInputElement).value.trim().toLowerCase();
+  for (const row of document.querySelectorAll<HTMLTableRowElement>("#gm-commands tbody tr")) {
+    row.hidden = wanted !== "" && !(row.textContent ?? "").toLowerCase().includes(wanted);
+  }
+});
 
 function route(): void {
   const hash = window.location.hash.slice(1) || "home";

@@ -233,6 +233,18 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
         "/style.css" => respond(&mut stream, 200, "text/css; charset=utf-8", STYLE.as_bytes()).await,
         "/app.js" => respond(&mut stream, 200, "text/javascript; charset=utf-8", SCRIPT.as_bytes()).await,
         "/eve-icon.png" => respond(&mut stream, 200, "image/png", EVE_ICON).await,
+        img if img.starts_with("/img/") => {
+            let query = target.split_once('?').map_or("", |(_, q)| q);
+            let size = query.split('&').find_map(|kv| kv.strip_prefix("size=")).and_then(|s| s.parse::<u32>().ok()).unwrap_or(128).clamp(16, 1024);
+            let mut parts = img.trim_start_matches("/img/").splitn(2, '/');
+            let kind = parts.next().unwrap_or("");
+            let id = parts.next().and_then(|s| s.trim_end_matches(".png").parse::<i64>().ok()).unwrap_or(0);
+            match picture(server, kind, id, size).await {
+                Picture::Png(bytes) => respond_image(&mut stream, &bytes).await,
+                Picture::Redirect(url) => redirect(&mut stream, &url).await,
+                Picture::Missing => respond(&mut stream, 404, "text/plain", b"No image").await,
+            }
+        }
         api if api.starts_with("/api/") => {
             let body = match api {
                 "/api/summary" => Some(summary(server).await),
@@ -352,6 +364,72 @@ async fn respond(stream: &mut TcpStream, status: u16, kind: &str, body: &[u8]) -
     );
     stream.write_all(head.as_bytes()).await?;
     stream.write_all(body).await?;
+    stream.shutdown().await
+}
+
+/// A portrait or logo for the killboard.
+enum Picture {
+    Png(Vec<u8>),
+    Redirect(String),
+    Missing,
+}
+
+/// Portraits come from the game client's own cache (the launcher names the
+/// client folder in RMR_CLIENT_PATH); alliance logos from the logos alliances
+/// upload; NPC corporation and faction logos from CCP's image server.
+async fn picture(server: &Server, kind: &str, id: i64, size: u32) -> Picture {
+    if id <= 0 || id > i64::from(i32::MAX) {
+        return Picture::Missing;
+    }
+    match kind {
+        "portrait" => portrait_file(id, size).map_or(Picture::Missing, Picture::Png),
+        "alliance" => {
+            let row = server.db.query_opt(r#"SELECT "logoImage" FROM alliances WHERE "allianceID" = $1"#, &[&(id as i32)]).await;
+            match row {
+                Ok(Some(r)) => r.try_get::<_, Option<Vec<u8>>>(0).ok().flatten().filter(|b| !b.is_empty()).map_or(Picture::Missing, Picture::Png),
+                _ => Picture::Missing,
+            }
+        }
+        "corporation" => {
+            let npc = server.db.query_opt(
+                r#"SELECT 1 FROM "crpNPCCorporations" WHERE "corporationID" = $1
+                   UNION ALL SELECT 1 FROM "chrFactions" WHERE "factionID" = $1 LIMIT 1"#,
+                &[&(id as i32)]).await;
+            if matches!(npc, Ok(Some(_))) {
+                let size = [32, 64, 128, 256].into_iter().find(|s| *s >= size).unwrap_or(256);
+                Picture::Redirect(format!("https://images.evetech.net/corporations/{id}/logo?size={size}"))
+            } else {
+                Picture::Missing
+            }
+        }
+        _ => Picture::Missing,
+    }
+}
+
+/// The client caches portraits as Portraits/<characterID>_<size>.png; the
+/// closest size at or above the one asked for, else the largest below it.
+fn portrait_file(id: i64, size: u32) -> Option<Vec<u8>> {
+    let client = std::env::var_os("RMR_CLIENT_PATH")?;
+    let dir = std::path::Path::new(&client).join("cache").join("Pictures").join("Portraits");
+    const SIZES: [u32; 8] = [32, 64, 128, 256, 484, 512, 692, 1024];
+    let mut order: Vec<u32> = SIZES.iter().copied().filter(|s| *s >= size).collect();
+    order.extend(SIZES.iter().copied().filter(|s| *s < size).rev());
+    order.into_iter().find_map(|s| std::fs::read(dir.join(format!("{id}_{s}.png"))).ok())
+}
+
+async fn respond_image(stream: &mut TcpStream, body: &[u8]) -> std::io::Result<()> {
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nCache-Control: max-age=600\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).await?;
+    stream.write_all(body).await?;
+    stream.shutdown().await
+}
+
+async fn redirect(stream: &mut TcpStream, url: &str) -> std::io::Result<()> {
+    let head = format!("HTTP/1.1 302 Found\r\nLocation: {url}\r\nContent-Length: 0\r\nCache-Control: max-age=3600\r\nConnection: close\r\n\r\n");
+    stream.write_all(head.as_bytes()).await?;
     stream.shutdown().await
 }
 

@@ -987,6 +987,8 @@ function Start-RmrWorker {
 
         Set-Status 'Starting' 'Loading the universe and starting the game server' 92
         $env:RMR_CONFIG = Join-Path $Root 'rmr.yml'
+        # The dashboard's killboard shows portraits from the client's cache.
+        if ($settings.PSObject.Properties['clientPath'] -and $settings.clientPath) { $env:RMR_CLIENT_PATH = [string]$settings.clientPath }
         if ($env:RMR_CHECK -eq '1') { $env:RMR_BOTS = '0' }
         $env:RMR_STRINGS = Join-Path $Root 'crates\eve-marshal\tests\data\strings.txt'
         $env:RMR_DATABASE = 'postgres://rmr:' + $password + '@127.0.0.1:' + $databasePort + '/rmr'

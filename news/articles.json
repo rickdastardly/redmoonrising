@@ -100,5 +100,11 @@
     "publishedMs": 1794450941177,
     "title": "Sovereignty map the right way up, and dashboard polish",
     "body": "<h3>Fixed</h3>\n<ul>\n<li><b>The sovereignty map is the right way up.</b> Northern regions such as Venal, Tribute and Vale of the Silent are at the top again, and the south at the bottom. A small compass in the corner shows north.</li>\n</ul>\n<h3>Sovereignty map</h3>\n<ul>\n<li><b>Find a system:</b> type a name in the map's toolbar (or press <code>/</code>). The map flies there and marks the system with a pulsing ring.</li>\n<li>Zoom buttons, plus keyboard shortcuts: <code>+</code> and <code>-</code> zoom, <code>R</code> resets the view, <code>Esc</code> clears the alliance focus.</li>\n<li>Your Stargates, Regions, System names and Empire space choices are remembered between visits.</li>\n<li>A faint starfield sits behind the map and drifts as you pan.</li>\n</ul>\n<h3>Dashboard</h3>\n<ul>\n<li>Client-style thin scrollbars, a lit edge along the top of every window, and corner brackets that brighten on hover.</li>\n<li>Windows slide in gently when you change page. This is skipped if your system asks for reduced motion.</li>\n<li>Buttons glow when you hover over them.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-12 02:46 UTC",
+    "publishedMs": 1794451580640,
+    "title": "Killboard portraits and logos, GM command list, a redder moon",
+    "body": "<h3>Killboard</h3>\n<ul>\n<li><b>Pilot portraits.</b> Pilot pages, killmails, final blow, top damage and every attacker now show the pilot's real portrait, taken from your game client's portrait cache. A pilot your client has never seen keeps their initial until it has.</li>\n<li><b>Alliance logos.</b> Alliances that uploaded a logo in game show it on the killboard and their alliance page.</li>\n<li><b>NPC corporation and faction logos</b> come from CCP's image server. Player corporations keep their coloured badge.</li>\n</ul>\n<h3>GM commands</h3>\n<ul>\n<li>A new <b>GM commands</b> page under Administration lists every slash command, what it does and an example, grouped and searchable. It also says which account roles can use them.</li>\n</ul>\n<h3>Look</h3>\n<ul>\n<li>A red moon rises behind the masthead, with crimson accents on page headings, window corners, the masthead edge and the background nebula.</li>\n</ul>"
   }
 ]

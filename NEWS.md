@@ -2,6 +2,24 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Killboard portraits and logos, GM command list, a redder moon
+
+*2026-11-12 02:46 UTC*
+
+### Killboard
+
+- **Pilot portraits.** Pilot pages, killmails, final blow, top damage and every attacker now show the pilot's real portrait, taken from your game client's portrait cache. A pilot your client has never seen keeps their initial until it has.
+- **Alliance logos.** Alliances that uploaded a logo in game show it on the killboard and their alliance page.
+- **NPC corporation and faction logos** come from CCP's image server. Player corporations keep their coloured badge.
+
+### GM commands
+
+- A new **GM commands** page under Administration lists every slash command, what it does and an example, grouped and searchable. It also says which account roles can use them.
+
+### Look
+
+- A red moon rises behind the masthead, with crimson accents on page headings, window corners, the masthead edge and the background nebula.
+
 ## Sovereignty map the right way up, and dashboard polish
 
 *2026-11-12 02:35 UTC*
