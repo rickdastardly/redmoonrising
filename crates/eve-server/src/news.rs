@@ -265,3 +265,181 @@ mod tests {
         assert_eq!(render("&amp; &#39; &nbsp; &bogus", Target::Dashboard), "&amp; &#39; &nbsp; &amp;bogus");
     }
 }
+
+// ---- patch notes shipped with the server ------------------------------------------------
+//
+// Every article published on the dashboard is also written to
+// `news/articles.json` beside the config file, and `NEWS.md` is rewritten
+// from it, so the notes travel with the source on GitHub. At every start the
+// server adds any article in that file it does not have yet, so a new copy of
+// the server shows every patch note from the start.
+
+/// One article as kept in `news/articles.json`.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct Note {
+    /// When it was published, for people reading the file.
+    pub published: String,
+    #[serde(rename = "publishedMs")]
+    pub published_ms: i64,
+    pub title: String,
+    pub body: String,
+}
+
+/// Bodies shorter than this are tests, not patch notes, and stay local.
+const NOTE_MIN_CHARS: usize = 20;
+
+fn root() -> std::path::PathBuf {
+    match crate::config::file_path().parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
+    }
+}
+
+fn notes_path() -> std::path::PathBuf {
+    root().join("news").join("articles.json")
+}
+
+fn read_notes() -> Vec<Note> {
+    match std::fs::read_to_string(notes_path()) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
+            tracing::warn!("news/articles.json could not be read: {e}");
+            Vec::new()
+        }),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn write_notes(notes: &mut Vec<Note>) -> std::io::Result<()> {
+    notes.sort_by(|a, b| a.published_ms.cmp(&b.published_ms).then(a.title.cmp(&b.title)));
+    let path = notes_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let json = serde_json::to_string_pretty(notes).map_err(std::io::Error::other)?;
+    std::fs::write(&path, json + "\n")?;
+    std::fs::write(root().join("NEWS.md"), news_markdown(notes))
+}
+
+/// `2026-11-12 01:46 UTC` for milliseconds since 1970.
+pub fn note_time(ms: i64) -> String {
+    let secs = ms.div_euclid(1000);
+    let (days, rest) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Howard Hinnant's civil_from_days.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02} {:02}:{:02} UTC", rest / 3600, rest % 3600 / 60)
+}
+
+/// The patch notes as Markdown, newest first, for GitHub.
+fn news_markdown(notes: &[Note]) -> String {
+    let mut out = String::from("# Red Moon Rising patch notes\n\nEvery update, as published on the server dashboard and the character selection screen. \
+        The server adds these to its news when it starts.\n");
+    for note in notes.iter().rev() {
+        out.push_str(&format!("\n## {}\n\n*{}*\n\n{}\n", note.title.trim(), note.published, body_markdown(&note.body).trim()));
+    }
+    out
+}
+
+/// An article body (the small HTML set `render` accepts) as Markdown.
+fn body_markdown(body: &str) -> String {
+    let mut out = String::new();
+    let mut rest = body;
+    while let Some(start) = rest.find('<') {
+        out.push_str(&rest[..start].replace('\n', " "));
+        let Some(end) = rest[start..].find('>') else {
+            out.push_str(&rest[start..]);
+            rest = "";
+            break;
+        };
+        let tag = rest[start + 1..start + end].trim().to_ascii_lowercase();
+        rest = &rest[start + end + 1..];
+        let closing = tag.starts_with('/');
+        let name: String = tag.trim_start_matches('/').chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+        out.push_str(match (name.as_str(), closing) {
+            ("h1" | "h2" | "h3" | "h4", false) => "\n\n### ",
+            ("h1" | "h2" | "h3" | "h4", true) => "\n\n",
+            ("ul" | "ol", _) => "\n",
+            ("li", false) => "\n- ",
+            ("b" | "strong", _) => "**",
+            ("i" | "em", _) => "*",
+            ("code", _) => "`",
+            ("br", _) => "  \n",
+            ("hr", _) => "\n\n---\n\n",
+            ("p" | "blockquote" | "center", _) => "\n\n",
+            _ => "",
+        });
+    }
+    out.push_str(&rest.replace('\n', " "));
+    let text = out.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&");
+    // Tidy: no spaces at line ends (bar a deliberate break), at most one blank line.
+    let mut tidy = String::new();
+    let mut blank = 0;
+    for line in text.lines() {
+        let line = if line.ends_with("  ") && !line.trim().is_empty() { line.trim_start() } else { line.trim() };
+        if line.is_empty() {
+            blank += 1;
+            if blank > 1 { continue; }
+        } else {
+            blank = 0;
+        }
+        tidy.push_str(line);
+        tidy.push('\n');
+    }
+    tidy
+}
+
+/// At start: bring in the notes this database lacks, and record in the file
+/// any published here that it lacks.
+pub async fn sync_notes(db: &tokio_postgres::Client) -> Result<(), tokio_postgres::Error> {
+    let mut notes = read_notes();
+    let rows = db.query(r#"SELECT title, body, published_ms FROM "rmrNewsArticles""#, &[]).await?;
+    let have: std::collections::HashSet<(i64, String)> = rows.iter().map(|r| (r.get(2), r.get(0))).collect();
+    let mut added = 0;
+    for note in &notes {
+        if !have.contains(&(note.published_ms, note.title.clone())) {
+            db.execute(r#"INSERT INTO "rmrNewsArticles" (title, body, published_ms) VALUES ($1, $2, $3)"#,
+                &[&note.title, &note.body, &note.published_ms]).await?;
+            added += 1;
+        }
+    }
+    let known: std::collections::HashSet<(i64, String)> = notes.iter().map(|n| (n.published_ms, n.title.clone())).collect();
+    let mut recorded = 0;
+    for r in &rows {
+        let (title, body, ms): (String, String, i64) = (r.get(0), r.get(1), r.get(2));
+        if body.trim().chars().count() >= NOTE_MIN_CHARS && !known.contains(&(ms, title.clone())) {
+            notes.push(Note { published: note_time(ms), published_ms: ms, title, body });
+            recorded += 1;
+        }
+    }
+    if recorded > 0 || (!notes.is_empty() && !root().join("NEWS.md").exists()) {
+        if let Err(e) = write_notes(&mut notes) {
+            tracing::warn!("writing news/articles.json and NEWS.md: {e}");
+        }
+    }
+    if added > 0 || recorded > 0 {
+        tracing::info!("news: added {added} patch note(s) from news/articles.json, recorded {recorded} in it");
+    }
+    Ok(())
+}
+
+/// A newly published article: into the file and NEWS.md too.
+pub fn record_note(title: &str, body: &str, published_ms: i64) {
+    if body.trim().chars().count() < NOTE_MIN_CHARS {
+        return;
+    }
+    let mut notes = read_notes();
+    if notes.iter().any(|n| n.published_ms == published_ms && n.title == title) {
+        return;
+    }
+    notes.push(Note { published: note_time(published_ms), published_ms, title: title.to_string(), body: body.to_string() });
+    if let Err(e) = write_notes(&mut notes) {
+        tracing::warn!("writing news/articles.json and NEWS.md: {e}");
+    }
+}

@@ -87,8 +87,13 @@ pub async fn mission_mgr(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
 
 // ---- listings ----------------------------------------------------------------------------
 
+/// What making an escrow costs (its "basic fee", shown when one is made).
+const ESCROW_BASIC_FEE: f64 = 0.0;
+
 /// GetCourierOptions(): the caller's items in the station's hangar, as
-/// itemList.header and itemList.items {itemID: line} (base_missions.py:369).
+/// itemList.header and itemList.items {itemID: line} (base_missions.py:369),
+/// and basicFee, which the Escrow tab shows (base_missions.py:567); without
+/// it the tab stops with its "Loading..." still up.
 async fn courier_options(ctx: &Ctx<'_>, station: i64) -> Value {
     let me = ctx.session.char_id.unwrap_or(0);
     let sql = format!(r#"{INVITEM_SELECT} e."locationID" = $1 AND e."ownerID" = $2 AND e."flag" = $3 ORDER BY e."itemID""#);
@@ -99,7 +104,10 @@ async fn courier_options(ctx: &Ctx<'_>, station: i64) -> Value {
         .map(|r| (Value::Int(int(r, 0).unwrap_or(0)), Value::List(invitem_cells(r))))
         .collect();
     let header = Value::List(INVITEM_HEADER.iter().map(|h| Value::bytes(*h)).collect());
-    key_val(vec![("itemList", key_val(vec![("header", header), ("items", Value::Dict(items))]))])
+    key_val(vec![
+        ("itemList", key_val(vec![("header", header), ("items", Value::Dict(items))])),
+        ("basicFee", Value::Double(ESCROW_BASIC_FEE)),
+    ])
 }
 
 /// GetAvailableCourierMissions(maxVolume, maxCollateral, regionID,
@@ -191,7 +199,8 @@ async fn create(ctx: &Ctx<'_>, call: &Call, station: i64) -> Refused<Value> {
     let me = ctx.session.char_id.unwrap_or(0);
     let ids: Vec<i64> = call.args.first().and_then(|v| v.seq()).unwrap_or(&[]).iter().filter_map(item_id_of).collect();
     let drop = call.arg_i64(1).unwrap_or(station);
-    let description: Option<String> = call.arg_text(2).map(|d| d.chars().take(1_000).collect());
+    // The client sends None for an empty description; the column takes text.
+    let description: String = call.arg_text(2).map(|d| d.chars().take(1_000).collect()).unwrap_or_default();
     let collateral = call.args.get(3).and_then(|v| v.as_f64()).unwrap_or(0.0).max(0.0);
     let assignee = call.kwarg("assignedTo").and_then(|v| v.as_i64());
     let tracking = call.kwarg("tracking").and_then(|v| v.as_i64()).unwrap_or(0) as i16;
@@ -523,4 +532,324 @@ async fn tell_balance(ctx: &Ctx<'_>, owner: i64) {
     let w = ctx.world.lock();
     let cash = Value::Tuple(vec![Value::bytes("cash"), Value::Int(owner), Value::Double(balance)]);
     w.notify(&w.clients_of(owner), "OnAccountChange", cash);
+}
+
+
+// ---- bots on the escrow market -----------------------------------------------------------
+//
+// Bot traders put up escrows at the trade hubs and wherever players are
+// docked: bundles of what the NPC market there sells, a little under or
+// over its price. They also buy players' escrows that are fairly priced for
+// what is in them, the better the deal the sooner. A bot's unsold escrow is
+// taken down before it lapses, and what a bot buys leaves the game with it.
+
+const BOT_ESCROW_EVERY: std::time::Duration = std::time::Duration::from_secs(90);
+/// Most bot escrows up at one station.
+const BOT_ESCROWS_PER_STATION: i64 = 6;
+/// How many of the busiest market stations bots sell at.
+const BOT_ESCROW_HUBS: i64 = 8;
+const ROLE_TRADER: i16 = 3;
+const FIRST_PLAYER_ID: i32 = 100_000_000;
+const MINUTE: i64 = 60 * 10_000_000;
+
+pub async fn run_bot_escrows(server: std::sync::Arc<crate::conn::Server>) {
+    let mut rng = crate::combat::Rng::seeded(crate::bulkdata::filetime_now() as u64 ^ 0xe5c2_0b07);
+    // Let the server finish starting first.
+    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+    loop {
+        if crate::bots::is_running() {
+            match crate::db::connect(&server.db_url).await {
+                Ok(mut db) => {
+                    if let Err(e) = bot_escrow_round(&server, &mut db, &mut rng).await {
+                        tracing::warn!("bots: escrow market: {}", crate::logging::chain(&e));
+                    }
+                }
+                Err(e) => tracing::warn!("bots: escrow market cannot reach the database: {}", crate::logging::chain(&e)),
+            }
+        }
+        tokio::time::sleep(BOT_ESCROW_EVERY).await;
+    }
+}
+
+async fn bot_escrow_round(server: &crate::conn::Server, db: &mut tokio_postgres::Client, rng: &mut crate::combat::Rng) -> Result<(), tokio_postgres::Error> {
+    let traders: Vec<i64> = db
+        .query(r#"SELECT "characterID" FROM "bots" WHERE "role" = $1 ORDER BY random() LIMIT 24"#, &[&ROLE_TRADER])
+        .await?
+        .iter()
+        .filter_map(|r| int(r, 0))
+        .collect();
+    if traders.is_empty() {
+        return Ok(());
+    }
+    let retired = retire_bot_escrows(db).await?;
+    let bought = buy_player_escrows(server, db, rng, &traders).await?;
+    let offered = offer_bot_escrows(server, db, rng, &traders).await?;
+    if retired + bought + offered > 0 {
+        info!("bots: escrow market: {offered} put up, {bought} players' bought, {retired} taken down");
+    }
+    Ok(())
+}
+
+/// A bot's escrows nobody bought, close to lapsing: taken down, goods and all.
+async fn retire_bot_escrows(db: &mut tokio_postgres::Client) -> Result<usize, tokio_postgres::Error> {
+    let soon = crate::bulkdata::filetime_now() + 15 * MINUTE;
+    let rows = db
+        .query(
+            r#"SELECT m."missionID", m."craterID" FROM "courierMissions" m
+                WHERE m."kind" = $1 AND m."state" = $2 AND m."dateExpires" <= $3
+                  AND EXISTS (SELECT 1 FROM "bots" b WHERE b."characterID" = m."issuerID")
+                ORDER BY m."missionID" LIMIT 100"#,
+            &[&KIND_ESCROW, &OUTSTANDING, &soon],
+        )
+        .await?;
+    let mut done = 0;
+    for r in rows {
+        let (id, crater) = (int(&r, 0).unwrap_or(0), int(&r, 1).unwrap_or(0));
+        let mut txn = ItemTxn::begin(db).await?;
+        let changed = txn
+            .tx()
+            .execute(r#"UPDATE "courierMissions" SET "state" = $2, "dateCompleted" = $3 WHERE "missionID" = $1 AND "state" = $4"#,
+                &[&(id as i32), &CANCELLED, &crate::bulkdata::filetime_now(), &OUTSTANDING])
+            .await?;
+        if changed == 1 {
+            destroy_package(&mut txn, crater).await?;
+        }
+        txn.commit().await?;
+        done += changed as usize;
+    }
+    Ok(done)
+}
+
+/// A package and what is in it, gone.
+async fn destroy_package(txn: &mut ItemTxn<'_>, crater: i64) -> Result<(), tokio_postgres::Error> {
+    let inside: Vec<i64> = txn
+        .tx()
+        .query(r#"SELECT "itemID" FROM entity WHERE "locationID" = $1"#, &[&(crater as i32)])
+        .await?
+        .iter()
+        .filter_map(|r| int(r, 0))
+        .collect();
+    for id in inside {
+        txn.destroy(id).await?;
+    }
+    if txn.item(crater).await?.is_some() {
+        txn.destroy(crater).await?;
+    }
+    Ok(())
+}
+
+/// Players' escrows at a price bots like: bought, the better the deal the
+/// likelier. The seller is paid and told; the goods go with the bot.
+async fn buy_player_escrows(
+    server: &crate::conn::Server,
+    db: &mut tokio_postgres::Client,
+    rng: &mut crate::combat::Rng,
+    traders: &[i64],
+) -> Result<usize, tokio_postgres::Error> {
+    let now = crate::bulkdata::filetime_now();
+    let rows = db
+        .query(
+            r#"SELECT m."missionID", m."acceptFee", m."issuerID", m."craterID", m."pickupStationID",
+                      (SELECT COALESCE(sum(e."quantity" * COALESCE(
+                              (SELECT min(o."price") FROM market_orders o
+                                WHERE o."typeID" = e."typeID" AND o."bid" = 0 AND o."orderState" = 0
+                                  AND o."volRemaining" > 0 AND o."charID" < $5),
+                              t."basePrice", 0)), 0)
+                         FROM entity e JOIN "invTypes" t ON t."typeID" = e."typeID"
+                        WHERE e."locationID" = m."craterID")::float8 AS worth,
+                      COALESCE(s."stationName", '') AS station
+                 FROM "courierMissions" m LEFT JOIN "staStations" s ON s."stationID" = m."pickupStationID"
+                WHERE m."kind" = $1 AND m."state" = $2 AND m."assigneeID" IS NULL
+                  AND m."dateExpires" > $3 AND m."dateIssued" <= $4
+                  AND NOT EXISTS (SELECT 1 FROM "bots" b WHERE b."characterID" = m."issuerID")
+                ORDER BY m."missionID" LIMIT 25"#,
+            &[&KIND_ESCROW, &OUTSTANDING, &now, &(now - 2 * MINUTE), &FIRST_PLAYER_ID],
+        )
+        .await?;
+    let mut bought = 0;
+    for r in rows {
+        let (id, price, seller, crater) = (int(&r, 0).unwrap_or(0), float(&r, 1).unwrap_or(0.0), int(&r, 2).unwrap_or(0), int(&r, 3).unwrap_or(0));
+        let (worth, station) = (float(&r, 5).unwrap_or(0.0), text(&r, 6).unwrap_or_default());
+        if worth <= 0.0 || price <= 0.0 {
+            continue;
+        }
+        // Each round (90 s): a bargain goes in minutes, a fair price in a
+        // while, an expensive one rarely, and a rip-off never.
+        let ratio = price / worth;
+        let chance = if ratio <= 0.9 { 0.6 } else if ratio <= 1.0 { 0.3 } else if ratio <= 1.15 { 0.1 } else if ratio <= 1.4 { 0.02 } else { 0.0 };
+        if rng.unit() >= chance {
+            continue;
+        }
+        let buyer = traders[rng.below(traders.len())];
+        let mut txn = ItemTxn::begin(db).await?;
+        let taken = txn
+            .tx()
+            .execute(
+                r#"UPDATE "courierMissions" SET "state" = $2, "acceptorID" = $3, "dateAccepted" = $4, "dateCompleted" = $4
+                    WHERE "missionID" = $1 AND "state" = $5"#,
+                &[&(id as i32), &DONE, &(buyer as i32), &now, &OUTSTANDING],
+            )
+            .await?;
+        if taken != 1 {
+            continue;
+        }
+        let reason = format!("Escrow {id}");
+        let entry = Entry { ref_type: REF_ESCROW, payer: buyer, payee: seller, arg_id1: "", reason: &reason };
+        match wallet::post(txn.tx(), seller, price, &entry).await {
+            Ok(_) => {}
+            Err(Transfer::Db(e)) => return Err(e),
+            Err(_) => continue,
+        }
+        destroy_package(&mut txn, crater).await?;
+        txn.commit().await?;
+        bought += 1;
+        let buyer_name = db
+            .query_opt(r#"SELECT "characterName" FROM "character_" WHERE "characterID" = $1"#, &[&(buyer as i32)])
+            .await?
+            .and_then(|r| text(&r, 0))
+            .unwrap_or_else(|| "a trader".into());
+        let balance = db
+            .query_opt(r#"SELECT "balance" FROM "character_" WHERE "characterID" = $1"#, &[&(seller as i32)])
+            .await?
+            .and_then(|r| float(&r, 0));
+        info!("bots: {buyer_name} bought escrow {id} from {seller} for {price:.0} ISK (worth {worth:.0})");
+        let w = server.world.lock();
+        let clients = w.clients_of(seller);
+        if !clients.is_empty() {
+            if let Some(balance) = balance {
+                w.notify(&clients, "OnAccountChange", Value::Tuple(vec![Value::bytes("cash"), Value::Int(seller), Value::Double(balance)]));
+            }
+            let note = format!("{buyer_name} bought your escrow at {station} for {} ISK.", isk(price));
+            w.notify(&clients, "OnRemoteMessage", crate::pos::custom_notify(&note));
+        }
+    }
+    Ok(bought)
+}
+
+/// 1,234,567
+fn isk(v: f64) -> String {
+    let digits = format!("{:.0}", v.max(0.0));
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Bot escrows topped up at the busiest market stations and wherever a
+/// player is docked.
+async fn offer_bot_escrows(
+    server: &crate::conn::Server,
+    db: &mut tokio_postgres::Client,
+    rng: &mut crate::combat::Rng,
+    traders: &[i64],
+) -> Result<usize, tokio_postgres::Error> {
+    let mut stations: Vec<i64> = db
+        .query(
+            r#"SELECT "stationID" FROM market_orders WHERE "bid" = 0 AND "orderState" = 0 AND "charID" < $1
+                GROUP BY "stationID" ORDER BY count(*) DESC LIMIT $2"#,
+            &[&FIRST_PLAYER_ID, &BOT_ESCROW_HUBS],
+        )
+        .await?
+        .iter()
+        .filter_map(|r| int(r, 0))
+        .collect();
+    let docked: Vec<i64> = server.world.lock().players().iter().filter_map(|p| p.station_id).collect();
+    for s in docked {
+        if !stations.contains(&s) {
+            stations.push(s);
+        }
+    }
+    let mut made = 0;
+    for station in stations {
+        let up: i64 = db
+            .query_one(
+                r#"SELECT count(*) FROM "courierMissions" m WHERE m."kind" = $1 AND m."state" = $2 AND m."pickupStationID" = $3
+                    AND EXISTS (SELECT 1 FROM "bots" b WHERE b."characterID" = m."issuerID")"#,
+                &[&KIND_ESCROW, &OUTSTANDING, &(station as i32)],
+            )
+            .await?
+            .get(0);
+        let want = (BOT_ESCROWS_PER_STATION - up).clamp(0, 2);
+        for _ in 0..want {
+            let seller = traders[rng.below(traders.len())];
+            if put_up_escrow(db, rng, seller, station).await? {
+                made += 1;
+            }
+        }
+    }
+    Ok(made)
+}
+
+/// One bot escrow at `station`: a bundle of what the NPC market there (else
+/// in its region) sells. False when there is nothing to sell there.
+async fn put_up_escrow(db: &mut tokio_postgres::Client, rng: &mut crate::combat::Rng, seller: i64, station: i64) -> Result<bool, tokio_postgres::Error> {
+    let Some(place) = db
+        .query_opt(r#"SELECT "solarSystemID", "regionID" FROM "staStations" WHERE "stationID" = $1"#, &[&(station as i32)])
+        .await?
+    else {
+        return Ok(false);
+    };
+    let (system, region) = (int(&place, 0).unwrap_or(0), int(&place, 1).unwrap_or(0));
+    let kinds = 1 + rng.below(3) as i64;
+    let goods = r#"SELECT o."typeID", min(o."price")::float8, COALESCE(t."volume", 1)::float8, g."categoryID", t."typeName"
+                     FROM market_orders o JOIN "invTypes" t ON t."typeID" = o."typeID" JOIN "invGroups" g ON g."groupID" = t."groupID"
+                    WHERE o."bid" = 0 AND o."orderState" = 0 AND o."volRemaining" > 0 AND o."charID" < $1 AND o."price" > 0
+                      AND g."categoryID" IN (4, 6, 7, 8, 18, 25) AND t."published" = 1 AND {place}
+                    GROUP BY o."typeID", t."volume", g."categoryID", t."typeName"
+                    ORDER BY random() LIMIT $3"#;
+    let mut rows = db.query(goods.replace("{place}", r#"o."stationID" = $2"#).as_str(), &[&FIRST_PLAYER_ID, &(station as i32), &kinds]).await?;
+    if rows.is_empty() {
+        rows = db.query(goods.replace("{place}", r#"o."regionID" = $2"#).as_str(), &[&FIRST_PLAYER_ID, &(region as i32), &kinds]).await?;
+    }
+    if rows.is_empty() {
+        return Ok(false);
+    }
+    // (type, quantity, unit price, unit volume, name)
+    let mut bundle: Vec<(i64, i64, f64, f64, String)> = Vec::new();
+    for r in &rows {
+        let (type_id, price, volume, category) = (int(r, 0).unwrap_or(0), float(r, 1).unwrap_or(0.0), float(r, 2).unwrap_or(1.0), int(r, 3).unwrap_or(0));
+        let name = text(r, 4).unwrap_or_default();
+        let target = rng.range(1.5e6, 4.0e7);
+        let mut quantity = match category {
+            6 => 1,
+            7 => 1 + rng.below(4) as i64,
+            18 => 1 + rng.below(5) as i64,
+            _ => ((target / price).round() as i64).clamp(1, 1_000_000),
+        };
+        if category != 6 && volume > 0.0 {
+            quantity = quantity.min(((MAX_PACKAGE / 2.0) / volume).floor().max(1.0) as i64);
+        }
+        bundle.push((type_id, quantity, price, volume, name));
+    }
+    let market: f64 = bundle.iter().map(|(_, n, p, _, _)| *n as f64 * p).sum();
+    let price = ((market * rng.range(0.82, 1.08)) / 1_000.0).round().max(1.0) * 1_000.0;
+    let volume: f64 = bundle.iter().map(|(_, n, _, v, _)| *n as f64 * v).sum();
+    let listed: Vec<String> = bundle.iter().map(|(_, n, _, _, name)| if *n > 1 { format!("{n}x {name}") } else { name.clone() }).collect();
+    let pitch = ["cheaper than the market", "quick sale", "clearing out my hangar", "below Jita prices", "bulk deal", "no haggling"];
+    let description = format!("{} - {}", listed.join(", "), pitch[rng.below(pitch.len())]);
+    let description: String = description.chars().take(200).collect();
+    let now = crate::bulkdata::filetime_now();
+    let expires = now + (rng.range(6.0, 72.0) * 60.0) as i64 * MINUTE;
+
+    let mut txn = ItemTxn::begin(db).await?;
+    let wrap = NewItem { type_id: TYPE_PLASTIC_WRAP, owner_id: OWNER_SYSTEM, location_id: station, flag: FLAG_HANGAR, quantity: 1, singleton: true };
+    let crater = txn.create(wrap).await?;
+    for (type_id, quantity, _, _, _) in &bundle {
+        txn.create(NewItem { type_id: *type_id, owner_id: seller, location_id: crater, flag: 0, quantity: *quantity, singleton: false }).await?;
+    }
+    let sql = r#"INSERT INTO "courierMissions" ("kind", "state", "availabilityID", "inOrder", "description", "issuerID",
+                     "assigneeID", "acceptFee", "dateIssued", "dateExpires", "totalReward", "tracking", "pickupStationID", "craterID",
+                     "dropStationID", "volume", "pickupSolarSystemID", "pickupRegionID", "dropSolarSystemID", "dropRegionID", "price",
+                     "regionID", "solarsystemID", "stationID")
+                 VALUES ($1, 0, 0, 0, $2, $3, NULL, $4, $5, $6, 0, 0, $7, $8, $7, $9, $10, $11, $10, $11, $4, $11, $10, $7)"#;
+    let i = |v: i64| v as i32;
+    txn.tx()
+        .execute(sql, &[&KIND_ESCROW, &Some(description), &i(seller), &price, &now, &expires, &i(station), &i(crater), &volume, &i(system), &i(region)])
+        .await?;
+    txn.commit().await?;
+    Ok(true)
 }

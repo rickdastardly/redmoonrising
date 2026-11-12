@@ -1,0 +1,98 @@
+[
+  {
+    "published": "2026-11-11 23:21 UTC",
+    "publishedMs": 1794439318338,
+    "title": "Heavy drones, shortcuts and bot controls",
+    "body": "<h3>Drones</h3>\n<ul>\n<li><b>Heavy drones fire again.</b> Ogres, Praetors, Berserkers and the rest lock their target in about five seconds and engage out to 5 km, like light and medium drones.</li>\n<li>Drone Control Units raise your drone limit while they are <b>active</b>.</li>\n</ul>\n<h3>Shortcuts</h3>\n<ul>\n<li><code>F</code> engages your drones on your target, <code>Shift+R</code> returns them to the drone bay and <code>Ctrl+B</code> bookmarks your current location.</li>\n<li>With the directional scanner open, <code>V</code> scans again where your camera faces and refreshes the results.</li>\n<li>All four appear in the <b>Shortcuts</b> tab of the Escape menu, where you can change them.</li>\n<li>Typing in chat or any text field still types those letters.</li>\n</ul>\n<h3>Server administration</h3>\n<ul>\n<li><b>Restart now</b> on the dashboard does exactly what the launcher's <b>Restart server</b> button does: it saves, stops the database, rebuilds if needed and starts again.</li>\n<li>A new <b>Bots</b> page sets how many bots the server plays (saved for the next restart, or <b>Save and restart now</b>).</li>\n<li>Bot aggression changes at once: <b>All bots calm</b>, <b>Some bots aggressive</b> (pirates outside high-sec, angered sides and their hunters) or <b>All bots aggressive</b>. Bots always fight back when shot.</li>\n</ul>\n<h3>News</h3>\n<ul>\n<li>Articles can now have headings, bold and italic text, lists, links, dividers and <code>yellow commands</code>, like these notes.</li>\n<li>The dashboard's publishing form has formatting buttons and a live preview.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-11 23:43 UTC",
+    "publishedMs": 1794440633003,
+    "title": "Login news and dashboard restarts fixed",
+    "body": "<h3>News on the login screen</h3>\n<ul>\n<li>The character selection news panel now shows each article with a <b>gold title</b>, its date, <b>blue section headings</b>, bullet lists and <code>yellow commands</code>.</li>\n<li>Apostrophes in titles show correctly.</li>\n</ul>\n<h3>Dashboard restarts</h3>\n<ul>\n<li><b>Restart now</b> on the dashboard presses the launcher window's own <b>Restart server</b> button, so it always rebuilds and restarts exactly as that button does, even in a launcher window opened before this update.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-11 23:49 UTC",
+    "publishedMs": 1794440991987,
+    "title": "Bigger news text and more formatting",
+    "body": "<h3>Easier to read</h3>\n<ul>\n<li>News text on the character selection screen is <b>two sizes larger</b>.</li>\n<li>Articles can change text size and colour: <code>&lt;font size=\"5\"&gt;</code> (sizes 1 to 7, normal is 4), <code>&lt;big&gt;</code>, <code>&lt;font color=\"#ff8800\"&gt;</code>, plus <code>&lt;h1&gt;</code> headings and <code>&lt;center&gt;</code>.</li>\n<li>The dashboard's publishing form has <b>Bigger</b>, <b>Smaller</b>, <b>Colour</b> and <b>Centre</b> buttons for these.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-11 23:58 UTC",
+    "publishedMs": 1794441480418,
+    "title": "Dashboard restart now matches the launcher",
+    "body": "<h3>Dashboard restart</h3>\n<ul>\n<li><b>Restart now</b> and <b>Restart in 5 minutes</b> on the dashboard now click the launcher window's own <b>Restart server</b> button. The whole launcher restarts: it saves the universe, stops the database, rebuilds any changed code and starts everything again.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-12 00:25 UTC",
+    "publishedMs": 1794443128735,
+    "title": "Bots that talk back, alliance applications and server health",
+    "body": "<h3>Local chat</h3>\n<ul>\n<li>Bots now have <b>personalities</b> that fit what they do: friendly pilots, grizzled veterans, excited newbies, trolls, gloating pirates, nervous miners, market spammers, roleplayers and grumps.</li>\n<li><b>Talk to them.</b> Say hi, ask how they are, what they fly, how to make isk, or call someone out. A bot answers after a moment of typing, and keeps talking to you for a few minutes. Use a bot's name to talk to that bot.</li>\n<li>Bots chat among themselves, start conversations, troll Local and shout during fights nearby.</li>\n<li>After a kill, the winner and loser have their say: <code>gf</code>, gloating, rage or excuses, and onlookers chime in with <code>o7</code> or <code>F</code>.</li>\n</ul>\n<h3>Corporations and alliances</h3>\n<ul>\n<li><b>Bot alliances now answer your corporation's applications.</b> Accepted memberships start a day later, as in EVE. Bot corporations answer yours with real replies.</li>\n<li>Bot corporations now apply to <b>your alliances</b>, and bots' applications to your corporations describe what they actually do.</li>\n</ul>\n<h3>Dashboard: Bots page</h3>\n<ul>\n<li>New settings that change the bots at once: <b>Local chat</b> (off to chatty), <b>trash talk</b>, how often bots apply to your corporations and alliances, how bot corps answer applications, pirates attacking on sight, <b>online activity</b> (0.1x to 4x) and ship limit per system.</li>\n<li>Switching to <b>All bots calm</b> now makes bots chasing you let go, unless you shot them first.</li>\n<li>The bot limit is now <b>1,000,000</b>.</li>\n</ul>\n<h3>Dashboard: Server health</h3>\n<ul>\n<li>The <b>Server status</b> page shows machine and server CPU, memory, game loop load, bot simulation load and database speed, with charts of the last five minutes.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-12 00:43 UTC",
+    "publishedMs": 1794444212092,
+    "title": "Real ships, proper fits, drones and fight calls",
+    "body": "<h3>Bot ships</h3>\n<ul>\n<li>Bots now only fly hulls sold under the market's <b>Ships</b> tab. About 52,000 bots that were flying something else have moved to proper market hulls.</li>\n</ul>\n<h3>Proper fits</h3>\n<ul>\n<li>Guns of the hull's race and size in its turret hardpoints, and <b>missile launchers</b> with missiles in its launcher hardpoints. Caldari missile boats finally shoot missiles.</li>\n<li>Afterburners or microwarpdrives, shield boosters and extenders or armor repairers, plates and hardeners, damage controls and damage mods. Pirates fit <b>warp scramblers and webs</b>.</li>\n<li>Miners fit strip miners or mining lasers and mining upgrades; explorers carry a probe launcher and probes.</li>\n<li>Every fit stays within the hull's <b>CPU and powergrid</b>, and richer bots fit named modules.</li>\n</ul>\n<h3>Drones</h3>\n<ul>\n<li>Hulls with a drone bay carry <b>combat drones</b> of the right size, preferring their own race's. Miners carry mining drones.</li>\n<li>Bots <b>launch their drones</b> when they engage, switch them to new targets, and recall them when the fight ends.</li>\n</ul>\n<h3>Fight calls in Local</h3>\n<ul>\n<li>Call a fight in Local, like <code>meet at top belt to fight</code>, <code>1v1 me at belt 3</code>, <code>fight at IV-2</code>, <code>last belt pvp</code>, <code>fight at the sun</code> or <code>come fight me here</code>.</li>\n<li>Some bots say they're coming and <b>warp there</b>, ready to fight. Pirates come most often, miners almost never, and others decline or laugh. With bots set to <b>calm</b>, nobody comes.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-12 01:08 UTC",
+    "publishedMs": 1794445682286,
+    "title": "Player outposts, Station Management and smoother big fights",
+    "body": "<h3>Build your own outpost</h3>\n<ul>\n<li>Launch an <b>outpost construction platform</b> (like the Amarr Factory Outpost Platform) and anchor it in null-sec space your alliance holds. Only one outpost per system.</li>\n<li>Anchoring shows a <b>countdown</b> when it starts, reminders as it runs, and a message when it finishes.</li>\n<li>Fill its <b>resources hold</b> with the materials listed under Show Info, then press <b>Build</b>. The platform becomes a dockable station owned by your corporation, with factory and research lines, and leftovers go into your station hangar.</li>\n<li>Inside, the hangar matches the outpost's race: Amarr, Caldari, Gallente or Minmatar.</li>\n<li>GMs: the platform's <b>GM / WM Extras</b> menu shows the anchoring time left, with <b>Rush anchoring</b> and <b>Spawn outpost materials</b> (also <code>/rushanchor</code> and <code>/outpostmats</code>).</li>\n</ul>\n<h3>Station Management</h3>\n<ul>\n<li>The <b>Station Management</b> window now opens properly for stations your corporation owns. You need the Station Manager or Director role.</li>\n<li><b>Station Details:</b> rename the station, write a description, and set the docking cost, office rental cost and reprocessing tax.</li>\n<li><b>Service Access Control:</b> set the minimum standing and security status for each service. The <b>Docking</b> rule decides who may dock: your own corporation and alliance always can, and anyone else must meet your standing and security limits.</li>\n<li>The <b>Offices</b> and <b>Clone Contracts</b> tabs list who rents offices and who has clones at your station. <b>Revoke</b> sends their clones back to their corporation's headquarters.</li>\n<li>A new station name shows after you log in again.</li>\n</ul>\n<h3>Science and Industry</h3>\n<ul>\n<li>Outpost platforms now show their <b>Material Requirements</b>.</li>\n<li>GMs, BH and ISD BH get a <b>Rush Job</b> button above Cancel Job.</li>\n</ul>\n<h3>Space and Local</h3>\n<ul>\n<li>Fixed big fights making your ship <b>snap back</b> to an earlier spot, and the overview filling up with <b>duplicate rows</b> and stale distances.</li>\n<li>War targets in <b>Local</b> now get the war target icon, the same as on your overview.</li>\n</ul>\n<h3>Dashboard</h3>\n<ul>\n<li>A new look, closer to an EVE admin console.</li>\n<li>The <b>Killboard</b> now looks like zKillboard: big kills, ship and structure losses, recent activity and top pilots, corporations and alliances.</li>\n<li>A live <b>Sovereignty map</b> shows who holds which space, updated as systems change hands.</li>\n<li><b>Market seeding:</b> pick any station (your new outposts are listed first) and stock its market with NPC sell orders for every item. Seeded stations are topped up at every restart.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-12 01:24 UTC",
+    "publishedMs": 1794446647184,
+    "title": "Faster drone recall, bot fittings on killmails and new pilot pages",
+    "body": "<h3>Drones</h3>\n<ul>\n<li><b>Return to Drone Bay is much faster.</b> Fast drones like Warrior IIs used to crawl through their last few kilometres and could take half a minute to dock. Now they dock as soon as they reach your ship.</li>\n<li>Pressing <b>Return to Drone Bay</b> (or <code>Shift+R</code>) again on drones that are already home no longer gives a \"could not accept the command\" message.</li>\n</ul>\n<h3>Killboard</h3>\n<ul>\n<li><b>Bot killmails now show their fitting.</b> High, medium and low slot modules sit on the fitting wheel and in their slot sections, drones in the drone bay, and only charges and real cargo under Cargo.</li>\n<li>Bot killmails list what <b>dropped</b> (green) as well as what was destroyed, so the value split is right. Older bot killmails are sorted into their slots automatically after the restart.</li>\n</ul>\n<h3>Pilot pages, zKillboard style</h3>\n<ul>\n<li>A new layout: portrait, corporation, alliance, security status and birthday, beside a table of <b>ships and ISK destroyed and lost</b> with efficiency.</li>\n<li><b>Dangerous / Snuggly</b> and <b>gang / solo</b> bars, plus final blows and solo kills.</li>\n<li><b>Overview</b>, <b>Kills</b> and <b>Losses</b> tabs, with the pilot's six most valuable kills on top and the full list underneath, page by page. Kills are green and losses red.</li>\n<li>Sidebar: when the pilot fights over the last 90 days, the last 7 days' activity, top ships, top systems and who they fly with.</li>\n</ul>\n<h3>Local</h3>\n<ul>\n<li>Fixed another error that stopped <b>War Target</b> icons showing in Local.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-12 01:30 UTC",
+    "publishedMs": 1794447042552,
+    "title": "Corporation and alliance pages on the killboard",
+    "body": "<h3>Corporation and alliance pages</h3>\n<ul>\n<li><b>Corporations and alliances are now clickable</b> across the killboard: the kill list, kill reports (victim and every pilot involved), pilot pages, the top corporations and alliances, and the Alliances and Corporations pages. Their badges link too.</li>\n<li>Each opens a <b>zKillboard-style page</b>: name and ticker, CEO, alliance, members and outposts for a corporation; executor, member corporations, members, systems held and founding date for an alliance.</li>\n<li>The same stats as a pilot: <b>ships and ISK destroyed and lost</b> with efficiency, <b>Dangerous / Snuggly</b> and <b>gang / solo</b> bars.</li>\n<li><b>Overview</b>, <b>Kills</b> and <b>Losses</b> tabs, their six most valuable kills, and the full list page by page. Their kills are green and their losses red.</li>\n<li>Sidebar: when they fight, the last 7 days (pilots, ships, systems, regions, kills), top pilots, top ships, top systems, and an alliance's member corporations.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-12 01:33 UTC",
+    "publishedMs": 1794447213464,
+    "title": "First-time setup fix for new servers",
+    "body": "<h3>Launcher</h3>\n<ul>\n<li><b>First-time setup no longer fails with <code>error calling dlltool 'dlltool.exe': program not found</code>.</b> On PCs without MinGW installed, the build stopped at <code>getrandom</code>, <code>windows-sys</code>, <code>chrono</code> and <code>parking_lot_core</code>.</li>\n<li>Start.bat now uses the <code>dlltool.exe</code> that comes with its own portable Rust compiler, and reinstalls that part of the compiler if it is missing.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-12 01:40 UTC",
+    "publishedMs": 1794447630516,
+    "title": "Killmails show your carrier, not your drones",
+    "body": "<h3>Killmails</h3>\n<ul>\n<li><b>Drone kills show your ship again.</b> When your drones or fighters did the damage, killmails listed the drone (an Ogre II, a Templar) as your ship. They now show the carrier, supercarrier or whatever you were flying, with the drone as the <b>weapon</b>, as on EVE's own killmails.</li>\n<li>Bot ships with drones are recorded the same way.</li>\n<li>Older killmails are corrected after the restart: the drone becomes the weapon, and the ship is the one you flew in your nearest other kill, or the ship you fly now.</li>\n<li>Pilot, corporation and alliance pages count those kills under the right ship in <b>Top ships</b>.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-12 01:46 UTC",
+    "publishedMs": 1794447986003,
+    "title": "Launcher build fix",
+    "body": "<h3>Launcher</h3>\n<ul>\n<li>Fixed a launcher bug from the previous update that stopped the server from building, with <code>ld: cannot find crt2.o</code> and many <code>cannot find -lkernel32</code> errors.</li>\n<li>The fix for first-time setup on PCs without MinGW (<code>dlltool.exe</code> not found) still applies.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-12 01:50 UTC",
+    "publishedMs": 1794448250217,
+    "title": "Patch notes for everyone",
+    "body": "<h3>Patch notes for every server</h3>\n<ul>\n<li><b>Every server now gets these news articles.</b> They ship with the server in <code>news/articles.json</code>, and a server adds any it is missing when it starts, so a fresh download shows the full history of patch notes on the dashboard and the character selection screen.</li>\n<li>Articles published from the dashboard's <b>News publishing</b> page are saved to that file as well, so they travel with the next update.</li>\n<li>The same notes are on GitHub in <b>NEWS.md</b>, newest first, so anyone can see what each update changed.</li>\n<li>News is now listed by publish date, so older notes added later sit in their proper place.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-12 02:06 UTC",
+    "publishedMs": 1794449186483,
+    "title": "Escrow fixed, and bots trade in it",
+    "body": "<h3>Escrow</h3>\n<ul>\n<li><b>Making an escrow works again.</b> After you picked a station, the Escrow tab sat on \"Loading...\" forever instead of listing your items.</li>\n<li>An escrow or courier mission with an <b>empty description</b> no longer fails when you submit it.</li>\n</ul>\n<h3>Bots trade in escrow</h3>\n<ul>\n<li><b>Bot traders put up escrows</b> at the busiest trade hubs and at any station where a player is docked: bundles of ships, modules, drones, ammunition and materials from that market, usually a little under or over market price. Look in <b>Browse Escrow</b>.</li>\n<li><b>Bots buy your escrows</b> when the price is fair for what is inside. A bargain sells within minutes, a fair price in a while, an expensive one rarely, and a rip-off never. You are paid straight away and told who bought it.</li>\n<li>Bots take down their own escrows that nobody buys before they expire.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-12 02:13 UTC",
+    "publishedMs": 1794449603466,
+    "title": "Directional scanner: V and click",
+    "body": "<h3>Directional scanner</h3>\n<ul>\n<li>Press <code>V</code>, then <b>click anywhere in space</b> (or on any object): your camera turns that way and the directional scanner scans along it, out to <b>14.1 AU</b>. This now works whether the scanner window is open or closed; before, with the window open, V ignored your click.</li>\n<li>After pressing <code>V</code> a message reminds you to click. You have 30 seconds to pick a direction.</li>\n<li>Press <code>V</code> twice to scan straight along where your camera already points.</li>\n<li>Ships <b>in warp</b> now show on the scanner, where they are at that moment.</li>\n<li>The shortcut is under <b>Shortcuts</b> in the Escape menu, where you can change the key.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-12 02:28 UTC",
+    "publishedMs": 1794450522471,
+    "title": "Code review: Local roster and /maxstandings",
+    "body": "<h3>Fixes</h3>\n<ul>\n<li><b>Local member list:</b> the client hook that keeps Local's pilot list and war-target badges up to date no longer errors on every refresh. Local now refreshes its list and badges as intended.</li>\n<li><b>/maxstandings</b> now updates your Standings window live for every NPC corporation and faction. Before, you had to relog to see the new standings.</li>\n</ul>\n<h3>Checked</h3>\n<ul>\n<li>Starbases (POS), warp disruptors and interdiction bubbles, deployables and pirate NPCs from the earlier merge are all still in place.</li>\n</ul>"
+  }
+]

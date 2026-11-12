@@ -105,6 +105,7 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     svc::bookmark::ensure_coordinate_format(&mut client).await.map_err(|e| format!("repairing coordinate bookmarks: {}", logging::chain(&e)))?;
     losses::ensure_kill_items(&client).await.map_err(|e| format!("preparing kill item records: {}", logging::chain(&e)))?;
     web::ensure_storage(&client).await.map_err(|e| format!("preparing dashboard news and downtime: {}", logging::chain(&e)))?;
+    news::sync_notes(&client).await.map_err(|e| format!("loading patch notes: {}", logging::chain(&e)))?;
     svc::alliance::ensure_logo_storage(&client).await.map_err(|e| format!("preparing alliance logos: {}", logging::chain(&e)))?;
 
     let started = Instant::now();
@@ -142,6 +143,7 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(bots::talk::run(server.world.clone(), server.db_url.clone()));
     tokio::spawn(losses::reslot_bot_kills(server.db_url.clone()));
     tokio::spawn(losses::fix_drone_attackers(server.db_url.clone()));
+    tokio::spawn(svc::missions::run_bot_escrows(Arc::clone(&server)));
     let listener = TcpListener::bind(&config.bind).await?;
     info!("listening on {} as node {}", config.bind, config.node_id);
 

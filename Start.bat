@@ -2404,16 +2404,27 @@ def _rmr_install_directional_scan(cmd_class):
         scan(window.sr.systemscanner)
 
     def directional_scan(self):
+        # V, then a click in space (or on anything in it): the camera turns
+        # that way and the scanner scans along it, open or not. V twice
+        # scans straight along the camera as it points now.
         if not eve.session.solarsystemid or not eve.session.shipid:
             return
         if _rmr_editable_focus(eve.LocalSvc('ui')) is not None:
             return
-        window = eve.LocalSvc('window').GetWindow('scanner')
-        if window is not None and not window.destroyed:
+        if awaiting_click():
             armed[0] = None
-            uthread.new(rescan_open_window, window, context())
+            window = eve.LocalSvc('window').GetWindow('scanner')
+            if window is None or window.destroyed:
+                eve.LocalSvc('cmd').OpenScanner()
+                window = eve.LocalSvc('window').GetWindow('scanner')
+            if window is not None and not window.destroyed:
+                uthread.new(rescan_open_window, window, context())
             return
-        armed[0] = (context(), blue.os.GetTime() + 100000000)
+        armed[0] = (context(), blue.os.GetTime() + 300000000)
+        try:
+            eve.Message('CustomNotify', {'notify': 'Directional scan: click where to scan (V again scans where the camera faces).'})
+        except:
+            sys.exc_clear()
 
     scanner.Startup = start_scanner
     scanner.DirectionSearch = direction_search
@@ -2847,7 +2858,7 @@ def _rmr_install_local_roster():
             war_flags = dict([(owner, True) for owner in enemies])
             war_changed = current != [channel_id, war_flags]
             current[:] = [channel_id, war_flags]
-            if channel is None or lsc.channels.get(channel_id) is not channel:
+            if channel is None:
                 if 'ok' not in reported:
                     report_once('ok', 'war list only: %d war enemies (Local window not found)' % len(war_flags))
                 return 10000

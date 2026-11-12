@@ -442,7 +442,7 @@ fn news(server: &Server) -> Answer {
 
 async fn articles(server: &Server) -> Answer {
     let mut list = rows(&server.db.query(r#"SELECT id, title, body, published_ms AS time
-        FROM "rmrNewsArticles" ORDER BY id DESC LIMIT 100"#, &[]).await?);
+        FROM "rmrNewsArticles" ORDER BY published_ms DESC, id DESC LIMIT 100"#, &[]).await?);
     if let Json::Array(items) = &mut list {
         for item in items.iter_mut() {
             let html = crate::news::render(item["body"].as_str().unwrap_or(""), crate::news::Target::Dashboard);
@@ -617,9 +617,11 @@ async fn publish_article(server: &Server, body: &[u8]) -> EditResult {
     if title.is_empty() || title.chars().count() > 140 || text.is_empty() || text.chars().count() > ARTICLE_MAX_CHARS {
         return Err((400, "Enter a title (up to 140 characters) and article (up to 30,000 characters).".into()));
     }
+    let published = unix_ms_now();
     let row = server.db.query_one(r#"INSERT INTO "rmrNewsArticles" (title, body, published_ms)
-        VALUES ($1, $2, $3) RETURNING id"#, &[&title, &text, &unix_ms_now()]).await
+        VALUES ($1, $2, $3) RETURNING id"#, &[&title, &text, &published]).await
         .map_err(|e| { warn!("publishing news: {}", crate::logging::chain(&e)); (500, "Could not save article.".into()) })?;
+    crate::news::record_note(title, text, published);
     Ok(json!({"ok": "Article published to the dashboard and character select.", "id": row.get::<_, i64>(0)}))
 }
 
@@ -738,7 +740,7 @@ async fn client_news(server: &Server) -> Result<String, tokio_postgres::Error> {
     let articles = server.db.query(r#"SELECT title, body,
         to_char(to_timestamp(published_ms / 1000.0) AT TIME ZONE 'UTC', 'FMDD FMMonth YYYY') AS published
         FROM "rmrNewsArticles"
-        ORDER BY id DESC LIMIT 25"#, &[]).await?;
+        ORDER BY published_ms DESC, id DESC LIMIT 25"#, &[]).await?;
     let mut html = String::from("<html><body bgcolor=\"#101820\" text=\"#d8dee4\" link=\"#9bd0ff\"><font face=\"Tahoma,Arial\" size=\"4\"><h1><font color=\"#ffffff\">Red Moon Rising updates</font></h1><hr>");
     if articles.is_empty() { html.push_str("<p>No news articles have been published yet.</p>"); }
     for row in articles {

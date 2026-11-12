@@ -459,6 +459,13 @@ struct Talk {
     /// Names of players who spoke, for bots to address them.
     names: HashMap<i64, String>,
     ships: HashMap<i64, String>,
+    /// For the log's once-a-minute summary: lines said, lines dropped (no
+    /// one in that Local, or the bot left), and players heard and answered.
+    said: u64,
+    dropped: u64,
+    heard: u64,
+    answered: u64,
+    reported: Option<Instant>,
 }
 
 static TALK: Mutex<Option<Talk>> = Mutex::new(None);
@@ -472,6 +479,11 @@ fn with_talk<R>(f: impl FnOnce(&mut Talk) -> R) -> Option<R> {
         partners: HashMap::new(),
         names: HashMap::new(),
         ships: HashMap::new(),
+        said: 0,
+        dropped: 0,
+        heard: 0,
+        answered: 0,
+        reported: None,
     });
     Some(f(talk))
 }
@@ -686,10 +698,12 @@ pub fn player_said(w: &WorldState, system: i64, player: i64, name: &str, text: &
     }
     let bots = bots_in(w, system);
     if bots.is_empty() {
+        tracing::info!("local: {name} spoke in {system}, but no bot is in that Local");
         return;
     }
     let chatter = super::chatter();
     with_talk(|t| {
+        t.heard += 1;
         t.names.insert(player, name.to_string());
         if answer_fight_call(t, w, system, player, name, text, &bots) || chatter == Chatter::Off {
             return;
@@ -714,7 +728,11 @@ pub fn player_said(w: &WorldState, system: i64, player: i64, name: &str, text: &
                 (b, Asked::Nothing)
             }
         };
-        let Some(speaker) = speaker else { return };
+        let Some(speaker) = speaker else {
+            tracing::debug!("local: nobody answers {name} in {system} ({} bots there)", bots.len());
+            return;
+        };
+        t.answered += 1;
         let p = persona(speaker.char_id, speaker.role);
         let ship = t.ship_of(w, system, speaker.char_id);
         // An answer to what the bot asked gets a fitting reply.
@@ -835,22 +853,39 @@ fn tick(world: &World) {
         due
     })
     .unwrap_or_default();
-    for line in due {
-        let Some((_, channel, members)) = channels.iter().find(|(s, _, m)| *s == line.system && !m.is_empty()) else { continue };
+    let mut dropped = 0;
+    for line in &due {
+        let Some((_, channel, members)) = channels.iter().find(|(s, _, m)| *s == line.system && !m.is_empty()) else { dropped += 1; continue };
         // Said only by a bot still in that Local.
-        let Some(bot) = bots_in(&w, line.system).into_iter().find(|b| b.char_id == line.bot) else { continue };
+        let Some(bot) = bots_in(&w, line.system).into_iter().find(|b| b.char_id == line.bot) else { dropped += 1; continue };
         let count = chat::channel_population(&w, channel, members.len());
         chat::announce_counted(&w, members, count, channel, "SendMessage", &chat::bot_who(&bot), vec![Value::text(line.text.clone())]);
         with_talk(|t| {
+            t.said += 1;
             let s = t.systems.entry(line.system).or_default();
             s.spoke.insert(bot.char_id, now);
-            s.recent.push_back(line.text);
+            s.recent.push_back(line.text.clone());
             while s.recent.len() > 30 {
                 s.recent.pop_front();
             }
         });
     }
     let chatter = super::chatter();
+    let listening = channels.iter().filter(|(_, _, m)| !m.is_empty()).count();
+    with_talk(|t| {
+        t.dropped += dropped;
+        if t.reported.is_none_or(|at| now.duration_since(at) >= Duration::from_secs(60)) {
+            if t.reported.is_some() && (t.said > 0 || t.dropped > 0 || t.heard > 0 || listening > 0) {
+                tracing::info!(
+                    "local chat: {} line(s) said, {} dropped, {} queued; players spoke {} time(s), {} answered; {} Local(s) with players; chatter {:?}, bots {}",
+                    t.said, t.dropped, t.queue.len(), t.heard, t.answered, listening, chatter,
+                    if super::is_running() { "running" } else { "paused" }
+                );
+            }
+            t.reported = Some(now);
+            (t.said, t.dropped, t.heard, t.answered) = (0, 0, 0, 0);
+        }
+    });
     if chatter == Chatter::Off || !super::is_running() {
         return;
     }

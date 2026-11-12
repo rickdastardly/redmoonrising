@@ -122,7 +122,8 @@ async fn cone_scan(ctx: &Ctx<'_>, call: &Call) -> Value {
             }
         };
         for c in &park.celestials { consider(c.id, c.type_id, Some(c.group_id), &c.name, c.pos); }
-        for s in park.ships.values().filter(|s| !s.in_warp() && !crate::drones::in_transit(s)) {
+        // Ships in warp show too, where they are now, as on EVE's scanner.
+        for s in park.ships.values().filter(|s| !crate::drones::in_transit(s)) {
             consider(s.id, s.pilot.type_id, Some(s.pilot.group_id), &s.pilot.name, s.pos);
         }
         for r in park.rocks.values() { consider(r.id, r.type_id, None, &r.name, r.pos); }
