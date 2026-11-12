@@ -2,6 +2,14 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Server health on the Overview
+
+*2026-11-12 15:08 UTC*
+
+### Dashboard
+
+- The **Overview** page now shows the **Server Health** window (CPU, memory, game loop and bot load, database and the live charts) below server status, updating every two seconds. It is still on the Server status page too.
+
 ## Killboard portraits and logos, GM command list, a redder moon
 
 *2026-11-12 02:46 UTC*

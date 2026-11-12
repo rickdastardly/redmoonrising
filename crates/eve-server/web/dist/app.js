@@ -2729,7 +2729,7 @@ for (const button of document.querySelectorAll(".window .min")) {
     button.addEventListener("click", () => button.closest(".window")?.classList.toggle("minimized"));
 }
 const pages = {
-    home: { title: "Command overview", description: "Live activity across New Eden.", windows: ["w-status", "w-wars", "w-pilots", "w-news"] },
+    home: { title: "Command overview", description: "Live activity across New Eden.", windows: ["w-status", "w-health", "w-wars", "w-pilots", "w-news"] },
     status: { title: "Server status", description: "Connections, simulation, uptime and how hard the machine is working.", windows: ["w-status", "w-health"] },
     wars: { title: "War report", description: "Active wars and losses.", windows: ["w-wars"] },
     pilots: { title: "Pilots online", description: "Capsuleers currently connected.", windows: ["w-pilots"] },
@@ -2799,7 +2799,7 @@ function route() {
         void refreshUsers();
     if (hash === "seeding")
         void refreshSeeding();
-    if (hash === "status")
+    if (hash === "status" || hash === "home")
         void refreshHealth();
     if (hash === "bots")
         void refreshBotSettings();

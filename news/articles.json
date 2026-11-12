@@ -106,5 +106,11 @@
     "publishedMs": 1794451580640,
     "title": "Killboard portraits and logos, GM command list, a redder moon",
     "body": "<h3>Killboard</h3>\n<ul>\n<li><b>Pilot portraits.</b> Pilot pages, killmails, final blow, top damage and every attacker now show the pilot's real portrait, taken from your game client's portrait cache. A pilot your client has never seen keeps their initial until it has.</li>\n<li><b>Alliance logos.</b> Alliances that uploaded a logo in game show it on the killboard and their alliance page.</li>\n<li><b>NPC corporation and faction logos</b> come from CCP's image server. Player corporations keep their coloured badge.</li>\n</ul>\n<h3>GM commands</h3>\n<ul>\n<li>A new <b>GM commands</b> page under Administration lists every slash command, what it does and an example, grouped and searchable. It also says which account roles can use them.</li>\n</ul>\n<h3>Look</h3>\n<ul>\n<li>A red moon rises behind the masthead, with crimson accents on page headings, window corners, the masthead edge and the background nebula.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-12 15:08 UTC",
+    "publishedMs": 1794496133905,
+    "title": "Server health on the Overview",
+    "body": "<h3>Dashboard</h3>\n<ul>\n<li>The <b>Overview</b> page now shows the <b>Server Health</b> window (CPU, memory, game loop and bot load, database and the live charts) below server status, updating every two seconds. It is still on the Server status page too.</li>\n</ul>"
   }
 ]

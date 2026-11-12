@@ -2802,7 +2802,7 @@ for (const button of document.querySelectorAll<HTMLButtonElement>(".window .min"
 }
 
 const pages: Record<string, { title: string; description: string; windows: string[] }> = {
-  home: { title: "Command overview", description: "Live activity across New Eden.", windows: ["w-status", "w-wars", "w-pilots", "w-news"] },
+  home: { title: "Command overview", description: "Live activity across New Eden.", windows: ["w-status", "w-health", "w-wars", "w-pilots", "w-news"] },
   status: { title: "Server status", description: "Connections, simulation, uptime and how hard the machine is working.", windows: ["w-status", "w-health"] },
   wars: { title: "War report", description: "Active wars and losses.", windows: ["w-wars"] },
   pilots: { title: "Pilots online", description: "Capsuleers currently connected.", windows: ["w-pilots"] },
@@ -2867,7 +2867,7 @@ function route(): void {
   if (groupID > 0 && groupKind) void showGroup(groupKind, groupID);
   if (hash === "users") void refreshUsers();
   if (hash === "seeding") void refreshSeeding();
-  if (hash === "status") void refreshHealth();
+  if (hash === "status" || hash === "home") void refreshHealth();
   if (hash === "bots") void refreshBotSettings();
   if (hash === "sovereignty") void openSovMap();
   window.scrollTo(0, 0);
