@@ -220,6 +220,46 @@ async fn bot_kill_items(db: &impl GenericClient, items: &[BotItem]) -> Vec<KillI
     out
 }
 
+/// Older killmails named the drone as an attacker's ship when a drone did
+/// the damage. Make the drone the weapon and, for the ship, take the one
+/// the pilot flew in their nearest-in-time other kill, else the ship they
+/// fly now. Runs in the background at start; rows already right are left.
+pub async fn fix_drone_attackers(db_url: String) {
+    let db = match crate::db::connect(&db_url).await {
+        Ok(db) => db,
+        Err(e) => { warn!("fixing drone killmails: {}", crate::logging::chain(&e)); return; }
+    };
+    let drone_rows = r#"SELECT p.ctid AS row, p."ownerID" AS owner, p."shipTypeID" AS drone, k."killTime" AS at
+          FROM "killLogParticipants" p JOIN "killLog" k ON k."killID" = p."killID"
+          JOIN "invTypes" t ON t."typeID" = p."shipTypeID" JOIN "invGroups" g ON g."groupID" = t."groupID"
+         WHERE p."ownerID" > 0 AND g."categoryID" = 18"#;
+    let nearest = format!(r#"WITH d AS ({drone_rows})
+        UPDATE "killLogParticipants" p SET "weaponTypeID" = d.drone, "shipTypeID" = guess.ship
+          FROM d CROSS JOIN LATERAL (
+               SELECT q."shipTypeID" AS ship FROM "killLogParticipants" q
+                 JOIN "killLog" k2 ON k2."killID" = q."killID"
+                 JOIN "invTypes" t2 ON t2."typeID" = q."shipTypeID" JOIN "invGroups" g2 ON g2."groupID" = t2."groupID"
+                WHERE q."ownerID" = d.owner AND g2."categoryID" = 6
+                ORDER BY abs(k2."killTime" - d.at) LIMIT 1) guess
+         WHERE p.ctid = d.row"#);
+    let current = format!(r#"WITH d AS ({drone_rows})
+        UPDATE "killLogParticipants" p SET "weaponTypeID" = d.drone, "shipTypeID" = e."typeID"
+          FROM d JOIN "character_" c ON c."characterID" = d.owner
+          JOIN entity e ON e."itemID" = c."shipID"
+          JOIN "invTypes" t ON t."typeID" = e."typeID" JOIN "invGroups" g ON g."groupID" = t."groupID"
+         WHERE p.ctid = d.row AND g."categoryID" = 6"#);
+    let mut fixed = 0;
+    for sql in [nearest, current] {
+        match db.execute(sql.as_str(), &[]).await {
+            Ok(n) => fixed += n,
+            Err(e) => { warn!("fixing drone killmails: {}", crate::logging::chain(&e)); return; }
+        }
+    }
+    if fixed > 0 {
+        info!("killboard: {fixed} older killmail attackers now show their ship, with their drones as the weapon");
+    }
+}
+
 /// Older bot killmails recorded every item as cargo. Put their modules and
 /// drones into slots, once, in the background: a kill whose items are all
 /// cargo and include a module or drone is redone as `bot_kill_items` would.

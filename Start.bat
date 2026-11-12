@@ -857,7 +857,17 @@ function Start-RmrWorker {
                 Invoke-Native $rustup @('component','add','rust-mingw','--toolchain','1.97.0-x86_64-pc-windows-gnu')
             }
             if (-not [IO.File]::Exists((Join-Path $selfContained 'dlltool.exe'))) { throw 'The Rust toolchain is missing dlltool.exe. Delete the .rmr\rustup folder and run start.bat again.' }
-            if (($env:PATH -split ';') -notcontains $selfContained) { $env:PATH = $selfContained + ';' + $env:PATH }
+            # Only dlltool goes on PATH, from a folder of its own: with the
+            # toolchain's gcc on PATH, rustc takes it for an installed MinGW and
+            # stops linking with its own startup files and libraries.
+            $dlltoolDir = Join-Path $Runtime 'tools\dlltool'
+            [IO.Directory]::CreateDirectory($dlltoolDir) | Out-Null
+            foreach ($name in @('dlltool.exe', 'libwinpthread-1.dll')) {
+                $from = Join-Path $selfContained $name
+                $to = Join-Path $dlltoolDir $name
+                if ([IO.File]::Exists($from) -and (-not [IO.File]::Exists($to) -or (Get-RmrFileHash $from) -ne (Get-RmrFileHash $to))) { [IO.File]::Copy($from, $to, $true) }
+            }
+            $env:PATH = (@($dlltoolDir) + @(($env:PATH -split ';') | Where-Object { $_ -and $_ -ne $selfContained -and $_ -ne $dlltoolDir })) -join ';'
             Invoke-Native $rustup @('run','1.97.0-x86_64-pc-windows-gnu','cargo','build','--release','--locked','-p','eve-server','--bins','--target','x86_64-pc-windows-gnu')
             if (-not (Test-Path -LiteralPath $serverExe) -or -not (Test-Path -LiteralPath $fakeClientExe)) { throw 'The build did not produce both server and fakeclient executables.' }
             $buildRecord = [pscustomobject]@{ fingerprint = $fingerprint; serverHash = (Get-RmrFileHash $serverExe); clientHash = (Get-RmrFileHash $fakeClientExe) }

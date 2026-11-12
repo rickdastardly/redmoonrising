@@ -563,6 +563,13 @@ fn hit(park: &mut Park, by: Attacker, target: i64, damage: Damage, shot: Shot, w
         hit_structure(park, by, target, damage, shot, weapon, now, out);
         return;
     }
+    // A drone's damage is its pilot's, flying the ship that controls it,
+    // with the drone as the weapon, as on EVE's killmails. None: not a drone
+    // (Some(None): a drone whose controller has left).
+    let drone_of = park.ships.get(&by.ship_id).and_then(|s| {
+        let d = s.drone.as_ref()?;
+        Some((s.pilot.type_id, d.controller.and_then(|c| park.ships.get(&c)).map(|c| c.pilot.type_id)))
+    });
     let Some(victim) = park.ships.get_mut(&target) else { return };
     let Some(fight) = victim.fight.as_mut() else { return };
     let dealt = match shot {
@@ -573,8 +580,14 @@ fn hit(park: &mut Park, by: Attacker, target: i64, damage: Damage, shot: Shot, w
     if dealt > 0.0 {
         // A pilot by character, an NPC by minus its type.
         let who = if by.char_id != 0 { by.char_id } else { -by.ship_type };
-        let entry = fight.damage_log.entry(who).or_insert((by.ship_type, by.weapon_type, 0.0));
-        *entry = (by.ship_type, by.weapon_type, entry.2 + dealt);
+        let (ship_type, weapon_type) = match drone_of {
+            Some((drone, Some(controller))) => (Some(controller), drone),
+            // Its ship is gone: keep the ship already on record for its pilot.
+            Some((drone, None)) => (None, drone),
+            None => (Some(by.ship_type), by.weapon_type),
+        };
+        let entry = fight.damage_log.entry(who).or_insert((ship_type.unwrap_or(by.ship_type), weapon_type, 0.0));
+        *entry = (ship_type.unwrap_or(entry.0), weapon_type, entry.2 + dealt);
     }
     let victim_client = victim.is_player().then_some(victim.client_id);
     if dealt > 0.0 {

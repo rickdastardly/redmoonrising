@@ -141,6 +141,7 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(web::run(Arc::clone(&server), config.web.clone()));
     tokio::spawn(bots::talk::run(server.world.clone(), server.db_url.clone()));
     tokio::spawn(losses::reslot_bot_kills(server.db_url.clone()));
+    tokio::spawn(losses::fix_drone_attackers(server.db_url.clone()));
     let listener = TcpListener::bind(&config.bind).await?;
     info!("listening on {} as node {}", config.bind, config.node_id);
 
