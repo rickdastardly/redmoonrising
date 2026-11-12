@@ -29,11 +29,11 @@ use super::presence::Identity;
 use crate::combat::Rng;
 use crate::svc::rows::{int, text};
 
-const KIND_INDUSTRIAL_CORP: i16 = 1;
-const KIND_COMBAT_CORP: i16 = 2;
+pub(super) const KIND_INDUSTRIAL_CORP: i16 = 1;
+pub(super) const KIND_COMBAT_CORP: i16 = 2;
 pub(super) const KIND_NULL_ALLIANCE: i16 = 11;
 pub(super) const KIND_PIRATE_ALLIANCE: i16 = 12;
-const KIND_INDUSTRY_ALLIANCE: i16 = 13;
+pub(super) const KIND_INDUSTRY_ALLIANCE: i16 = 13;
 
 /// The share of bots that join bot corporations at the start.
 const IN_CORPS: f64 = 0.7;

@@ -259,15 +259,19 @@ const CORP_HEADER: &[&str] = &[
 
 // NPC corporations have no founder (creatorID 0, which no owner record
 // matches); their CEO stands in, so the info window shows "CEO and Founder".
-// A corporation whose CEO left can have ceoID 0. The station Offices tab
-// resolves ceoID through cfg.eveowners.Get, so use its founder as the display
-// contact when no CEO is assigned.
-const CORP_SQL: &str = r#"SELECT "corporationID","corporationName","description","tickerName",
+// The client looks up ceoID unconditionally and only displays a CEO if the
+// owner is a character. Use the corporation owner for a closed corporation.
+const CORP_SQL: &str = r#"SELECT "corporationID","corporationName",
+                                 CASE WHEN "deleted" <> 0 THEN 'This corporation is closed.' ||
+                                     CASE WHEN "description" = '' THEN '' ELSE '<br><br>' || "description" END
+                                     ELSE "description" END AS "description", "tickerName",
                                  "url","taxRate","minimumJoinStanding","corporationType",
                                  "hasPlayerPersonnelManager","sendCharTerminationMessage",
                                  COALESCE(NULLIF("creatorID", 0), NULLIF("ceoID", 0), "corporationID"),
-                                 COALESCE(NULLIF("ceoID", 0), NULLIF("creatorID", 0), "corporationID") AS "ceoID",
-                                 "stationID","raceID","allianceID","shares",
+                                 CASE WHEN "deleted" <> 0 THEN "corporationID"
+                                     ELSE COALESCE(NULLIF("ceoID", 0), NULLIF("creatorID", 0), "corporationID") END AS "ceoID",
+                                 CASE WHEN "deleted" <> 0 THEN 0 ELSE "stationID" END AS "stationID",
+                                 "raceID","allianceID","shares",
                                  "memberCount","memberLimit","allowedMemberRaceIDs","graphicID",
                                  "shape1","shape2","shape3","color1","color2","color3","typeface",
                                  "division1","division2","division3","division4","division5",
@@ -289,8 +293,9 @@ const OFFICE_LIST_HEADER: &[&str] = &["itemID", "corporationID", "stationID", "t
 const OFFICES_PROVIDER: &str = "corpOffices";
 
 async fn office_lines(ctx: &Ctx<'_>, corp_id: i64) -> Vec<(i64, Vec<Value>)> {
-    let sql = r#"SELECT "itemID", "corporationID", "stationID", "typeID", "officeFolderID"
-                   FROM "crpOffices" WHERE "corporationID" = $1 ORDER BY "stationID", "itemID""#;
+    let sql = r#"SELECT o."itemID", o."corporationID", o."stationID", o."typeID", o."officeFolderID"
+                   FROM "crpOffices" o JOIN "corporation" c USING ("corporationID")
+                  WHERE o."corporationID" = $1 AND c."deleted" = 0 ORDER BY o."stationID", o."itemID""#;
     ctx.query(sql, &[&(corp_id as i32)]).await.iter().map(|r| (int(r, 0).unwrap_or(0), line(r))).collect()
 }
 
@@ -756,6 +761,9 @@ async fn corp_station_mgr(
 ) -> Outcome {
     let station = station.or(ctx.session.station_id).unwrap_or(0);
     let arg0 = args.first().and_then(|v| v.as_i64());
+    if let Some(outcome) = crate::svc::outpost::station_management(ctx, method, args, station).await {
+        return outcome;
+    }
 
     let out = match method {
         "GetCorporateStationInfo" => corporate_station_info(ctx, station).await,
@@ -792,15 +800,18 @@ async fn corporate_station_info(ctx: &Ctx<'_>, station: i64) -> Value {
 
     let station = station as i32;
 
-    let office_sql = r#"SELECT "corporationID","itemID","officeFolderID"
-                          FROM "crpOffices" WHERE "stationID" = $1"#;
-    let offices = ctx.rowset(OFFICE_HEADER, office_sql, &[&station]).await;
+    // A closed corporation's office remains an inventory location for any
+    // items left there, but it no longer counts as a station office.
+    let office_sql = r#"SELECT o."corporationID",o."itemID",o."officeFolderID"
+                          FROM "crpOffices" o JOIN "corporation" c USING ("corporationID")
+                         WHERE o."stationID" = $1 AND c."deleted" = 0"#;
+    let office_rows = ctx.query(office_sql, &[&station]).await;
 
     let corp_sql = CORP_SQL.replace(
         r#"WHERE "corporationID" = $1"#,
-        r#"WHERE "stationID" = $1
+        r#"WHERE "deleted" = 0 AND ("stationID" = $1
               OR "corporationID" IN (SELECT "corporationID" FROM "crpOffices"
-                                      WHERE "stationID" = $1)"#,
+                                      WHERE "stationID" = $1))"#,
     );
     let corp_rows = match ctx.db.query(corp_sql.as_str(), &[&station]).await {
         Ok(rows) => rows,
@@ -809,8 +820,11 @@ async fn corporate_station_info(ctx: &Ctx<'_>, station: i64) -> Value {
             Vec::new()
         }
     };
-    let corporations =
-        rowset(CORP_HEADER, lines(&corp_rows));
+    let corporations = rowset(CORP_HEADER, lines(&corp_rows));
+    // If a corp closed between the two reads, omit its stale office as well.
+    let active_corps: std::collections::HashSet<_> = corp_rows.iter().filter_map(|r| int(r, 0)).collect();
+    let offices = rowset(OFFICE_HEADER, office_rows.iter().filter(|r| int(r, 0).is_some_and(|id| active_corps.contains(&id)))
+        .map(|r| Value::List(line(r))).collect());
 
     let mut ids: Vec<i32> = Vec::new();
     for r in &corp_rows {
@@ -829,6 +843,27 @@ async fn corporate_station_info(ctx: &Ctx<'_>, station: i64) -> Value {
     let eveowners = eve_owners_by_id(ctx, &ids).await;
 
     Value::Tuple(vec![eveowners, corporations, offices])
+}
+
+/// Refresh affected station lists immediately when a corporation closes.
+pub(super) fn notify_closed(world: &crate::world::World, corp: i64, ceo: i64, hq: i64, office_stations: &[i64]) {
+    let world = world.lock();
+    let mut clients = world.corp_members(corp);
+    clients.extend(world.clients_at_station(hq));
+    for &station in office_stations {
+        clients.extend(world.clients_at_station(station));
+    }
+    clients.sort_unstable();
+    clients.dedup();
+    let changed = [("deleted", 0, 1), ("ceoID", ceo, corp), ("stationID", hq, 0)];
+    let changed = Value::Dict(changed.into_iter().map(|(key, old, new)|
+        (Value::bytes(key), Value::Tuple(vec![Value::Int(old), Value::Int(new)]))).collect());
+    world.notify(&clients, "OnCorporationChanged", Value::Tuple(vec![Value::Int(corp), changed]));
+
+    let unrented = Value::Tuple(vec![Value::Int(corp), Value::None, Value::None]);
+    for &station in office_stations {
+        world.notify(&world.clients_at_station(station), "OnOfficeRentalChanged", unrented.clone());
+    }
 }
 
 async fn eve_owners_by_id(ctx: &Ctx<'_>, ids: &[i32]) -> Value {
@@ -897,6 +932,7 @@ async fn rent_office(ctx: &Ctx<'_>, station: i64, quoted: f64) -> Outcome {
             INSERT INTO "crpOffices" ("corporationID","stationID","itemID","typeID","officeFolderID")
             SELECT $1, $2, nextval('dyn_id_seq'), $3, nextval('office_folder_seq')
              WHERE NOT EXISTS (SELECT 1 FROM "crpOffices" WHERE "corporationID" = $1 AND "stationID" = $2)
+               AND EXISTS (SELECT 1 FROM "corporation" WHERE "corporationID" = $1 AND "deleted" = 0 FOR UPDATE)
             RETURNING "itemID","officeFolderID"
         ),
         item AS (
@@ -947,4 +983,40 @@ async fn potential_home_stations(ctx: &Ctx<'_>, station: i64) -> Value {
     let sql = r#"SELECT "stationID","stationTypeID" AS "typeID"
                    FROM "staStations" WHERE "stationID" = $1"#;
     ctx.rowset(HEADER, sql, &[&(station as i32)]).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::world::{Presence, Push, World};
+
+    #[test]
+    fn closure_clears_a_cached_office_and_updates_the_headquarters() {
+        let world = World::default();
+        let (mut hq, mut office, mut elsewhere) = {
+            let mut state = world.lock();
+            let hq = state.connect(1);
+            let office = state.connect(2);
+            let elsewhere = state.connect(3);
+            for (client, station) in [(1, 60_000_001), (2, 60_000_002), (3, 60_000_003)] {
+                state.set_presence(client, Some(Presence {
+                    char_id: 140_000_000 + client, corp_id: 1000002, solar_system_id: 30000001,
+                    docked: true, station_id: Some(station), role: 0,
+                }));
+            }
+            (hq, office, elsewhere)
+        };
+        let closed = 140_100_001;
+        notify_closed(&world, closed, 140_000_004, 60_000_001, &[60_000_002]);
+        for rx in [&mut hq, &mut office] {
+            let Push::Notify(update) = rx.try_recv().expect("corporation update") else { panic!("a notification") };
+            assert_eq!(update.event, "OnCorporationChanged");
+            assert_eq!(update.args.seq().unwrap()[0], Value::Int(closed));
+        }
+        let Push::Notify(unrented) = office.try_recv().expect("office update") else { panic!("a notification") };
+        assert_eq!(unrented.event, "OnOfficeRentalChanged");
+        assert_eq!(unrented.args, Value::Tuple(vec![Value::Int(closed), Value::None, Value::None]));
+        assert!(hq.try_recv().is_err());
+        assert!(elsewhere.try_recv().is_err());
+    }
 }

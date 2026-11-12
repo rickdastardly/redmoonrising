@@ -19,7 +19,7 @@ use crate::items::{self, ItemTxn, NewItem};
 use crate::svc::{inflight, space};
 use crate::world::{World, WorldState};
 
-const PULSE_MS: u64 = 250;
+pub(crate) const PULSE_MS: u64 = 250;
 /// Pulses between looks at slow corporate business (alliance applications
 /// coming due): once a minute.
 const AFFAIRS_EVERY: u64 = 60_000 / PULSE_MS;
@@ -32,10 +32,8 @@ const OWNER_CONCORD: i64 = 1000125;
 /// What a pulse decided, to be told or done once the world lock is released.
 #[derive(Default)]
 pub struct Out {
-    /// Destiny entries for everyone in a system, in order.
-    destiny: Vec<(i64, Value)>,
-    /// Destiny entries scoped to one pilot's range-limited ballpark view.
-    targeted_destiny: Vec<(i64, i64, Value)>,
+    /// Destiny entries in order, for everyone in a system or one pilot.
+    destiny: Vec<(i64, Option<i64>, Value)>,
     notes: Vec<(i64, &'static str, Value)>,
     pub jobs: Vec<Job>,
     /// Ships whose hit points changed this pulse.
@@ -46,11 +44,11 @@ pub struct Out {
 
 impl Out {
     pub fn destiny(&mut self, system: i64, entry: Value) {
-        self.destiny.push((system, entry));
+        self.destiny.push((system, None, entry));
     }
 
     pub fn destiny_to(&mut self, system: i64, client_id: i64, entry: Value) {
-        self.targeted_destiny.push((system, client_id, entry));
+        self.destiny.push((system, Some(client_id), entry));
     }
 
     pub fn note(&mut self, client_id: i64, event: &'static str, args: Value) {
@@ -81,22 +79,23 @@ impl Out {
     }
 
     #[cfg(test)]
-    pub fn destiny_entries(&self) -> &[(i64, Value)] {
-        &self.destiny
+    pub fn destiny_entries(&self) -> impl Iterator<Item = &Value> {
+        self.destiny.iter().map(|(_, _, entry)| entry)
     }
 
     /// Sends what was decided; returns the jobs left to do.
     pub fn deliver(self, world: &WorldState) -> Vec<Job> {
-        let mut by_system: BTreeMap<i64, Vec<Value>> = BTreeMap::new();
-        for (system, e) in self.destiny {
-            by_system.entry(system).or_default().push(e);
-        }
-        for (system, entries) in by_system {
-            space::broadcast(world, system, None, entries);
-        }
+        let mut system_clients = BTreeMap::new();
         let mut by_client: BTreeMap<(i64, i64), Vec<Value>> = BTreeMap::new();
-        for (system, client, entry) in self.targeted_destiny {
-            by_client.entry((system, client)).or_default().push(entry);
+        for (system, client, entry) in self.destiny {
+            if let Some(client) = client {
+                by_client.entry((system, client)).or_default().push(entry);
+            } else {
+                let clients = system_clients.entry(system).or_insert_with(|| world.in_space(system));
+                for &client in clients.iter() {
+                    by_client.entry((system, client)).or_default().push(entry.clone());
+                }
+            }
         }
         for ((_system, client), entries) in by_client {
             let args = Value::Tuple(vec![Value::List(entries), Value::Int(0)]);
@@ -176,9 +175,11 @@ pub async fn run(server: Arc<Server>) {
     let mut pulses = 0u64;
     loop {
         interval.tick().await;
+        let work = std::time::Instant::now();
         for job in pulse(&server.world, combat::now_ms()) {
             perform(&server, &mut db, job).await;
         }
+        crate::health::record_pulse(work.elapsed());
         pulses += 1;
         if pulses % AFFAIRS_EVERY == 1 {
             crate::svc::alliance::take_effect(&server.world, &mut db, server.alliance_join_delay_secs).await;
@@ -212,24 +213,11 @@ fn pulse(world: &World, now: i64) -> Vec<Job> {
         crate::pos::step(park, &mut out);
         if park.players().next().is_none() {
             park.entered_warp.clear();
-            park.bubble_stopped.clear();
             park.landed.clear();
             continue;
         }
         park.advance(tick);
         crate::drones::recover_distant_nonfighters(park, now, &mut out);
-        for ship_id in std::mem::take(&mut park.bubble_stopped) {
-            let Some(ship) = park.ships.get(&ship_id).filter(|s| s.command == crate::ballpark::Command::Stop) else { continue };
-            let stop = space::command_entry(ship, park.tick);
-            let mut viewers = space::ship_viewers(park, ship_id);
-            if ship.is_player() {
-                if !viewers.contains(&ship.client_id) { viewers.push(ship.client_id); }
-                out.note(ship.client_id, "OnRemoteMessage", Value::Tuple(vec![Value::bytes("WarpScrambled"), Value::Dict(Vec::new())]));
-            }
-            for client in viewers {
-                out.destiny_to(park.solar_system_id, client, stop.clone());
-            }
-        }
         let entered_warp = std::mem::take(&mut park.entered_warp);
         for ship_id in entered_warp {
             let effect = space::warp_fx(park.tick, ship_id, true);
@@ -483,6 +471,31 @@ mod tests {
         let jobs = pulse(&world, combat::now_ms());
         assert!(matches!(jobs.as_slice(), [Job::DroneHome { drone_id: 20, ship_id: 30, .. }]));
         assert!(world.lock().pending_jobs.is_empty());
+    }
+
+    #[test]
+    fn grid_updates_keep_add_before_effect_and_removal() {
+        use crate::world::{Presence, Push};
+
+        let system = 30_000_001;
+        let world = World::default();
+        let mut state = world.lock();
+        let mut rx = state.connect(7);
+        state.set_presence(7, Some(Presence { char_id: 100, corp_id: 2, solar_system_id: system,
+            docked: false, station_id: None, role: 0 }));
+        state.sees(7, system);
+        let mut out = Out::default();
+        let add = space::entry(10, "AddBalls", Vec::new());
+        let effect = space::entry(10, "TerminalExplosion", vec![Value::Int(8)]);
+        let remove = space::entry(10, "RemoveBalls", vec![Value::List(vec![Value::Int(8)])]);
+        out.destiny_to(system, 7, add.clone());
+        out.destiny(system, effect.clone());
+        out.destiny(system, remove.clone());
+        out.deliver(&state);
+
+        let Ok(Push::Notify(note)) = rx.try_recv() else { panic!("missing grid update") };
+        assert_eq!(note.args.seq().unwrap()[0], Value::List(vec![add, effect, remove]));
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

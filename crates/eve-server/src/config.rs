@@ -71,6 +71,11 @@ pub struct Config {
     /// `RMR_BOTS_CONTROLS`: whether the web dashboard may steer the bots
     /// (start events and wars, set region density).
     pub bots_controls: bool,
+    /// `RMR_BOTS_AGGRESSION`: whom bots attack on sight (calm, some or all);
+    /// the dashboard can change it while the server runs.
+    pub bots_aggression: crate::bots::Aggression,
+    /// The rest of the bots' behaviour the dashboard can change live.
+    pub bots_settings: crate::bots::Settings,
     /// `RMR_WEB`: where the web dashboard listens (empty: no dashboard).
     pub web: String,
     /// `RMR_STARTING_ISK`: what a new character starts with.
@@ -172,6 +177,13 @@ struct BotsSection {
     shown_per_system: usize,
     pirates_attack_players: bool,
     dashboard_controls: bool,
+    aggression: String,
+    chat: String,
+    trash_talk: bool,
+    join_player_corps: String,
+    join_player_alliances: String,
+    accept_applications: String,
+    online_activity: f64,
 }
 
 impl Default for ServerSection {
@@ -196,7 +208,9 @@ impl Default for GameSection {
 
 impl Default for BotsSection {
     fn default() -> Self {
-        BotsSection { count: 0, speed: 1.0, shown_per_system: 120, pirates_attack_players: true, dashboard_controls: false }
+        BotsSection { count: 0, speed: 1.0, shown_per_system: 120, pirates_attack_players: true, dashboard_controls: false, aggression: "some".into(),
+            chat: "normal".into(), trash_talk: true, join_player_corps: "normal".into(), join_player_alliances: "normal".into(),
+            accept_applications: "selective".into(), online_activity: 1.0 }
     }
 }
 
@@ -205,8 +219,22 @@ impl Config {
     /// none, then lets the environment override it. Returns the config and
     /// what happened to the file, for the log.
     pub fn load() -> Result<(Self, String), String> {
-        let path = PathBuf::from(var("RMR_CONFIG").unwrap_or_else(|| "rmr.yml".into()));
+        let path = file_path();
         let (file, note) = read(&path)?;
+        let bots_aggression = crate::bots::Aggression::parse(&file.bots.aggression)
+            .ok_or_else(|| format!("{}: bots.aggression must be calm, some or all, got {:?}", path.display(), file.bots.aggression))?;
+        let bad = |key: &str, choices: &str, got: &str| format!("{}: bots.{key} must be {choices}, got {got:?}", path.display());
+        let bots_settings = crate::bots::Settings {
+            chatter: crate::bots::Chatter::parse(&file.bots.chat).ok_or_else(|| bad("chat", "off, quiet, normal or chatty", &file.bots.chat))?,
+            trash_talk: file.bots.trash_talk,
+            recruiting: crate::bots::Rate::parse(&file.bots.join_player_corps)
+                .ok_or_else(|| bad("joinPlayerCorps", "off, low, normal or high", &file.bots.join_player_corps))?,
+            alliance_applying: crate::bots::Rate::parse(&file.bots.join_player_alliances)
+                .ok_or_else(|| bad("joinPlayerAlliances", "off, low, normal or high", &file.bots.join_player_alliances))?,
+            door: crate::bots::Door::parse(&file.bots.accept_applications)
+                .ok_or_else(|| bad("acceptApplications", "closed, selective or open", &file.bots.accept_applications))?,
+            activity: file.bots.online_activity.clamp(crate::bots::ACTIVITY_RANGE.0, crate::bots::ACTIVITY_RANGE.1),
+        };
         let mut c = Config {
             bind: file.server.bind,
             database: file.server.database,
@@ -221,6 +249,8 @@ impl Config {
             bots_shown: file.bots.shown_per_system,
             bots_pirates_attack: file.bots.pirates_attack_players,
             bots_controls: file.bots.dashboard_controls,
+            bots_aggression,
+            bots_settings,
             web: file.server.web,
             starting_isk: file.game.starting_isk,
             auto_create_accounts: file.server.auto_create_accounts,
@@ -258,6 +288,10 @@ impl Config {
         number("RMR_BOTS_SHOWN", &mut c.bots_shown)?;
         number("RMR_BOTS_PIRATES_ATTACK", &mut c.bots_pirates_attack)?;
         number("RMR_BOTS_CONTROLS", &mut c.bots_controls)?;
+        if let Some(v) = var("RMR_BOTS_AGGRESSION") {
+            c.bots_aggression = crate::bots::Aggression::parse(&v)
+                .ok_or_else(|| format!("RMR_BOTS_AGGRESSION must be calm, some or all, got {v:?}"))?;
+        }
         number("RMR_STARTING_ISK", &mut c.starting_isk)?;
         number("RMR_AUTO_CREATE_ACCOUNTS", &mut c.auto_create_accounts)?;
         if !(0..10_000_000).contains(&c.node_id) {
@@ -318,6 +352,70 @@ fn parse(text: &str) -> Result<File, serde_yaml_ng::Error> {
         return Ok(File::default());
     }
     serde_yaml_ng::from_str(text)
+}
+
+/// Where the config file is: `RMR_CONFIG`, else `rmr.yml` here.
+pub fn file_path() -> PathBuf {
+    PathBuf::from(var("RMR_CONFIG").unwrap_or_else(|| "rmr.yml".into()))
+}
+
+/// Whether an environment variable overrides a setting, so a change to
+/// the file would not take effect.
+pub fn overridden(key: &str) -> bool {
+    var(key).is_some_and(|v| !v.trim().is_empty())
+}
+
+/// The bot count the config file asks for (what the next start plays,
+/// unless `RMR_BOTS` overrides it).
+pub fn bots_in_file() -> Result<usize, String> {
+    let path = file_path();
+    read(&path).map(|(file, _)| file.bots.count)
+}
+
+/// Sets one `bots:` setting in the config file (for the dashboard), keeping
+/// every comment and other line as it is. A missing setting is added.
+pub fn set_bots_setting(key: &str, value: &str) -> Result<(), String> {
+    let path = file_path();
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let updated = with_bots_setting(&text, key, value);
+    parse(&updated).map_err(|e| format!("the updated {} would not be valid: {e}", path.display()))?;
+    std::fs::write(&path, updated).map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+fn with_bots_setting(text: &str, key: &str, value: &str) -> String {
+    let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let section = lines.iter().position(|l| l.trim_end() == "bots:");
+    let Some(start) = section else {
+        // No bots section: add one at the end.
+        let mut out = text.trim_end().to_string();
+        out.push_str(&format!("{newline}{newline}bots:{newline}  {key}: {value}{newline}"));
+        return out;
+    };
+    // The section runs until the next top-level line that is not a comment.
+    let end = (start + 1..lines.len())
+        .find(|&i| {
+            let l = &lines[i];
+            !l.is_empty() && !l.starts_with(' ') && !l.starts_with('\t') && !l.starts_with('#')
+        })
+        .unwrap_or(lines.len());
+    let prefix = format!("{key}:");
+    match (start + 1..end).find(|&i| lines[i].trim_start().starts_with(&prefix) && lines[i].starts_with(' ')) {
+        Some(i) => {
+            let indent = lines[i].len() - lines[i].trim_start().len();
+            lines[i] = format!("{}{key}: {value}", " ".repeat(indent));
+        }
+        None => {
+            // After the section's last setting, before any trailing comments.
+            let last = (start + 1..end).rev().find(|&i| lines[i].starts_with(' ') && !lines[i].trim_start().starts_with('#')).unwrap_or(start);
+            lines.insert(last + 1, format!("  {key}: {value}"));
+        }
+    }
+    let mut out = lines.join(newline);
+    if text.ends_with('\n') {
+        out.push_str(newline);
+    }
+    out
 }
 
 fn var(key: &str) -> Option<String> {
@@ -386,6 +484,8 @@ mod tests {
             bots_shown: 120,
             bots_pirates_attack: true,
             bots_controls: false,
+            bots_aggression: crate::bots::Aggression::Usual,
+            bots_settings: crate::bots::Settings::default(),
             web: String::new(),
             starting_isk: 0.0,
             auto_create_accounts: false,
@@ -433,6 +533,18 @@ mod tests {
         assert_eq!(file.bots.count, none.bots.count);
         assert_eq!(file.accounts.len(), 1);
         assert!(parse("# nothing\n\n").is_ok());
+    }
+
+    #[test]
+    fn a_bots_setting_changes_only_its_own_line() {
+        let text = "game:\n  count: 7\n\nbots:\n  # How many.\n  count: 100\n  speed: 1\n\n# Accounts\naccounts: []\n";
+        let out = with_bots_setting(text, "count", "250");
+        assert_eq!(out, text.replace("  count: 100", "  count: 250"));
+        let added = with_bots_setting(text, "aggression", "calm");
+        assert!(added.contains("  speed: 1\n  aggression: calm\n\n# Accounts"));
+        assert_eq!(parse(&added).unwrap().bots.aggression, "calm");
+        let crlf = with_bots_setting(&text.replace('\n', "\r\n"), "count", "5");
+        assert!(crlf.contains("  count: 5\r\n") && !crlf.replace("\r\n", "").contains('\n'));
     }
 
     #[test]

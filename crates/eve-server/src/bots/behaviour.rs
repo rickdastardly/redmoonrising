@@ -219,7 +219,7 @@ impl Ctx<'_> {
     fn share_now(&self, bot: &Bot, now: u32) -> f64 {
         let region = self.atlas.region_of(self.atlas.system_of(bot.home));
         let density = self.density.get(&region).copied().unwrap_or(1.0) as f64;
-        (bot.share as f64 * density * activity(self.hour(now), bot.prime)).clamp(0.01, 0.97)
+        (bot.share as f64 * density * activity(self.hour(now), bot.prime) * super::activity_factor()).clamp(0.01, 0.97)
     }
 }
 
@@ -238,6 +238,24 @@ pub fn wake_up(bot: &mut Bot, now: u32, ctx: &Ctx, rng: &mut Rng) -> u32 {
         let off = offline_time(share, rng);
         span(rng, 1, off)
     }
+}
+
+/// The dashboard changed how many bots play, from `before` to `after`
+/// times normal: an offline bot may come on soon, an online one may head
+/// home to log off. The seconds until its next step, if its plans changed.
+pub fn new_activity(bot: &mut Bot, now: u32, before: f64, after: f64, ctx: &Ctx, rng: &mut Rng) -> Option<u32> {
+    if after > before && !bot.online {
+        // As if it went offline under the new share: most come on within
+        // its (shorter) offline time.
+        let off = offline_time(ctx.share_now(bot, now), rng);
+        return Some(span(rng, 1, off.max(2)));
+    }
+    if after < before && bot.online && !matches!(bot.activity, Activity::Sieging | Activity::Escorting) {
+        if rng.unit() < 1.0 - after / before {
+            bot.session_end = bot.session_end.min(now + span(rng, 60, 900));
+        }
+    }
+    None
 }
 
 fn session_time(rng: &mut Rng) -> u32 {

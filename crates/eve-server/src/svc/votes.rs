@@ -439,6 +439,29 @@ async fn close(ctx: &Ctx<'_>, corp: i64, me: i64) -> Refused<()> {
     }
     let mut client = crate::db::connect(ctx.db_url).await.map_err(|e| db_failed("connecting", e))?;
     let tx = client.transaction().await.map_err(|e| db_failed("BEGIN", e))?;
+    // Serialize closing with accepting an offer or renting an office.
+    let current = tx.query_opt(
+        r#"SELECT "stationID", "allianceID" FROM "corporation"
+            WHERE "corporationID" = $1 AND "ceoID" = $2 AND "deleted" = 0 FOR UPDATE"#,
+        &[&(corp as i32), &(me as i32)],
+    ).await.map_err(|e| db_failed("checking the corporation", e))?
+        .ok_or_else(|| message("OnlyCEOCanResign"))?;
+    if int(&current, 1).is_some_and(|id| id != 0) {
+        return Err(message("CanNotDestroyCorpInAlliance"));
+    }
+    let others = tx.query_opt(
+        r#"SELECT 1 FROM "character_" WHERE "corporationID" = $1 AND "characterID" <> $2 LIMIT 1"#,
+        &[&(corp as i32), &(me as i32)],
+    ).await.map_err(|e| db_failed("checking the remaining members", e))?;
+    if others.is_some() {
+        return Err(Outcome::custom("The corporation still has other members. Choose a successor to resign."));
+    }
+    let hq = int(&current, 0).unwrap_or(0);
+    let office_stations: Vec<i64> = tx.query(
+        r#"SELECT DISTINCT "stationID" FROM "crpOffices" WHERE "corporationID" = $1"#,
+        &[&(corp as i32)],
+    ).await.map_err(|e| db_failed("checking the corporation's offices", e))?
+        .iter().filter_map(|r| int(r, 0)).collect();
     let home = tx
         .query_opt(
             r#"SELECT e."corporationID" FROM "chrEmployment" e
@@ -451,13 +474,14 @@ async fn close(ctx: &Ctx<'_>, corp: i64, me: i64) -> Refused<()> {
         .and_then(|r| int(&r, 0))
         .ok_or_else(|| Outcome::custom("There is no NPC corporation for you to go back to."))?;
     crate::svc::membership::change_corporation(&tx, me, home, 0, crate::bulkdata::filetime_now()).await?;
-    tx.execute(r#"UPDATE "corporation" SET "deleted" = 1, "ceoID" = 0 WHERE "corporationID" = $1"#, &[&(corp as i32)])
+    tx.execute(r#"UPDATE "corporation" SET "deleted" = 1, "ceoID" = 0, "memberCount" = 0 WHERE "corporationID" = $1"#, &[&(corp as i32)])
         .await
         .map_err(|e| db_failed("closing the corporation", e))?;
     tx.commit().await.map_err(|e| db_failed("COMMIT", e))?;
     crate::svc::membership::member_moved(ctx.world, me, corp, home);
     info!("{me} resigned as the last member of corporation {corp}, which is closed");
     ctx.world.lock().reaffiliate(&[], &[me]);
+    crate::svc::corp::notify_closed(ctx.world, corp, me, hq, &office_stations);
     Ok(())
 }
 

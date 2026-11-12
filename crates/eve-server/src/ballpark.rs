@@ -50,6 +50,8 @@ const ORBIT_PULL: f64 = -40_000.0;
 const BOUNCE: f64 = 0.85;
 /// WarpTo closer than this (squared, 100 km) is a GotoPoint (0x10059548).
 const MIN_WARP_DISTANCE_SQ: f64 = 1.0e10;
+/// Radius used for nearby ships, objects and warp fields on the destination grid.
+pub const LOCAL_GRID_RANGE: f64 = 1_000_000.0;
 /// A warp starts once 1 - cos(heading, target) is below this and the speed
 /// is over 0.75 of the maximum (squared: 0.5625).
 const WARP_ALIGN: f64 = 0.01;
@@ -220,10 +222,10 @@ pub enum Command {
 #[derive(Debug, Clone, Copy)]
 enum WarpState {
     /// Turning and speeding up towards the warp point.
-    Aligning,
+    Aligning { intercepted: bool },
     /// On the way: `start` is the tick the warp began, `distance` from where
     /// it began to `exit`.
-    InWarp { exit: Vec3, back: Vec3, distance: f64, start: i64 },
+    InWarp { exit: Vec3, back: Vec3, distance: f64, start: i64, intercepted: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -258,6 +260,11 @@ pub struct Ship {
     /// A bot ship's fitting and cargo, (type, quantity): what its wreck holds
     /// and its killmail lists.
     pub bot_loot: Vec<(i64, i64)>,
+    /// How many of the first `bot_loot` entries are its fitting (modules,
+    /// drones and charges); the rest is cargo.
+    pub bot_fitted: usize,
+    /// A bot ship's drone flight, launched when it fights.
+    pub bot_drones: Option<crate::drones::BotDrones>,
 }
 
 impl Ship {
@@ -282,6 +289,8 @@ impl Ship {
             arrived_through: None,
             bot: false,
             bot_loot: Vec::new(),
+            bot_fitted: 0,
+            bot_drones: None,
         }
     }
 
@@ -336,8 +345,6 @@ pub struct Park {
     pub landed: Vec<i64>,
     /// Ships that entered warp since the last heartbeat update.
     pub entered_warp: Vec<i64>,
-    /// Ships whose alignment a mobile disruptor interrupted.
-    pub bubble_stopped: Vec<i64>,
     /// Asteroids, by ID.
     pub rocks: BTreeMap<i64, Rock>,
     /// Cargo containers floating here, by item ID.
@@ -385,7 +392,6 @@ impl Park {
             visible_objects: BTreeMap::new(),
             landed: Vec::new(),
             entered_warp: Vec::new(),
-            bubble_stopped: Vec::new(),
             rocks: BTreeMap::new(),
             cans: BTreeMap::new(),
             structures: BTreeMap::new(),
@@ -442,6 +448,36 @@ impl Park {
         })
     }
 
+    pub fn warp_disruptor_at(&self, point: Vec3) -> Option<&crate::pos::Structure> {
+        self.structures.values().find(|s| s.disrupts_warp_at(point))
+    }
+
+    /// First field edge along the approach on the destination grid. The ray
+    /// continues past the requested exit so an aligned drag bubble works too.
+    fn intercepted_warp_exit(&self, from: Vec3, target: Vec3, range: f64) -> Option<Vec3> {
+        let route = target - from;
+        let distance = route.len();
+        let range = f64::from(range as f32);
+        if distance <= range { return None; }
+        let direction = route * (1.0 / distance);
+        let planned_exit = target - direction * range;
+        self.structures.values().filter_map(|s| {
+            let radius = s.active_disruption_radius()?;
+            // Work in coordinates relative to the exit to retain metre
+            // precision even when the warp crosses several AU.
+            let offset = s.pos - planned_exit;
+            if offset.len_sq() > LOCAL_GRID_RANGE.powi(2) { return None; }
+            let along = offset.dot(direction);
+            let chord_sq = radius.powi(2) - (offset - direction * along).len_sq();
+            if chord_sq <= 0.0 { return None; }
+            let half_chord = chord_sq.sqrt();
+            let edge = along - half_chord;
+            if edge < -(distance - range) { return None; }
+            // Land a metre into the field so the boundary still disrupts warp.
+            Some(edge + half_chord.min(1.0))
+        }).min_by(f64::total_cmp).map(|edge| planned_exit + direction * edge)
+    }
+
     /// Surface-to-surface distance between two balls.
     pub fn surface_distance(&self, a: i64, b: i64) -> Option<f64> {
         let (pa, ra) = self.ball(a)?;
@@ -460,36 +496,34 @@ impl Park {
         }
     }
 
-    pub fn inside_warp_bubble(&self, pos: Vec3) -> bool {
-        inside_warp_bubble(&self.structures, pos, crate::bulkdata::filetime_now())
-    }
-
     /// Gives a ship a new command at the park's current tick, as destiny's
     /// FollowBall, Orbit, GotoPoint, GotoDirection, WarpTo and Stop take it.
     pub fn command(&mut self, ship_id: i64, command: Command) {
-        let Some(ship) = self.ships.get_mut(&ship_id) else { return };
+        let Some(ship) = self.ships.get(&ship_id) else { return };
         // Destiny ignores course changes during warp. Clearing warp here also
         // leaves its AU/s velocity on a normal ball, launching it across space.
         if ship.in_warp() { return; }
-        let command = match command {
-            Command::Warp { .. } if inside_warp_bubble(&self.structures, ship.pos, crate::bulkdata::filetime_now()) => return,
+        let (command, intercepted) = match command {
             // Stop on a stopped ship changes nothing (0x10017800).
             Command::Stop if ship.command == Command::Stop && ship.warp.is_none() => return,
+            Command::Warp { .. } if self.warp_disruptor_at(ship.pos).is_some() => return,
             // Too close to warp: destiny goes there instead (0x10017bb0).
-            Command::Warp { target, .. } if (target - ship.pos).len_sq() < MIN_WARP_DISTANCE_SQ => Command::Point(target),
-            Command::Warp { target, range } => {
-                bubble_warp_command(&self.structures, ship.pos, target, range, crate::bulkdata::filetime_now())
-                    .unwrap_or(Command::Warp { target, range })
-            }
-            other => other,
+            Command::Warp { target, .. } if (target - ship.pos).len_sq() < MIN_WARP_DISTANCE_SQ => (Command::Point(target), false),
+            Command::Warp { target, range } => match self.intercepted_warp_exit(ship.pos, target, range) {
+                Some(exit) if (exit - ship.pos).len_sq() < MIN_WARP_DISTANCE_SQ => (Command::Point(exit), false),
+                Some(exit) => (Command::Warp { target: exit, range: 0.0 }, true),
+                None => (command, false),
+            },
+            other => (other, false),
         };
+        let ship = self.ships.get_mut(&ship_id).expect("ship is still in the park");
         ship.warp = None;
         match &command {
             Command::Point(p) => ship.goal = *p,
             Command::Direction(d) => ship.goal = ship.pos + d.unit() * GOTO_DIRECTION_REACH,
             Command::Warp { target, .. } => {
                 ship.goal = *target;
-                ship.warp = Some(WarpState::Aligning);
+                ship.warp = Some(WarpState::Aligning { intercepted });
             }
             _ => {}
         }
@@ -562,7 +596,6 @@ impl Park {
         // destiny walks its balls in ID order, and a warp that starts changes
         // its followers on the spot, so later ones see it the same tick.
         let ids: Vec<i64> = self.ships.keys().copied().collect();
-        let filetime = crate::bulkdata::filetime_now();
         for id in ids {
             let Some(ship) = self.ships.get_mut(&id) else { continue };
             let mut warped = false;
@@ -584,17 +617,12 @@ impl Park {
                     None => lose_target(ship),
                 },
                 Command::Warp { range, .. } => match ship.warp {
-                    Some(WarpState::Aligning) if inside_warp_bubble(&self.structures, ship.pos, filetime) => {
-                        ship.warp = None;
-                        self.bubble_stopped.push(id);
-                        lose_target(ship)
-                    }
-                    Some(WarpState::Aligning) if aligned(ship) => {
-                        enter_warp(ship, range, now);
+                    Some(WarpState::Aligning { intercepted }) if aligned(ship) => {
+                        enter_warp(ship, range, now, intercepted);
                         warped = true;
                         Vec3::ZERO
                     }
-                    Some(WarpState::Aligning) => {
+                    Some(WarpState::Aligning { .. }) => {
                         if ship.is_player() && now % 10 == 0 {
                             let to = (ship.goal - ship.pos).unit();
                             let speed = ship.vel.len();
@@ -694,47 +722,6 @@ impl Park {
             }
         }
         out
-    }
-}
-
-fn inside_warp_bubble(structures: &BTreeMap<i64, crate::pos::Structure>, pos: Vec3, now: i64) -> bool {
-    structures.values().any(|s| {
-        s.warp_bubble(now).is_some_and(|radius| (pos - s.pos).len_sq() <= radius * radius)
-    })
-}
-
-/// End a warp just inside the first active sphere it enters.
-fn bubble_warp_command(
-    structures: &BTreeMap<i64, crate::pos::Structure>, from: Vec3, target: Vec3, range: f64, now: i64,
-) -> Option<Command> {
-    let course = target - from;
-    let reach = course.len() - f64::from(range as f32);
-    if !reach.is_finite() || reach <= 0.0 {
-        return None;
-    }
-    let direction = course.unit();
-    let (entry, half_chord) = structures.values().filter_map(|s| {
-        let radius = s.warp_bubble(now)?;
-        let offset = s.pos - from;
-        let center = offset.dot(direction);
-        let perpendicular = offset - direction * center;
-        let chord_sq = radius * radius - perpendicular.len_sq();
-        if chord_sq <= 0.0 {
-            return None;
-        }
-        let half_chord = chord_sq.sqrt();
-        let entry = center - half_chord;
-        (entry >= 0.0 && entry < reach).then_some((entry, half_chord))
-    }).min_by(|a, b| a.0.total_cmp(&b.0))?;
-
-    let landing = (entry + 1.0_f64.min(half_chord)).min(reach);
-    if landing * landing < MIN_WARP_DISTANCE_SQ {
-        // Destiny interprets a nearby warp point as an approach. Aim beyond
-        // that threshold and use the warp range to stop at the bubble edge.
-        let aim = MIN_WARP_DISTANCE_SQ.sqrt() + 10_000.0;
-        Some(Command::Warp { target: from + direction * aim, range: aim - landing })
-    } else {
-        Some(Command::Warp { target: from + direction * landing, range: 0.0 })
     }
 }
 
@@ -845,21 +832,22 @@ fn aligned(ship: &Ship) -> bool {
 
 /// The warp begins (0x100186b0): it ends `range` short of the warp point, on
 /// our side of it. destiny keeps the range as a float.
-fn enter_warp(ship: &mut Ship, range: f64, now: i32) {
+fn enter_warp(ship: &mut Ship, range: f64, now: i32, intercepted: bool) {
     let exit = ship.goal + (ship.pos - ship.goal).unit() * f64::from(range as f32);
     ship.warp = Some(WarpState::InWarp {
         exit,
         back: (ship.pos - exit).unit(),
         distance: (exit - ship.pos).len(),
         start: i64::from(now),
+        intercepted,
     });
 }
 
 /// Step 3 for one ship: integrate it, or carry it along its warp.
 fn move_ship(ship: &mut Ship, push: Vec3, now: i32) {
     ship.prev_vel = ship.vel;
-    if let Some(WarpState::InWarp { exit, back, distance, start }) = ship.warp {
-        warp_along(ship, exit, back, distance, (i64::from(now) - start) as f64 * DT);
+    if let Some(WarpState::InWarp { exit, back, distance, start, intercepted }) = ship.warp {
+        warp_along(ship, exit, back, distance, (i64::from(now) - start) as f64 * DT, intercepted);
         return;
     }
     let (pos, vel) = drift(ship.pos, ship.vel, push, ship.stats.inertia(), DT);
@@ -870,7 +858,7 @@ fn move_ship(ship: &mut Ship, push: Vec3, now: i32) {
 /// Where a warp `t` seconds old has the ship (0x10017170): out along e^3t,
 /// cruise, then in along e^-(t - slowing); it drops out when slower than the
 /// ship's own top speed, still moving, and coasts to a stop.
-fn warp_along(ship: &mut Ship, exit: Vec3, back: Vec3, distance: f64, t: f64) {
+fn warp_along(ship: &mut Ship, exit: Vec3, back: Vec3, distance: f64, t: f64, intercepted: bool) {
     let top = (ship.stats.warp_factor as f64 * WARP_FACTOR_SPEED).min(distance * WARP_DISTANCE_SPEED);
     let cruising = (top / 3.0).ln() / 3.0;
     let slowing = (3.0 * distance + top * ((top / 3.0).ln() - 2.0)) / (3.0 * top);
@@ -893,6 +881,11 @@ fn warp_along(ship: &mut Ship, exit: Vec3, back: Vec3, distance: f64, t: f64) {
         // Native destiny leaves warp with this sub-cruise velocity. STOP then
         // coasts it down over tau seconds; zeroing it here desynchronises the
         // server from the client, especially around a station collision hull.
+        if intercepted {
+            // The landing update sends this velocity to destiny. A caught
+            // capital must not coast through the field to the original gate.
+            ship.vel = Vec3::ZERO;
+        }
         ship.warp = None;
         ship.command = Command::Stop;
     }

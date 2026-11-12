@@ -12,11 +12,13 @@ mod dogma;
 mod exceptions;
 mod fight;
 mod gates;
+mod health;
 mod guard;
 mod heartbeat;
 mod items;
 mod logging;
 mod market_seed;
+mod news;
 mod losses;
 mod loot;
 mod npc;
@@ -96,6 +98,7 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     market_seed::ensure(&mut client).await.map_err(|e| format!("seeding the market: {}", logging::chain(&e)))?;
     svc::moves::ensure_capital_storage(&client).await.map_err(|e| format!("preparing capital hangars: {}", logging::chain(&e)))?;
     svc::starbase::ensure_sovereignty(&client).await.map_err(|e| format!("preparing sovereignty: {}", logging::chain(&e)))?;
+    svc::outpost::ensure_hangars(&client).await.map_err(|e| format!("preparing outpost hangars: {}", logging::chain(&e)))?;
     pos::finish_unloaded(&client, &[]).await.map_err(|e| format!("restoring starbase timers: {}", logging::chain(&e)))?;
     svc::fitting::ensure_doomsday_fitting(&client).await.map_err(|e| format!("preparing doomsday fittings: {}", logging::chain(&e)))?;
     svc::agent_missions::ensure(&client).await.map_err(|e| format!("preparing period missions: {}", logging::chain(&e)))?;
@@ -129,15 +132,24 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     });
     pos::set_speedup(config.starbase_speedup);
     tokio::spawn(heartbeat::run(Arc::clone(&server)));
+    tokio::spawn(health::run(server.db_url.clone(), std::time::Duration::from_millis(heartbeat::PULSE_MS)));
     bots::configure(config.bots_pirates_attack, config.bots_controls);
+    bots::set_aggression(config.bots_aggression);
+    bots::apply_settings(&config.bots_settings, config.bots_shown);
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let bot_task = tokio::spawn(bots::run(Arc::clone(&server), config.bots, config.bots_speed, config.bots_shown, shutdown_rx));
     tokio::spawn(web::run(Arc::clone(&server), config.web.clone()));
+    tokio::spawn(bots::talk::run(server.world.clone(), server.db_url.clone()));
+    tokio::spawn(losses::reslot_bot_kills(server.db_url.clone()));
     let listener = TcpListener::bind(&config.bind).await?;
     info!("listening on {} as node {}", config.bind, config.node_id);
 
     let mut seq = 0i64;
     let shutdown_file = std::env::var_os("RMR_SHUTDOWN_FILE").map(std::path::PathBuf::from);
+    // Set when the launcher window runs this server: a dashboard restart is
+    // then handed to the window, which does exactly what its Restart server
+    // button does (save, stop the database, rebuild if needed, start again).
+    let restart_file = std::env::var_os("RMR_RESTART_FILE").map(std::path::PathBuf::from);
     let mut shutdown_check = tokio::time::interval(std::time::Duration::from_millis(500));
     loop {
         let accepted = tokio::select! {
@@ -148,10 +160,22 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
                     break;
                 }
                 match web::take_due_downtime(&server.db).await {
-                    Ok(true) => {
-                        info!("scheduled downtime reached zero; saving and stopping");
+                    Ok(Some(restart)) => {
+                        let handed_over = restart && restart_file.as_ref().is_some_and(|path| match std::fs::write(path, b"restart") {
+                            Ok(()) => true,
+                            Err(e) => {
+                                warn!("asking the launcher window to restart: {e}");
+                                false
+                            }
+                        });
+                        if handed_over {
+                            info!("scheduled restart reached zero; the launcher window is restarting the server");
+                            continue;
+                        }
+                        info!("scheduled {} reached zero; saving and stopping", if restart { "restart" } else { "downtime" });
                         if let Some(path) = &shutdown_file {
-                            if let Err(e) = std::fs::write(path, b"downtime") {
+                            let note: &[u8] = if restart { b"restart" } else { b"downtime" };
+                            if let Err(e) = std::fs::write(path, note) {
                                 warn!("recording planned downtime for launcher: {e}");
                             }
                         }

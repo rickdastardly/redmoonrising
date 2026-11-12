@@ -8,10 +8,13 @@
 use eve_marshal::Value;
 
 use crate::services::{Call, Ctx, Outcome};
-use crate::svc::rows::{float, int};
+use crate::svc::rows::{float, int, lines, rowset};
+use tracing::{debug, info};
 
 const CATEGORY_SKILL: i32 = 16;
 const ACTIVITY_MANUFACTURING: i32 = 1;
+/// dgmAttributeTypes stationTypeID: the outpost a construction platform becomes.
+const ATTR_STATION_TYPE_ID: i32 = 472;
 
 pub async fn factory(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
     let value = match call.method.as_str() {
@@ -28,7 +31,10 @@ pub async fn factory(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
             ctx.rowset(&header, sql, &[&(call.arg_id(0) as i32), &activity]).await
         }
         // What an item is built from: the consumed manufacturing inputs of the
-        // blueprint that produces it (no skills, no reusable tools).
+        // blueprint that produces it (no skills, no reusable tools). A
+        // construction platform's Material Requirements tab asks for the
+        // outpost it becomes (its stationTypeID), which no blueprint makes:
+        // that outpost's materials are its platform's.
         "GetMaterialCompositionOfItemType" => {
             let sql = r#"SELECT m."requiredTypeID" AS "typeID", m."quantity"
                            FROM "invBlueprintTypes" b
@@ -36,12 +42,25 @@ pub async fn factory(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
                              ON m."typeID" = b."blueprintTypeID" AND m."activity" = $2
                            JOIN "invTypes" t ON t."typeID" = m."requiredTypeID"
                            JOIN "invGroups" g ON g."groupID" = t."groupID"
-                          WHERE b."productTypeID" = $1 AND m."damagePerJob" >= 1
+                          WHERE b."productTypeID" = COALESCE(
+                                    (SELECT a."typeID" FROM "dgmTypeAttributes" a
+                                       JOIN "invBlueprintTypes" pb ON pb."productTypeID" = a."typeID"
+                                      WHERE a."attributeID" = $4 AND a."valueInt" = $1
+                                      ORDER BY a."typeID" LIMIT 1), $1)
+                            AND m."damagePerJob" >= 1
                             AND m."quantity" > 0 AND g."categoryID" <> $3
                           ORDER BY m."requiredTypeID""#;
-            let params: [&(dyn tokio_postgres::types::ToSql + Sync); 3] =
-                [&(call.arg_id(0) as i32), &ACTIVITY_MANUFACTURING, &CATEGORY_SKILL];
-            ctx.rowset(&["typeID", "quantity"], sql, &params).await
+            let params: [&(dyn tokio_postgres::types::ToSql + Sync); 4] =
+                [&(call.arg_id(0) as i32), &ACTIVITY_MANUFACTURING, &CATEGORY_SKILL, &ATTR_STATION_TYPE_ID];
+            let type_id = call.arg_id(0);
+            let found = ctx.query(sql, &params).await;
+            debug!("GetMaterialCompositionOfItemType({type_id}): {} material(s)", found.len());
+            rowset(&["typeID", "quantity"], lines(&found))
+        }
+        // A client hook's one-line diagnostic, for the server log.
+        "RmrReport" => {
+            info!("client hook: {}", call.arg_text(0).unwrap_or_default());
+            Value::None
         }
         // (locationID, flag, isCorp): the blueprints in one hangar.
         "GetBlueprintInformationAtLocationWithFlag" => {

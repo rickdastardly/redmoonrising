@@ -104,6 +104,12 @@ async fn container_method(ctx: &Ctx<'_>, container: Container, call: &Call) -> O
             return Outcome::custom("You are not allowed to look inside that structure from here.");
         }
     }
+    // An anchored outpost platform's hold has a Build button.
+    if method == "Build" {
+        if let Container::Item(id) = container {
+            return crate::svc::outpost::build(ctx, id).await;
+        }
+    }
     let out = match method {
         "List" => list(ctx, container).await,
 

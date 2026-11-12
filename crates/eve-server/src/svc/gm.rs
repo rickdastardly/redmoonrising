@@ -6,6 +6,7 @@
 //! ROLE_LEGIONEER (lscchannel.py ROLE_SLASH), and the server holds to the
 //! same. The commands:
 //! - /create <type> [quantity]: into the hangar, or the hold in space;
+//! - /gmships: one of each staff, Jovian and test hull in your station hangar;
 //! - /giveisk <amount>;
 //! - /giveskill <skill> [level]: trained, straight into the character;
 //! - /giveallskills: every skill type at level 5 on your character;
@@ -47,7 +48,18 @@ const ATTR_SKILL_LEVEL: i32 = 280;
 const REF_GM: i32 = 25;
 const OWNER_SYSTEM: i64 = 1;
 
-const HELP: &str = "/create <type> [qty], /giveisk <amount>, /giveskill <skill> [level], /giveallskills, /setstanding <ownerID> <standing>, /maxstandings, /clearspace, /spawn, /moveme [hub], /tr me <place or pilot>, /bots on|off|status|event <kind>|war <a> | <b>|density <region> <x>|follow <name>";
+const HELP: &str = "/create <type> [qty], /gmships, /giveisk <amount>, /giveskill <skill> [level], /giveallskills, /setstanding <ownerID> <standing>, /maxstandings, /clearspace, /spawn, /moveme [hub], /outpostmats [platformID], /rushanchor [structureID], /tr me <place or pilot>, /bots on|off|status|event <kind>|war <a> | <b>|density <region> <x>|follow <name>";
+
+const JOVE_RACE: i32 = 16;
+// Jove Frigate, Jove Cruiser, Jove Industrial, Jove Battleship and Polaris.
+const SPECIAL_SHIP_SKILLS: &[i32] = &[3755, 3758, 11075, 11078, 9955];
+// Developer hulls using ordinary skills in the RMR catalog.
+const TEST_HULLS: &[i32] = &[
+    11591, 12177, 12403, 20543, // Agility test, The Hammer, Atron much HP, LeMonde's capsule.
+    19770, 19780, 19782, 20122, 20191, 20193, 20316, 20318, 20320, 20322, // Pimp variants.
+    22212, 22215, 23693, 24298, 24611, // Scorpion and Rook variants, test freighter and titan.
+    24688, 24690, 24692, 24694, 24696, 24698, 24700, 24702, // Tier test hulls.
+];
 
 // Stocked highsec stations and named nullsec destinations in the RMR map.
 // Keep the client dialog's keys in step with this allowlist.
@@ -80,6 +92,7 @@ pub async fn slash(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
     let result = match command.as_str() {
         "help" | "" => Ok(HELP.to_string()),
         "create" | "createitem" => create(ctx, &rest).await,
+        "gmships" => gm_ships(ctx, &rest).await,
         "giveisk" | "givemoney" => give_isk(ctx, &rest).await,
         "giveskill" => give_skill(ctx, &rest).await,
         "giveallskills" => give_all_skills(ctx, &rest).await,
@@ -88,6 +101,22 @@ pub async fn slash(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         "clearspace" => clear_space(ctx, &rest).await,
         "spawn" => spawn(ctx),
         "moveme" => move_me(ctx, &rest).await,
+        "rushanchor" => match rest.as_slice() {
+            [] => crate::svc::starbase::rush(ctx, None).await,
+            [id] => match id.parse::<i64>() {
+                Ok(id) => crate::svc::starbase::rush(ctx, Some(id)).await,
+                Err(_) => Err("Usage: /rushanchor [structureID]".into()),
+            },
+            _ => Err("Usage: /rushanchor [structureID]".into()),
+        },
+        "outpostmats" => match rest.as_slice() {
+            [] => crate::svc::outpost::spawn_materials(ctx, None).await,
+            [id] => match id.parse::<i64>() {
+                Ok(id) => crate::svc::outpost::spawn_materials(ctx, Some(id)).await,
+                Err(_) => Err("Usage: /outpostmats [platformID]".into()),
+            },
+            _ => Err("Usage: /outpostmats [platformID]".into()),
+        },
         "tr" => teleport(ctx, &rest).await,
         "bots" => match rest.first().copied() {
             Some("on") => {
@@ -193,6 +222,37 @@ async fn create(ctx: &Ctx<'_>, words: &[&str]) -> Result<String, String> {
     let events = txn.commit().await.map_err(|e| e.to_string())?;
     crate::items::notify(ctx.world, ctx.client_id, events);
     Ok(format!("Created {quantity} x {type_name}"))
+}
+
+async fn gm_ships(ctx: &Ctx<'_>, words: &[&str]) -> Result<String, String> {
+    if !words.is_empty() { return Err("Usage: /gmships".into()); }
+    let owner_id = ctx.session.char_id.ok_or("Select a character first.")?;
+    let location_id = ctx.session.station_id.ok_or("Dock at a station to use /gmships.")?;
+    let mut client = crate::db::connect(ctx.db_url).await.map_err(|e| e.to_string())?;
+    let mut txn = ItemTxn::begin(&mut client).await.map_err(|e| e.to_string())?;
+    let types = txn.tx().query(r#"
+        SELECT t."typeID" FROM "invTypes" t
+          JOIN "invGroups" g ON g."groupID" = t."groupID"
+         WHERE g."categoryID" = $1
+           AND (t."raceID" = $2 OR t."typeID" = ANY($3) OR EXISTS (
+                SELECT 1 FROM "dgmTypeAttributes" a
+                 WHERE a."typeID" = t."typeID" AND a."attributeID" = ANY($4)
+                   AND COALESCE(a."valueInt"::float8, a."valueFloat") = ANY($5::int[])
+           ))
+         ORDER BY t."typeID"
+    "#, &[&(crate::dogma::category::SHIP as i32), &JOVE_RACE, &TEST_HULLS,
+          &&crate::dogma::attr::REQUIRED_SKILLS[..], &SPECIAL_SHIP_SKILLS])
+        .await.map_err(|e| e.to_string())?;
+    if types.is_empty() { return Err("No GM or Jovian ship types were found in the game data.".into()); }
+
+    for row in &types {
+        let type_id = i64::from(row.get::<_, i32>(0));
+        txn.create(NewItem { type_id, owner_id, location_id, flag: FLAG_HANGAR, quantity: 1, singleton: false })
+            .await.map_err(|e| e.to_string())?;
+    }
+    let events = txn.commit().await.map_err(|e| e.to_string())?;
+    crate::items::notify(ctx.world, ctx.client_id, events);
+    Ok(format!("Created {} GM, Jovian and test hulls in your personal ship hangar.", types.len()))
 }
 
 async fn give_isk(ctx: &Ctx<'_>, words: &[&str]) -> Result<String, String> {
@@ -367,32 +427,14 @@ async fn max_standings(ctx: &Ctx<'_>, words: &[&str]) -> Result<String, String> 
         return Err("Usage: /maxstandings".into());
     }
     let me = ctx.session.char_id.ok_or("Select a character first.")? as i32;
-    let sql = r#"WITH organizations AS (
-                     SELECT "corporationID" AS id FROM "crpNPCCorporations"
-                     UNION SELECT "factionID" FROM "chrFactions"
-                 ), updated AS (
-                     INSERT INTO "chrNPCStandings" ("characterID", "fromID", "standing")
-                     SELECT $1, owners.id, 10.0
-                       FROM (SELECT "agentID" AS id FROM "agtAgents"
-                             UNION SELECT id FROM organizations) owners
-                     ON CONFLICT ("characterID", "fromID") DO UPDATE SET "standing" = 10.0
-                     RETURNING "fromID"
-                 )
-                 SELECT count(*), ARRAY(SELECT id FROM organizations ORDER BY id)
-                   FROM updated"#;
-    let row = ctx.db.query_one(sql, &[&me]).await.map_err(|e| e.to_string())?;
-    let count: i64 = row.get(0);
-    let organizations: Vec<i32> = row.get(1);
-
-    // Refresh the legacy client's organization cache without loading every agent.
-    let world = ctx.world.lock();
-    let clients = world.clients_of(i64::from(me));
-    for from in organizations {
-        world.notify(&clients, "OnStandingSet", Value::Tuple(vec![
-            Value::Int(i64::from(from)), Value::Int(i64::from(me)), Value::Double(10.0),
-        ]));
-    }
-    Ok(format!("Maximum standing set for {count} agents, NPC corporations and factions. Reopen the Standings tab to see updated corporations and factions."))
+    let sql = r#"INSERT INTO "chrNPCStandings" ("characterID", "fromID", "standing")
+                 SELECT $1, owners.id, 10.0
+                   FROM (SELECT "agentID" AS id FROM "agtAgents"
+                         UNION SELECT "corporationID" FROM "crpNPCCorporations"
+                         UNION SELECT "factionID" FROM "chrFactions") owners
+                 ON CONFLICT ("characterID", "fromID") DO UPDATE SET "standing" = 10.0"#;
+    let count = ctx.db.execute(sql, &[&me]).await.map_err(|e| e.to_string())?;
+    Ok(format!("Maximum standing set for {count} agents, NPC corporations and factions. Log in again to refresh standings."))
 }
 
 fn spawn(ctx: &Ctx<'_>) -> Result<String, String> {

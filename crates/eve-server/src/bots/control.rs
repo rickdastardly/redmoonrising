@@ -22,6 +22,9 @@ pub enum Request {
     /// A bot, by name (or character ID).
     Follow(String),
     Unfollow(i64),
+    /// Bots (by character) answering a fight call in a system's Local: they
+    /// go to `point` and stay around `anchor`, ready to fight.
+    Meet { system: i32, anchor: i64, point: (f64, f64, f64), bots: Vec<i64> },
 }
 
 static QUEUE: Mutex<Vec<Request>> = Mutex::new(Vec::new());

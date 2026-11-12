@@ -3,94 +3,136 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Red Moon Rising · Command Center</title>
+  <title>Red Moon Rising · Cluster Administration</title>
+  <link rel="icon" type="image/png" href="/eve-icon.png">
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.js"></script>
 </head>
 <body>
-  <a class="skip-link" href="#main-content">Skip to content</a>
-  <aside class="sidebar" aria-label="Red Moon Rising">
-    <a class="brand" href="#home">
-      <img class="brand-mark" src="/eve-icon.png" width="36" height="36" alt="">
-      <span><strong>Red Moon Rising</strong><small>Server administration</small></span>
+  <header class="masthead">
+    <a class="brand" href="#home" aria-label="Red Moon Rising home">
+      <img class="brand-mark" src="/eve-icon.png" width="30" height="30" alt="EVE Online">
+      <span class="brand-text"><strong>RED MOON RISING</strong><small>Cluster administration</small></span>
     </a>
-    <nav class="neocom" aria-label="Dashboard pages">
-      <div class="nav-group">
-        <p>Workspace</p>
-        <a href="#home">Overview</a>
-        <a href="#status">Server status</a>
-        <a href="#pilots">Pilots online</a>
-        <a href="#news">Galactic news</a>
-      </div>
-      <div class="nav-group">
-        <p>Universe</p>
-        <a href="#wars">War report</a>
-        <a href="#sieges">Sieges</a>
-        <a href="#systems">Busiest systems</a>
-        <a href="#alliances">Alliances</a>
-        <a href="#corporations">Corporations</a>
-        <a href="#killboard">Killboard</a>
-        <a href="#market">Market</a>
-        <a href="#relations">Standings</a>
-        <a href="#follow">Follow a pilot</a>
-      </div>
-      <div class="nav-group">
-        <p>Administration</p>
-        <a href="#control">Events and controls</a>
-        <a href="#users">User accounts</a>
-        <a href="#downtime">Server downtime</a>
-      </div>
-    </nav>
-    <div class="clock" title="EVE time (UTC)"><span>Universe time</span><span id="clock-time">--:--</span><span id="clock-date"></span></div>
-  </aside>
+    <div class="masthead-status">
+      <span class="live-pill" id="server-indicator" data-state="pending" role="status">Connecting</span>
+      <span class="mast-stat"><small>Pilots</small><strong id="mast-players">—</strong></span>
+      <span class="mast-stat"><small>Simulated</small><strong id="mast-bots">—</strong></span>
+      <span class="mast-stat clock"><small id="clock-date">EVE TIME</small><strong id="clock-time">--:--</strong></span>
+    </div>
+  </header>
+  <nav class="neocom" aria-label="Dashboard pages">
+    <div class="nav-group"><p>Cluster</p>
+      <a href="#home" data-icon="◈">Overview</a>
+      <a href="#status" data-icon="◉">Server status</a>
+      <a href="#pilots" data-icon="◎">Online pilots</a>
+      <a href="#systems" data-icon="✶">Star systems</a>
+    </div>
+    <div class="nav-group"><p>New Eden</p>
+      <a href="#sovereignty" data-icon="⬡">Sovereignty map</a>
+      <a href="#killboard" data-icon="✕">Killboard</a>
+      <a href="#wars" data-icon="⚔">War report</a>
+      <a href="#alliances" data-icon="▲">Alliances</a>
+      <a href="#corporations" data-icon="■">Corporations</a>
+      <a href="#sieges" data-icon="◆">Sieges</a>
+      <a href="#market" data-icon="¤">Market</a>
+      <a href="#relations" data-icon="≈">Standings</a>
+      <a href="#follow" data-icon="➤">Pilot tracking</a>
+    </div>
+    <div class="nav-group"><p>Administration</p>
+      <a href="#users" data-icon="☰">User accounts</a>
+      <a href="#news" data-icon="✎">News publishing</a>
+      <a href="#downtime" data-icon="⏻">Downtime</a>
+      <a href="#bots" data-icon="☻">Bots</a>
+      <a href="#seeding" data-icon="¤">Market seeding</a>
+      <a href="#control" data-icon="⚙">Simulation controls</a>
+    </div>
+  </nav>
 
-  <main class="desktop" id="main-content" tabindex="-1">
-    <header class="page-heading">
-      <div><p class="eyebrow" id="page-kicker">COMMAND CENTER</p><h1 id="page-title">Command overview</h1><p id="page-description">Live activity across New Eden.</p></div>
-      <span class="live-pill" id="connection-state" data-state="connecting" role="status">Connecting</span>
-    </header>
-    <section class="overview-metrics" id="overview-metrics" aria-label="Live server metrics">
-      <div class="metric"><span>Players online</span><strong id="metric-players">—</strong><small>Connected capsuleers</small></div>
-      <div class="metric"><span>Simulated online</span><strong id="metric-bots">—</strong><small id="metric-simulation">Simulation activity</small></div>
-      <div class="metric"><span>Active wars</span><strong id="metric-wars">—</strong><small>Across New Eden</small></div>
-      <div class="metric"><span>Server uptime</span><strong id="metric-uptime">—</strong><small>Current server session</small></div>
-    </section>
+  <main class="desktop">
+    <div class="page-heading"><p class="eyebrow" id="page-kicker">NEW EDEN</p><h1 id="page-title">Overview</h1><p id="page-description">Live activity across New Eden.</p></div>
+    <div class="metrics" id="home-metrics" aria-label="Server at a glance" hidden>
+      <article><span>Players online</span><strong id="metric-players">—</strong><small>Connected capsuleers</small></article>
+      <article><span>Bots online</span><strong id="metric-bots">—</strong><small>Simulated capsuleers</small></article>
+      <article><span>Active wars</span><strong id="metric-wars">—</strong><small>Across New Eden</small></article>
+      <article><span>Server uptime</span><strong id="metric-uptime">—</strong><small>Since the last restart</small></article>
+    </div>
     <section class="window narrow" id="w-status">
-      <header class="caption"><span class="glyph"></span><h2>Server Status</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Server Status</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
       <div class="body">
         <p class="statusline" id="statusline">STATUS: CONNECTING…</p>
         <dl class="info" id="status"></dl>
       </div>
     </section>
 
+    <section class="window wide" id="w-health">
+      <header class="caption"><span class="glyph"></span><h2>Server Health</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
+      <div class="body">
+        <div class="health-tiles" id="health-tiles"><p class="note">Measuring…</p></div>
+        <div class="health-charts">
+          <figure><figcaption>CPU, last 5 minutes <span class="legend"><i class="c1"></i>machine <i class="c2"></i>server</span></figcaption><svg id="chart-cpu" viewBox="0 0 300 80" preserveAspectRatio="none" role="img" aria-label="CPU use over the last five minutes"></svg></figure>
+          <figure><figcaption>Server memory, MB</figcaption><svg id="chart-ram" viewBox="0 0 300 80" preserveAspectRatio="none" role="img" aria-label="Server memory over the last five minutes"></svg></figure>
+          <figure><figcaption>Game loop load, % of each heartbeat</figcaption><svg id="chart-tick" viewBox="0 0 300 80" preserveAspectRatio="none" role="img" aria-label="Game loop load over the last five minutes"></svg></figure>
+        </div>
+      </div>
+    </section>
+
     <section class="window wide" id="w-wars">
-      <header class="caption"><span class="glyph"></span><h2>War Report</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
+      <header class="caption"><span class="glyph"></span><h2>War Report</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
       <div class="body"><table id="wars"></table></div>
     </section>
 
     <section class="window" id="w-pilots">
-      <header class="caption"><span class="glyph"></span><h2>Pilots Online</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Pilots Online</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
       <div class="body"><table id="players"></table></div>
     </section>
 
     <section class="window" id="w-systems">
-      <header class="caption"><span class="glyph"></span><h2>Busiest Systems</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Busiest Systems</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
       <div class="body"><table id="systems"></table></div>
     </section>
 
     <section class="window" id="w-alliances">
-      <header class="caption"><span class="glyph"></span><h2>Alliances</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Alliances</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
       <div class="body"><table id="alliances"></table></div>
     </section>
 
     <section class="window" id="w-corporations">
-      <header class="caption"><span class="glyph"></span><h2>Corporations</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Corporations</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
       <div class="body"><table id="corporations"></table></div>
     </section>
 
     <section class="window wide" id="w-sieges">
-      <header class="caption"><span class="glyph"></span><h2>Sieges</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Sieges</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
       <div class="body"><table id="sieges"></table></div>
+    </section>
+
+    <section class="window wide" id="w-sovmap">
+      <header class="caption"><span class="glyph"></span><h2>Sovereignty Map</h2><span class="caption-meta" id="sov-updated">Loading sovereignty…</span></header>
+      <div class="body sov-body">
+        <div class="sov-stage" id="sov-stage">
+          <canvas id="sov-canvas" aria-label="Map of New Eden coloured by the alliance holding each system"></canvas>
+          <div class="sov-toolbar">
+            <label><input type="checkbox" id="sov-gates" checked> Stargates</label>
+            <label><input type="checkbox" id="sov-regions" checked> Regions</label>
+            <label><input type="checkbox" id="sov-names"> System names</label>
+            <label><input type="checkbox" id="sov-empire"> Empire space</label>
+            <button type="button" id="sov-reset">Reset view</button>
+          </div>
+          <div class="sov-tooltip" id="sov-tooltip" hidden></div>
+          <div class="sov-hint">Scroll to zoom · drag to pan · click an alliance to focus it</div>
+        </div>
+        <aside class="sov-side">
+          <div class="sov-stats" id="sov-stats"></div>
+          <div class="sov-panel">
+            <h3>Sovereign alliances</h3>
+            <input id="sov-filter" type="search" placeholder="Filter alliances" aria-label="Filter alliances">
+            <ol id="sov-alliances" class="sov-alliances"></ol>
+          </div>
+          <div class="sov-panel"><h3>Latest changes of hands</h3><ol id="sov-recent" class="sov-feed"></ol></div>
+          <div class="sov-panel"><h3>Sieges</h3><ol id="sov-sieges" class="sov-feed"></ol></div>
+        </aside>
+      </div>
     </section>
 
     <section class="window wide" id="w-articles">
@@ -99,47 +141,79 @@
         <div id="articles" class="articles"></div>
         <form id="article-form" class="article-form">
           <h3>Publish an article</h3>
-          <p class="note">Articles appear here and in the EVE character selection news panel.</p>
+          <p class="note">Articles appear here and in the EVE character selection news panel. Select text and use the buttons to format it, or type the tags yourself.</p>
           <input name="title" maxlength="140" placeholder="Headline" required aria-label="Article headline">
-          <textarea name="body" maxlength="8000" rows="7" placeholder="Write the article" required aria-label="Article body"></textarea>
+          <div class="format-bar" id="article-format" role="toolbar" aria-label="Formatting">
+            <button type="button" data-open="&lt;h2&gt;" data-close="&lt;/h2&gt;" data-line="1" title="Large gold heading: &lt;h2&gt;">Heading</button>
+            <button type="button" data-open="&lt;h3&gt;" data-close="&lt;/h3&gt;" data-line="1" title="Blue section heading: &lt;h3&gt;">Section</button>
+            <button type="button" data-open="&lt;b&gt;" data-close="&lt;/b&gt;" title="Bold: &lt;b&gt;"><b>B</b></button>
+            <button type="button" data-open="&lt;i&gt;" data-close="&lt;/i&gt;" title="Italic: &lt;i&gt;"><i>I</i></button>
+            <button type="button" data-open="&lt;u&gt;" data-close="&lt;/u&gt;" title="Underline: &lt;u&gt;"><u>U</u></button>
+            <button type="button" data-open="&lt;code&gt;" data-close="&lt;/code&gt;" title="Command or name, in yellow: &lt;code&gt;">Command</button>
+            <button type="button" data-open="&lt;big&gt;" data-close="&lt;/big&gt;" title="Larger text: &lt;big&gt;">Bigger</button>
+            <button type="button" data-open="&lt;font size=&quot;3&quot;&gt;" data-close="&lt;/font&gt;" title="Smaller text: &lt;font size=&quot;3&quot;&gt; (sizes 1 to 7; normal is 4)">Smaller</button>
+            <button type="button" data-open="&lt;font color=&quot;#ff8800&quot;&gt;" data-close="&lt;/font&gt;" title="Coloured text: &lt;font color=&quot;#ff8800&quot;&gt; (change the colour code)">Colour</button>
+            <button type="button" data-open="&lt;center&gt;" data-close="&lt;/center&gt;" data-line="1" title="Centred: &lt;center&gt;">Centre</button>
+            <button type="button" data-list="ul" title="Bulleted list: &lt;ul&gt;&lt;li&gt;, one item per selected line">• List</button>
+            <button type="button" data-list="ol" title="Numbered list: &lt;ol&gt;&lt;li&gt;, one item per selected line">1. List</button>
+            <button type="button" data-link="1" title="Link: &lt;a href=&quot;https://…&quot;&gt;">Link</button>
+            <button type="button" data-insert="&lt;hr&gt;" data-line="1" title="Divider line: &lt;hr&gt;">Divider</button>
+          </div>
+          <textarea name="body" maxlength="30000" rows="12" placeholder="Write the article. Example:&#10;&lt;h3&gt;Logging in&lt;/h3&gt;&#10;&lt;ul&gt;&#10;&lt;li&gt;&lt;b&gt;One login&lt;/b&gt; per account.&lt;/li&gt;&#10;&lt;li&gt;GMs can use &lt;code&gt;/ban &amp;lt;account&amp;gt;&lt;/code&gt;.&lt;/li&gt;&#10;&lt;/ul&gt;" required aria-label="Article body"></textarea>
+          <details class="format-help"><summary>Formatting tags</summary>
+            <p class="note"><code>&lt;h1&gt;</code> large heading, <code>&lt;h2&gt;</code> heading, <code>&lt;h3&gt;</code> section, <code>&lt;b&gt;</code> bold, <code>&lt;i&gt;</code> italic, <code>&lt;u&gt;</code> underline, <code>&lt;code&gt;</code> command (yellow), <code>&lt;ul&gt;</code>/<code>&lt;ol&gt;</code> with <code>&lt;li&gt;</code> lists, <code>&lt;a href="https://…"&gt;</code> link, <code>&lt;hr&gt;</code> divider, <code>&lt;font color="#ff8800"&gt;</code> colour, <code>&lt;font size="5"&gt;</code> size (1 to 7, normal 4), <code>&lt;big&gt;</code> bigger, <code>&lt;center&gt;</code> centred, <code>&lt;small&gt;</code>, <code>&lt;p&gt;</code>, <code>&lt;blockquote&gt;</code>. Line breaks are kept; other tags show as typed. Write <code>&amp;lt;</code> for a literal &lt; before a tag name.</p>
+          </details>
+          <div class="article-preview-wrap"><small>PREVIEW</small><div id="article-preview" class="news-article article-preview"><p class="dim">The formatted article appears here as you type.</p></div></div>
           <button type="submit">Publish article</button><span id="article-reply" role="status"></span>
         </form>
       </div>
     </section>
 
     <section class="window" id="w-news">
-      <header class="caption"><span class="glyph"></span><h2>Galactic News</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Galactic News</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
       <div class="body"><table id="news"></table></div>
     </section>
 
-    <div class="section-title"><span>02 / CONFLICT INTELLIGENCE</span><strong>Killboard & reports</strong></div>
-
-    <section class="window wide" id="w-killboard">
-      <header class="caption"><span class="glyph"></span><h2>Killboard statistics</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
-      <div class="body">
-        <form id="killboard-search-form" class="killboard-search"><input id="killboard-search" type="search" placeholder="Search pilots across New Eden" aria-label="Search pilots" required minlength="2"><button type="submit">Search</button></form>
-        <div id="killboard-search-results" class="search-results"></div>
-        <div id="killboard-stats" class="killboard-stats"></div>
-        <h3 class="table-heading">Highest-value hulls lost · last 7 days</h3><div id="killboard-featured" class="featured-kills"></div>
-        <h3 class="table-heading">Top killers · all time</h3><table id="killboard-pilots"></table>
-        <h3 class="table-heading">Corporations & alliances</h3>
-        <table id="killboard"></table>
-        <h3 class="table-heading">Most lost hulls</h3>
-        <table id="killboard-ships"></table>
+    <section class="window wide zkb" id="w-killboard">
+      <div class="body zkb-body">
+        <div class="zkb-main">
+          <div id="zkb-structures-block">
+            <h3 class="zkb-title">Most Valuable Structures - Last 7 Days</h3>
+            <div id="killboard-structures" class="zkb-tiles"></div>
+          </div>
+          <h3 class="zkb-title">Most Valuable Ships - Last 7 Days</h3>
+          <div id="killboard-featured" class="zkb-tiles"></div>
+          <div class="zkb-list-head">
+            <h2>Most recent kills</h2>
+            <input id="kill-search" type="search" placeholder="Filter this page" aria-label="Filter kills on this page">
+          </div>
+          <table id="kills" class="zkb-kills"></table>
+          <div class="kill-pager"><button id="kills-prev" type="button">← Newer</button><span id="kills-page">Page 1</span><button id="kills-next" type="button">Older →</button></div>
+        </div>
+        <aside class="zkb-side">
+          <form id="killboard-search-form" class="killboard-search"><input id="killboard-search" type="search" placeholder="Search pilots" aria-label="Search pilots" required minlength="2"><button type="submit">Search</button></form>
+          <div id="killboard-search-results" class="search-results"></div>
+          <div class="zkb-panel"><h3>Current Activity</h3><p class="zkb-sub">Active PVP (last 7 days)</p><dl id="killboard-activity" class="zkb-activity"></dl></div>
+          <div class="zkb-panel"><h3>Killboard</h3><dl id="killboard-stats" class="zkb-activity"></dl></div>
+          <div class="zkb-panel"><h3>Top Characters</h3><ol id="killboard-top-characters" class="zkb-top"></ol></div>
+          <div class="zkb-panel"><h3>Top Corporations</h3><ol id="killboard-top-corporations" class="zkb-top"></ol></div>
+          <div class="zkb-panel"><h3>Top Alliances</h3><ol id="killboard-top-alliances" class="zkb-top"></ol></div>
+          <div class="zkb-panel"><h3>Most Lost Hulls (24h)</h3><ol id="killboard-ships" class="zkb-top"></ol></div>
+        </aside>
       </div>
     </section>
 
-    <section class="window wide" id="w-kills">
-      <header class="caption"><span class="glyph"></span><h2>Recent killmails</h2><div class="kill-search"><input id="kill-search" type="search" placeholder="Search these kills" aria-label="Search kills"></div></header>
-      <div class="body"><table id="kills"></table><div class="kill-pager"><button id="kills-prev" type="button">← Previous</button><span id="kills-page">Page 1</span><button id="kills-next" type="button">Next →</button></div></div>
-    </section>
-
-    <section class="window wide" id="w-kill-detail" hidden>
-      <header class="caption"><span class="glyph"></span><h2>Killmail details</h2><a class="caption-link" href="#killboard">← Killboard</a></header>
+    <section class="window wide zkb" id="w-kill-detail" hidden>
+      <header class="caption"><span class="glyph"></span><h2>Killmail</h2><a class="caption-link" href="#killboard">← Killboard</a></header>
       <div class="body kill-report"><div id="kill-detail"></div></div>
     </section>
 
-    <section class="window wide" id="w-pilot-profile" hidden>
+    <section class="window wide zkb" id="w-group-profile" hidden>
+      <header class="caption"><span class="glyph"></span><h2 id="group-caption">Corporation record</h2><a class="caption-link" href="#killboard">← Killboard</a></header>
+      <div class="body" id="group-profile"></div>
+    </section>
+
+    <section class="window wide zkb" id="w-pilot-profile" hidden>
       <header class="caption"><span class="glyph"></span><h2>Pilot record</h2><a class="caption-link" href="#killboard">← Killboard</a></header>
       <div class="body" id="pilot-profile"></div>
     </section>
@@ -147,19 +221,31 @@
     <section class="window wide" id="w-downtime">
       <header class="caption"><span class="glyph"></span><h2>Server downtime</h2></header>
       <div class="body downtime-body">
-        <p class="note">Announce downtime to connected players. The client shows its own countdown; the server saves the universe before disconnecting everyone at zero.</p>
-        <div id="downtime-clock" class="downtime-clock">No downtime scheduled</div>
+        <div id="downtime-clock" class="downtime-clock"><small>CLUSTER STATE</small><strong>No downtime scheduled</strong></div>
         <form id="downtime-form" class="downtime-form">
-          <label for="downtime-message">Announcement</label>
-          <textarea id="downtime-message" name="message" maxlength="500" rows="3" placeholder="The server is going down for maintenance."></textarea>
-          <div class="toolbar"><button type="submit">Start 5-minute countdown</button><button type="button" id="downtime-cancel">Cancel countdown</button><button type="button" id="downtime-now" class="danger-button">Shut down now</button></div>
+          <label for="downtime-message">Announcement to connected pilots</label>
+          <textarea id="downtime-message" name="message" maxlength="500" rows="3" placeholder="Leave empty for the standard maintenance or restart message."></textarea>
+          <div class="downtime-actions">
+            <fieldset class="downtime-group">
+              <legend>Shutdown</legend>
+              <p class="note">Saves the universe and stops the server. It stays offline until you start it again.</p>
+              <div class="toolbar"><button type="submit">Start 5-minute countdown</button><button type="button" id="downtime-now" class="danger-button">Shut down now</button></div>
+            </fieldset>
+            <fieldset class="downtime-group restart-group">
+              <legend>Restart</legend>
+              <p class="note" id="restart-note">Saves the universe, stops the server and starts it again. Pilots can log back in once it is up.</p>
+              <div class="toolbar"><button type="button" id="restart-countdown">Restart in 5 minutes</button><button type="button" id="restart-now" class="warn-button">Restart now</button></div>
+            </fieldset>
+          </div>
+          <div class="toolbar"><button type="button" id="downtime-cancel">Cancel countdown</button></div>
         </form>
         <p id="downtime-reply" class="note" role="status"></p>
+        <p class="note">Players see the client's own countdown. At zero the server saves the universe before disconnecting everyone.</p>
       </div>
     </section>
 
     <section class="window wide" id="w-market">
-      <header class="caption"><span class="glyph"></span><h2>Market</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Market</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
       <div class="body">
         <div class="toolbar"><label>Hub <select id="hub"></select></label><span class="note" id="market-summary"></span></div>
         <table id="market"></table>
@@ -168,7 +254,7 @@
     </section>
 
     <section class="window" id="w-relations">
-      <header class="caption"><span class="glyph"></span><h2>Standings</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Standings</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
       <div class="body">
         <p class="note" id="relations-summary"></p>
         <table id="relations"></table>
@@ -177,7 +263,7 @@
     </section>
 
     <section class="window wide" id="w-follow">
-      <header class="caption"><span class="glyph"></span><h2>Follow a Pilot</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Follow a Pilot</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
       <div class="body">
         <div class="toolbar">
           <input id="pilot-search" type="search" placeholder="Pilot name" autocomplete="off">
@@ -188,8 +274,96 @@
       </div>
     </section>
 
+    <section class="window wide" id="w-bots">
+      <header class="caption"><span class="glyph"></span><h2>Bot population</h2><button id="bots-refresh" type="button">Refresh</button></header>
+      <div class="body downtime-body">
+        <div class="downtime-actions">
+          <fieldset class="downtime-group">
+            <legend>Number of bots</legend>
+            <p class="note" id="bots-count-note">Loading bot settings…</p>
+            <form id="bots-count-form" class="toolbar">
+              <input id="bots-count" type="number" min="0" max="1000000" step="1" required aria-label="Number of bots">
+              <button type="submit">Save for next restart</button>
+              <button type="button" id="bots-count-restart" class="warn-button">Save and restart now</button>
+            </form>
+            <p class="note">Bots are created on the first start that needs them and kept after; a lower number plays fewer of them. Saved to rmr.yml.</p>
+          </fieldset>
+          <fieldset class="downtime-group">
+            <legend>Aggression</legend>
+            <p class="note">Bots always fight back when a player shoots them. Calm bots also drop any player they were chasing.</p>
+            <div class="toolbar bot-aggression bot-choice" id="bots-aggression" data-setting="aggression">
+              <button type="button" data-value="calm" aria-pressed="false">All bots calm</button>
+              <button type="button" data-value="some" aria-pressed="false">Some bots aggressive</button>
+              <button type="button" data-value="all" aria-pressed="false" class="danger-button">All bots aggressive</button>
+            </div>
+            <p class="note" id="bots-aggression-note"></p>
+            <div class="toolbar bot-choice" data-setting="piratesAttackPlayers">
+              <span class="bot-label">Pirates attack on sight (with "some")</span>
+              <button type="button" data-value="true" aria-pressed="false">Yes</button>
+              <button type="button" data-value="false" aria-pressed="false">No</button>
+            </div>
+          </fieldset>
+          <fieldset class="downtime-group">
+            <legend>Local chat</legend>
+            <p class="note">How much bots talk in Local: among themselves, back to you, and after kills.</p>
+            <div class="toolbar bot-choice" data-setting="chat">
+              <button type="button" data-value="off" aria-pressed="false">Off</button>
+              <button type="button" data-value="quiet" aria-pressed="false">Quiet</button>
+              <button type="button" data-value="normal" aria-pressed="false">Normal</button>
+              <button type="button" data-value="chatty" aria-pressed="false">Chatty</button>
+            </div>
+            <div class="toolbar bot-choice" data-setting="trashTalk">
+              <span class="bot-label">Trash talk and trolling</span>
+              <button type="button" data-value="true" aria-pressed="false">On</button>
+              <button type="button" data-value="false" aria-pressed="false">Polite only</button>
+            </div>
+          </fieldset>
+          <fieldset class="downtime-group">
+            <legend>Corporations and alliances</legend>
+            <div class="toolbar bot-choice" data-setting="joinPlayerCorps">
+              <span class="bot-label">Bots apply to your corporations</span>
+              <button type="button" data-value="off" aria-pressed="false">Off</button>
+              <button type="button" data-value="low" aria-pressed="false">Low</button>
+              <button type="button" data-value="normal" aria-pressed="false">Normal</button>
+              <button type="button" data-value="high" aria-pressed="false">High</button>
+            </div>
+            <div class="toolbar bot-choice" data-setting="joinPlayerAlliances">
+              <span class="bot-label">Bot corporations apply to your alliances</span>
+              <button type="button" data-value="off" aria-pressed="false">Off</button>
+              <button type="button" data-value="low" aria-pressed="false">Low</button>
+              <button type="button" data-value="normal" aria-pressed="false">Normal</button>
+              <button type="button" data-value="high" aria-pressed="false">High</button>
+            </div>
+            <div class="toolbar bot-choice" data-setting="acceptApplications">
+              <span class="bot-label">Bot corporations and alliances answer your applications</span>
+              <button type="button" data-value="closed" aria-pressed="false">Turn all down</button>
+              <button type="button" data-value="selective" aria-pressed="false">Judge your record</button>
+              <button type="button" data-value="open" aria-pressed="false">Accept unless hostile</button>
+            </div>
+            <p class="note">Bot corporations and alliances answer within about ten minutes; an accepted alliance membership starts a day later, as in EVE.</p>
+          </fieldset>
+          <fieldset class="downtime-group">
+            <legend>Activity</legend>
+            <form id="bots-activity-form" class="toolbar">
+              <label class="bot-label" for="bots-activity">Online activity <strong id="bots-activity-value">1.0x</strong></label>
+              <input id="bots-activity" type="range" min="0.1" max="4" step="0.1" value="1" aria-label="Online activity">
+              <button type="submit">Apply</button>
+            </form>
+            <p class="note">How many bots are logged in, compared with normal. They log on or off over the next few minutes; at most 97% can be online at once.</p>
+            <form id="bots-shown-form" class="toolbar">
+              <label class="bot-label" for="bots-shown">Bot ships shown per system</label>
+              <input id="bots-shown" type="number" min="10" max="1000" step="10" required>
+              <button type="submit">Apply</button>
+            </form>
+            <p class="note">The most bot ships in space in one system where a player is. More means bigger fights and more work for the server and your client.</p>
+          </fieldset>
+        </div>
+        <p id="bots-reply" class="note" role="status"></p>
+      </div>
+    </section>
+
     <section class="window" id="w-control">
-      <header class="caption"><span class="glyph"></span><h2>Events and Controls</h2><button class="min" type="button" aria-label="Collapse panel">−</button></header>
+      <header class="caption"><span class="glyph"></span><h2>Events and Controls</h2><button class="min" type="button" aria-label="Minimize">_</button></header>
       <div class="body">
         <p class="note" id="controls-state"></p>
         <div class="toolbar" id="event-buttons">
@@ -211,6 +385,19 @@
         <p class="note" id="control-reply"></p>
         <table id="raids"></table>
         <table id="events"></table>
+      </div>
+    </section>
+
+    <section class="window wide" id="w-seeding">
+      <header class="caption"><span class="glyph"></span><h2>Station market seeding</h2><button id="seeding-refresh" type="button">Refresh</button></header>
+      <div class="body">
+        <p class="note">Stock a station's market with NPC sell orders for every marketable item, priced like the regional hubs. Seeded stations are topped back up at every server start. With an empty search the list shows player-owned stations (outposts) and stations already seeded.</p>
+        <form id="seeding-form" class="toolbar seeding-search">
+          <input id="seeding-query" type="search" maxlength="80" placeholder="Search by station, system or region" aria-label="Search stations">
+          <button type="submit">Search</button>
+        </form>
+        <p class="note" id="seeding-reply" role="status"></p>
+        <table id="seeding"></table>
       </div>
     </section>
 

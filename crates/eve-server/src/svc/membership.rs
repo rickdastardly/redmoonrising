@@ -289,12 +289,13 @@ async fn answer_offer(ctx: &Ctx<'_>, corp_id: i64, note: &str, status: i16) -> R
     let mut client = crate::db::connect(ctx.db_url).await.map_err(|e| db_failed("connecting", e))?;
     let tx = client.transaction().await.map_err(|e| db_failed("BEGIN", e))?;
     let room = tx
-        .query_one(
-            r#"SELECT "memberCount", "memberLimit" FROM "corporation" WHERE "corporationID" = $1 FOR UPDATE"#,
+        .query_opt(
+            r#"SELECT "memberCount", "memberLimit" FROM "corporation" WHERE "corporationID" = $1 AND "deleted" = 0 FOR UPDATE"#,
             &[&(corp_id as i32)],
         )
         .await
-        .map_err(|e| db_failed("reading the member limit", e))?;
+        .map_err(|e| db_failed("reading the member limit", e))?
+        .ok_or_else(|| Outcome::custom("That corporation is closed."))?;
     let (count, limit) = (int(&room, 0).unwrap_or(0), int(&room, 1).unwrap_or(0));
     if count >= limit {
         return Err(Outcome::UserError {

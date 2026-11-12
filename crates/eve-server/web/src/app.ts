@@ -53,6 +53,7 @@ interface SystemRow {
 }
 
 interface AllianceRow {
+  id: number;
   name: string;
   ticker: string;
   corporations: number;
@@ -79,10 +80,19 @@ interface NewsItem {
   text: string;
 }
 
-interface Article { id: number; title: string; body: string; time: number }
-interface DowntimeState { active: boolean; deadline: number | null; message: string; now: number }
+interface Article { id: number; title: string; body: string; html?: string; time: number }
+interface DowntimeState {
+  active: boolean;
+  deadline: number | null;
+  message: string;
+  restart: boolean;
+  restartAvailable: boolean;
+  now: number;
+}
 
 interface CorporationRow {
+  id: number;
+  allianceID: number | null;
   name: string;
   ticker: string;
   members: number;
@@ -96,25 +106,59 @@ interface Kill {
   victim: string | null;
   victimID: number | null;
   victimCorporation: string | null;
+  victimCorpTicker: string | null;
+  victimAlliance: string | null;
+  victimAllianceTicker: string | null;
   ship: string | null;
   shipTypeID: number | null;
   shipClass: string | null;
   hullValue: number | null;
+  totalValue: number | null;
   system: string | null;
+  security: number | null;
+  region: string | null;
   finalBlow: string | null;
   finalBlowID: number | null;
+  finalBlowNpc: boolean | null;
+  finalBlowCorporation: string | null;
+  finalBlowCorpTicker: string | null;
+  finalBlowAlliance: string | null;
+  finalBlowAllianceTicker: string | null;
+  involved: number | null;
   pod: boolean;
+  victimCorpID: number | null;
+  victimAllianceID: number | null;
+  finalBlowCorpID: number | null;
+  finalBlowAllianceID: number | null;
 }
+
+interface FeaturedKill {
+  id: number;
+  time: number;
+  victimID: number | null;
+  victim: string;
+  victimCorporation: string;
+  ship: string;
+  shipTypeID: number;
+  system: string;
+  hullValue: number;
+  totalValue: number;
+}
+
+interface TopEntry { id: number; name: string; ticker: string; kills: number }
 
 interface Killboard {
   total: number;
   day: number;
   week: number;
   pods: number;
-  pilots: { id: number; name: string; corporation: string; kills: number }[];
-  sides: { name: string; ticker: string; kills: number; losses: number; bots: boolean }[];
   ships: { ship: string; lost: number }[];
-  featured: { id: number; time: number; victimID: number | null; victim: string; ship: string; shipTypeID: number; system: string; hullValue: number }[];
+  featured: FeaturedKill[];
+  structures: FeaturedKill[];
+  activity: { characters: number; corporations: number; alliances: number; ships: number; systems: number; regions: number; kills: number };
+  topCharacters: TopEntry[];
+  topCorporations: TopEntry[];
+  topAlliances: TopEntry[];
 }
 
 interface MarketLine {
@@ -270,7 +314,9 @@ async function refreshArticles(): Promise<void> {
       const item = document.createElement("article"); item.className = "news-article";
       const title = document.createElement("h3"); title.textContent = article.title;
       const time = document.createElement("time"); time.textContent = `${eveTime(article.time)} EVE`;
-      const body = document.createElement("p"); body.textContent = article.body;
+      // The server renders the body's formatting tags and escapes the rest.
+      const body = document.createElement("div"); body.className = "article-body";
+      if (article.html !== undefined) body.innerHTML = article.html; else body.textContent = article.body;
       item.append(time, title, body); return item;
     }));
     if (!articles.length) out.replaceChildren(span("No articles published yet.", "dim"));
@@ -286,8 +332,141 @@ async function publishArticle(event: SubmitEvent): Promise<void> {
     const result = await postAdmin("/api/articles", { title: fields.get("title"), body: fields.get("body") });
     reply.textContent = result.ok ?? "Published."; reply.className = "dropped";
     form.reset();
+    void previewArticle();
     await refreshArticles();
   } catch (e) { reply.textContent = String(e); reply.className = "hostile"; }
+}
+
+let previewTimer: number | undefined;
+
+async function previewArticle(): Promise<void> {
+  const body = (document.querySelector("#article-form textarea[name=body]") as HTMLTextAreaElement).value;
+  const out = document.getElementById("article-preview") as HTMLElement;
+  if (!body.trim()) {
+    out.replaceChildren(span("The formatted article appears here as you type.", "dim"));
+    return;
+  }
+  try {
+    const result = await postAdmin("/api/articles/preview", { body }) as { html?: string };
+    const inner = document.createElement("div"); inner.className = "article-body";
+    inner.innerHTML = result.html ?? "";
+    out.replaceChildren(inner);
+  } catch (e) { out.replaceChildren(span(`Preview unavailable: ${String(e)}`, "hostile")); }
+}
+
+function schedulePreview(): void {
+  window.clearTimeout(previewTimer);
+  previewTimer = window.setTimeout(() => void previewArticle(), 250);
+}
+
+/** Wraps the selection in a formatting tag, or inserts the tag pair at the cursor. */
+function formatArticle(button: HTMLButtonElement): void {
+  const area = document.querySelector("#article-form textarea[name=body]") as HTMLTextAreaElement;
+  const { selectionStart: start, selectionEnd: end, value } = area;
+  const selected = value.slice(start, end);
+  const lineStart = start > 0 && value[start - 1] !== "\n" ? "\n" : "";
+  const lineEnd = end < value.length && value[end] !== "\n" ? "\n" : "";
+  let insert: string;
+  let caret: number | null = null;
+  const d = button.dataset;
+  if (d.list) {
+    const lines = (selected || "").split("\n").map((l) => l.trim()).filter((l) => l);
+    const items = (lines.length ? lines : [""]).map((l) => `<li>${l}</li>`).join("\n");
+    insert = `${lineStart}<${d.list}>\n${items}\n</${d.list}>${lineEnd}`;
+    if (!lines.length) caret = start + lineStart.length + d.list.length + 3 + 4;
+  } else if (d.link) {
+    const url = window.prompt("Link address (https://…)", "https://");
+    if (!url) return;
+    insert = `<a href="${url.replace(/"/g, "")}">${selected || url}</a>`;
+  } else if (d.insert) {
+    insert = `${lineStart}${d.insert}${lineEnd}`;
+  } else {
+    const open = d.open ?? "", close = d.close ?? "";
+    const before = d.line ? lineStart : "", after = d.line ? lineEnd : "";
+    insert = `${before}${open}${selected}${close}${after}`;
+    if (!selected) caret = start + before.length + open.length;
+  }
+  area.focus();
+  area.setRangeText(insert, start, end, "end");
+  if (caret !== null) area.setSelectionRange(caret, caret);
+  schedulePreview();
+}
+
+interface Health {
+  ready: boolean;
+  cpu?: { machine: number; server: number; cores: number };
+  memory?: { serverMb: number; usedMb: number; totalMb: number; usedPercent: number };
+  tick?: { loadPercent: number; worstMs: number };
+  database?: { pingMs: number; sizeMb: number; connections: number };
+  bots?: { loadPercent: number; stepsPerSecond: number; worstTickMs: number };
+  history?: [number, number, number, number, number, number][];
+}
+
+function healthTile(label: string, value: string, detail: string, percent: number | null): HTMLElement {
+  const tile = document.createElement("div");
+  tile.className = "health-tile" + (percent === null ? "" : percent >= 90 ? " bad" : percent >= 70 ? " warn" : "");
+  const small = document.createElement("small"); small.textContent = label;
+  const strong = document.createElement("strong"); strong.textContent = value;
+  const span = document.createElement("span"); span.textContent = detail;
+  tile.append(small, strong, span);
+  if (percent !== null) {
+    const meter = document.createElement("div"); meter.className = "meter";
+    const fill = document.createElement("i"); fill.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+    meter.append(fill); tile.append(meter);
+  }
+  return tile;
+}
+
+/** A line chart of one or two series in an SVG of viewBox 300x80. */
+function drawChart(id: string, series: number[][], colours: string[], max?: number): void {
+  const svg = document.getElementById(id);
+  if (!svg) return;
+  const top = Math.max(max ?? 0, ...series.flat(), 1);
+  const ns = "http://www.w3.org/2000/svg";
+  const grid = document.createElementNS(ns, "path");
+  grid.setAttribute("d", "M0 20H300M0 40H300M0 60H300");
+  grid.setAttribute("stroke", "rgba(255,255,255,0.07)");
+  const parts: Element[] = [grid];
+  series.forEach((values, n) => {
+    if (values.length < 2) return;
+    const step = 300 / (values.length - 1);
+    const d = values.map((v, i) => `${i ? "L" : "M"}${(i * step).toFixed(1)} ${(78 - (v / top) * 74).toFixed(1)}`).join("");
+    const line = document.createElementNS(ns, "path");
+    line.setAttribute("d", d);
+    line.setAttribute("fill", "none");
+    line.setAttribute("stroke", colours[n]);
+    line.setAttribute("stroke-width", "1.6");
+    line.setAttribute("vector-effect", "non-scaling-stroke");
+    parts.push(line);
+  });
+  const label = document.createElementNS(ns, "text");
+  label.setAttribute("x", "296"); label.setAttribute("y", "10"); label.setAttribute("text-anchor", "end");
+  label.setAttribute("fill", "rgba(220,230,240,0.5)"); label.setAttribute("font-size", "9");
+  label.textContent = `${Math.round(top)}`;
+  parts.push(label);
+  svg.replaceChildren(...parts);
+}
+
+async function refreshHealth(): Promise<void> {
+  const out = document.getElementById("health-tiles");
+  if (!out || (document.getElementById("w-health") as HTMLElement).classList.contains("page-hidden")) return;
+  let h: Health;
+  try { h = await get<Health>("/api/health"); } catch { out.replaceChildren(span("Health figures are unavailable.", "hostile")); return; }
+  if (!h.ready || !h.cpu || !h.memory || !h.tick || !h.database || !h.bots) { out.replaceChildren(span("Measuring… figures appear within a few seconds.", "dim")); return; }
+  const gb = (mb: number) => mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`;
+  out.replaceChildren(
+    healthTile("Machine CPU", `${h.cpu.machine.toFixed(0)}%`, `${h.cpu.cores} logical cores`, h.cpu.machine),
+    healthTile("Server CPU", `${h.cpu.server.toFixed(1)}%`, "eve-server's share of the machine", h.cpu.server),
+    healthTile("Server memory", gb(h.memory.serverMb), "eve-server working set", null),
+    healthTile("Machine memory", `${h.memory.usedPercent.toFixed(0)}%`, `${gb(h.memory.usedMb)} of ${gb(h.memory.totalMb)} used`, h.memory.usedPercent),
+    healthTile("Game loop load", `${h.tick.loadPercent.toFixed(1)}%`, `of each 250 ms heartbeat; worst ${h.tick.worstMs.toFixed(0)} ms`, h.tick.loadPercent),
+    healthTile("Bot simulation", `${h.bots.loadPercent.toFixed(1)}%`, `${h.bots.stepsPerSecond} steps/s; worst tick ${h.bots.worstTickMs.toFixed(0)} ms`, h.bots.loadPercent),
+    healthTile("Database", `${h.database.pingMs.toFixed(1)} ms`, `${gb(h.database.sizeMb)}, ${h.database.connections} connections`, null),
+  );
+  const history = h.history ?? [];
+  drawChart("chart-cpu", [history.map((r) => r[1]), history.map((r) => r[2])], ["#5ab8d6", "#d9a441"], 100);
+  drawChart("chart-ram", [history.map((r) => r[3])], ["#5ab8d6"]);
+  drawChart("chart-tick", [history.map((r) => r[4])], ["#d9a441"], 10);
 }
 
 let downtimeState: DowntimeState | null = null;
@@ -295,12 +474,20 @@ let downtimeOffset = 0;
 
 function renderDowntime(): void {
   const clock = document.getElementById("downtime-clock") as HTMLElement;
+  const label = clock.querySelector("small") as HTMLElement;
+  const value = clock.querySelector("strong") as HTMLElement;
+  const restart = !!downtimeState?.restart;
+  clock.classList.toggle("restart", restart);
   if (!downtimeState?.active || !downtimeState.deadline) {
-    clock.textContent = "No downtime scheduled"; clock.classList.remove("running"); return;
+    label.textContent = "CLUSTER STATE";
+    value.textContent = "No downtime scheduled";
+    clock.classList.remove("running");
+    return;
   }
   const seconds = Math.max(0, Math.ceil((downtimeState.deadline - Date.now() - downtimeOffset) / 1000));
   clock.classList.add("running");
-  clock.textContent = `${pad(Math.floor(seconds / 60))}:${pad(seconds % 60)} until shutdown`;
+  label.textContent = restart ? "SERVER RESTART IN" : "SERVER SHUTDOWN IN";
+  value.textContent = seconds > 0 ? `${pad(Math.floor(seconds / 60))}:${pad(seconds % 60)}` : restart ? "Restarting…" : "Shutting down…";
 }
 
 async function refreshDowntime(): Promise<void> {
@@ -308,21 +495,197 @@ async function refreshDowntime(): Promise<void> {
     const state = await get<DowntimeState>("/api/downtime");
     downtimeOffset = state.now - Date.now();
     downtimeState = state;
+    for (const id of ["restart-countdown", "restart-now"]) {
+      (document.getElementById(id) as HTMLButtonElement).disabled = !state.restartAvailable;
+    }
+    setText("restart-note", state.restartAvailable
+      ? "Saves the universe, stops the server and starts it again. Pilots can log back in once it is up."
+      : "Restart needs the server to be run by the RMR launcher (Start.bat), which starts it again.");
     renderDowntime();
   } catch {
-    if (downtimeState?.active) setText("downtime-reply", "Server connection closed after the countdown.");
+    if (downtimeState?.active) {
+      setText("downtime-reply", downtimeState.restart
+        ? "The server is restarting. This page reconnects when it is back."
+        : "Server connection closed after the countdown.");
+    }
   }
 }
 
-async function changeDowntime(action: "schedule" | "cancel" | "now"): Promise<void> {
+interface BotSettings {
+  running: number;
+  configured: number | null;
+  aggression: "calm" | "some" | "all";
+  chat: string;
+  trashTalk: boolean;
+  joinPlayerCorps: string;
+  joinPlayerAlliances: string;
+  acceptApplications: string;
+  onlineActivity: number;
+  shownPerSystem: number;
+  piratesAttackPlayers: boolean;
+  countOverridden: boolean;
+  aggressionOverridden: boolean;
+  restartAvailable: boolean;
+  max: number;
+}
+
+const AGGRESSION_NOTES: Record<BotSettings["aggression"], string> = {
+  calm: "Now: all bots are calm. They attack no player unless shot first.",
+  some: "Now: some bots are aggressive. Pirates outside high-sec, sides a player has angered and their hunters attack players.",
+  all: "Now: all bots are aggressive. Every bot attacks any player it does not count as a friend.",
+};
+
+let botCountEdited = false;
+let botActivityEdited = false;
+
+function renderBots(settings: BotSettings): void {
+  const input = document.getElementById("bots-count") as HTMLInputElement;
+  input.max = String(settings.max);
+  if (!botCountEdited) {
+    input.value = String(settings.configured ?? settings.running);
+  }
+  const playing = settings.running.toLocaleString();
+  const next = settings.configured === null ? "unknown" : settings.configured.toLocaleString();
+  let note = `Playing now: ${playing}. At the next restart: ${next}.`;
+  if (settings.countOverridden) note += " The RMR_BOTS environment variable overrides the saved number.";
+  setText("bots-count-note", note);
+  (document.getElementById("bots-count-restart") as HTMLButtonElement).disabled = !settings.restartAvailable;
+  // Every choice group shows the setting it changes.
+  for (const group of document.querySelectorAll<HTMLElement>(".bot-choice[data-setting]")) {
+    const value = String((settings as unknown as Record<string, unknown>)[group.dataset.setting ?? ""]);
+    for (const button of group.querySelectorAll<HTMLButtonElement>("button[data-value]")) {
+      button.setAttribute("aria-pressed", String(button.dataset.value === value));
+    }
+  }
+  const activity = document.getElementById("bots-activity") as HTMLInputElement;
+  if (!botActivityEdited) {
+    activity.value = String(settings.onlineActivity);
+    setText("bots-activity-value", `${settings.onlineActivity.toFixed(1)}x`);
+  }
+  const shown = document.getElementById("bots-shown") as HTMLInputElement;
+  if (document.activeElement !== shown && settings.shownPerSystem > 0) shown.value = String(settings.shownPerSystem);
+  let aggression = AGGRESSION_NOTES[settings.aggression];
+  if (settings.aggressionOverridden) aggression += " RMR_BOTS_AGGRESSION sets the mode again at the next start.";
+  setText("bots-aggression-note", aggression);
+}
+
+async function refreshBotSettings(): Promise<void> {
+  try {
+    renderBots(await get<BotSettings>("/api/bots"));
+  } catch {
+    setText("bots-count-note", "Bot settings are unavailable.");
+  }
+}
+
+async function changeBots(change: Record<string, string | number | boolean | undefined>): Promise<void> {
+  const reply = document.getElementById("bots-reply") as HTMLElement;
+  if (change.restart && !window.confirm("Save the bot count and restart the server now? Connected players will disconnect and can log back in once it is up.")) return;
+  reply.classList.remove("error");
+  try {
+    const result = await postAdmin("/api/bots", change) as { ok?: string; settings?: BotSettings };
+    reply.textContent = result.ok ?? "Saved.";
+    botCountEdited = false;
+    botActivityEdited = false;
+    if (result.settings) renderBots(result.settings);
+    if (change.restart) await refreshDowntime();
+  } catch (e) {
+    reply.textContent = e instanceof Error ? e.message : String(e);
+    reply.classList.add("error");
+  }
+}
+
+function botCountInput(): number | null {
+  const input = document.getElementById("bots-count") as HTMLInputElement;
+  const count = Number(input.value);
+  if (!input.checkValidity() || !Number.isInteger(count)) {
+    input.reportValidity();
+    return null;
+  }
+  return count;
+}
+
+type DowntimeAction = "schedule" | "cancel" | "now" | "restart" | "restart-now";
+
+async function changeDowntime(action: DowntimeAction): Promise<void> {
   const reply = document.getElementById("downtime-reply") as HTMLElement;
   if (action === "now" && !window.confirm("Shut down the server now? Connected players will disconnect.")) return;
+  if (action === "restart-now" && !window.confirm("Restart the server now? Connected players will disconnect and can log back in once it is up.")) return;
   const message = (document.getElementById("downtime-message") as HTMLTextAreaElement).value;
   try {
     const result = await postAdmin("/api/downtime", { action, message });
     reply.textContent = result.ok ?? "Saved."; reply.className = "note dropped";
     await refreshDowntime();
   } catch (e) { reply.textContent = String(e); reply.className = "note hostile"; }
+}
+
+interface SeedStation {
+  id: number;
+  name: string;
+  system: string;
+  region: string;
+  security: number;
+  owner: string;
+  playerOwned: boolean;
+  seeded: boolean;
+  sellOrders: number;
+}
+
+async function refreshSeeding(): Promise<void> {
+  const reply = document.getElementById("seeding-reply") as HTMLElement;
+  const q = (document.getElementById("seeding-query") as HTMLInputElement).value.trim();
+  try {
+    const stations = await get<SeedStation[]>(`/api/stations?q=${encodeURIComponent(q)}`);
+    list<SeedStation>("seeding", [
+      { title: "Station", key: (s) => s.name.toLowerCase(), cell: (s) => [s.name, s.playerOwned ? span(" (player-owned)", "dropped") : ""] },
+      { title: "System", key: (s) => s.system.toLowerCase(), cell: (s) => [`${s.system} (${s.security.toFixed(1)})`] },
+      { title: "Region", key: (s) => s.region.toLowerCase(), cell: (s) => [s.region] },
+      { title: "Owner", key: (s) => s.owner.toLowerCase(), cell: (s) => [s.owner] },
+      { title: "Sell orders", num: true, key: (s) => s.sellOrders, cell: (s) => [numbers.format(s.sellOrders)] },
+      { title: "Seeding", key: (s) => (s.seeded ? 1 : 0), cell: (s) => {
+        const seed = document.createElement("button");
+        seed.type = "button";
+        seed.textContent = s.seeded ? "Restock" : "Seed market";
+        seed.addEventListener("click", () => void changeSeeding(s, "seed", seed));
+        if (!s.seeded) return [seed];
+        const stop = document.createElement("button");
+        stop.type = "button";
+        stop.className = "danger-button";
+        stop.textContent = "Stop seeding";
+        stop.addEventListener("click", () => void changeSeeding(s, "unseed", stop));
+        return [span("Seeded ", "dropped"), seed, stop];
+      } },
+    ], stations, q ? "No stations match that search." : "No player-owned or seeded stations yet. Search for any station by name.");
+    if (!reply.classList.contains("busy")) {
+      reply.textContent = `${stations.length} station${stations.length === 1 ? "" : "s"} listed.`;
+      reply.className = "note";
+    }
+  } catch (e) {
+    reply.textContent = `Could not load stations: ${String(e)}`;
+    reply.className = "note hostile";
+  }
+}
+
+async function changeSeeding(station: SeedStation, action: "seed" | "unseed", button: HTMLButtonElement): Promise<void> {
+  const reply = document.getElementById("seeding-reply") as HTMLElement;
+  if (action === "unseed" && !window.confirm(`Stop seeding ${station.name}?` +
+    (station.playerOwned ? " Its NPC sell orders will be removed." : " Existing orders stay until bought."))) return;
+  button.disabled = true;
+  reply.textContent = action === "seed" ? `Seeding ${station.name}…` : `Removing seeding from ${station.name}…`;
+  reply.className = "note busy";
+  try {
+    const result = await postAdmin("/api/seed", { action, stationID: station.id });
+    reply.className = "note";
+    await refreshSeeding();
+    reply.textContent = result.ok ?? "Done.";
+    reply.className = "note dropped";
+  } catch (e) {
+    reply.textContent = e instanceof Error && e.message.includes("dashboard")
+      ? "Market seeding is available only on the server machine."
+      : `Could not change seeding: ${String(e)}`;
+    reply.className = "note hostile";
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function span(text: string, className: string): HTMLElement {
@@ -339,6 +702,32 @@ function pilotLink(id: number | null | undefined, name: string | null | undefine
   a.className = "pilot-link";
   a.textContent = name || "Unknown pilot";
   a.addEventListener("click", (event) => event.stopPropagation());
+  return a;
+}
+
+/// A link to a corporation's or alliance's killboard page.
+function groupLink(kind: "corporation" | "alliance", id: number | null | undefined, name: string | null | undefined, fallback = ""): HTMLElement {
+  if (!name) return span(fallback, "");
+  if (!id || id <= 0) return span(name, "");
+  const a = document.createElement("a");
+  a.href = `#${kind}-${id}`;
+  a.className = "pilot-link";
+  a.textContent = name;
+  a.addEventListener("click", (event) => event.stopPropagation());
+  return a;
+}
+const corpLink = (id: number | null | undefined, name: string | null | undefined, fallback = "") => groupLink("corporation", id, name, fallback);
+const allianceLink = (id: number | null | undefined, name: string | null | undefined, fallback = "") => groupLink("alliance", id, name, fallback);
+
+/// A badge that opens the alliance's page, else the corporation's.
+function groupBadge(allianceID: number | null | undefined, alliance: string | null | undefined,
+  corpID: number | null | undefined, corp: string | null | undefined, ticker: string | null | undefined, small = false): HTMLElement {
+  const b = badge(alliance || corp, ticker, small);
+  const [kind, id] = alliance && allianceID ? ["alliance", allianceID] : ["corporation", corpID];
+  if (!id || id <= 0) return b;
+  const a = document.createElement("a"); a.href = `#${kind}-${id}`; a.className = "badge-link";
+  a.addEventListener("click", (event) => event.stopPropagation());
+  a.append(b);
   return a;
 }
 
@@ -449,8 +838,8 @@ function draw(id: string): void {
 
 interface KillDetail {
   error?: string;
-  kill?: { id: number; time: number; victimID: number; victim: string; victimCorporation: string; victimAlliance: string; ship: string; shipTypeID: number; shipClass: string; hullValue: number; system: string; security: number; region: string; damage: number; pod: boolean };
-  participants?: { id: number; pilot: string; corporation: string; alliance: string; ship: string; shipTypeID: number; weapon: string; damage: number; finalBlow: boolean }[];
+  kill?: { id: number; time: number; victimID: number; victim: string; victimCorporation: string; victimAlliance: string; ship: string; shipTypeID: number; shipClass: string; hullValue: number; system: string; security: number; region: string; damage: number; pod: boolean; victimCorpID: number | null; victimAllianceID: number | null };
+  participants?: { id: number; pilot: string; npc: boolean; corporation: string; alliance: string; corporationID: number | null; allianceID: number | null; ship: string; shipTypeID: number; weapon: string; damage: number; finalBlow: boolean }[];
   items?: { typeID: number; name: string; flag: number; quantity: number; dropped: boolean; unitValue: number }[];
 }
 
@@ -467,20 +856,69 @@ function typeImage(typeID: number, variation: "render" | "icon", size: number): 
   return img;
 }
 
-function card(title: string, ...content: Node[]): HTMLElement {
-  const section = document.createElement("section");
-  section.className = "kill-card";
-  const heading = document.createElement("h3");
-  heading.textContent = title;
-  section.append(heading, ...content);
-  return section;
+/// A stable colour for an alliance or corporation, used by badges and the map.
+function colourFor(key: string | number): string {
+  const text = String(key);
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  const hue = (hash >>> 0) % 360;
+  const sat = 55 + ((hash >>> 9) % 25);
+  const light = 46 + ((hash >>> 17) % 14);
+  return `hsl(${hue} ${sat}% ${light}%)`;
 }
 
-function detailLine(label: string, value: string): HTMLElement {
-  const row = document.createElement("div");
-  row.className = "detail-line";
-  row.append(span(label, "dim"), span(value, ""));
-  return row;
+/// A hexagonal emblem standing in for corporation and alliance logos, which
+/// the public image server does not have for this cluster.
+function badge(name: string | null | undefined, ticker: string | null | undefined, small = false): HTMLElement {
+  const e = document.createElement("span");
+  e.className = small ? "badge small-badge" : "badge";
+  const label = (ticker || name || "?").replace(/[^A-Za-z0-9.\-]/g, "").slice(0, small ? 3 : 5) || "?";
+  e.textContent = label.toUpperCase();
+  e.style.setProperty("--badge", colourFor(name || ticker || "?"));
+  e.title = name || ticker || "";
+  return e;
+}
+
+/// zKillboard's ISK figures: 64.72m, 1.77b, 10.00k.
+function iskShort(n: number): string {
+  const units: [number, string][] = [[1e12, "t"], [1e9, "b"], [1e6, "m"], [1e3, "k"]];
+  for (const [size, unit] of units) if (n >= size) return `${(n / size).toFixed(2)}${unit}`;
+  return n.toFixed(2);
+}
+
+const iskFull = (n: number) => `${new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n)} ISK`;
+
+function line(...content: (Node | string)[]): HTMLElement {
+  const e = document.createElement("span");
+  e.className = "line";
+  e.append(...content);
+  return e;
+}
+
+function securityLabel(s: number | null | undefined): HTMLElement {
+  return security(s ?? 0);
+}
+
+/// The client's inventory flags, grouped into zKillboard's item sections.
+const SLOT_SECTIONS: { title: string; test: (flag: number) => boolean }[] = [
+  { title: "High Slots", test: (f) => f >= 27 && f <= 34 },
+  { title: "Medium Slots", test: (f) => f >= 19 && f <= 26 },
+  { title: "Low Slots", test: (f) => f >= 11 && f <= 18 },
+  { title: "Rigs", test: (f) => f >= 92 && f <= 99 },
+  { title: "Drone Bay", test: (f) => f === 87 },
+  { title: "Cargo", test: (f) => f === 5 },
+];
+
+/// Where each slot sits on the fitting wheel, in degrees clockwise from the right.
+function slotAngle(flag: number): number | null {
+  if (flag >= 27 && flag <= 34) return -150 + (flag - 27) * 14;
+  if (flag >= 19 && flag <= 26) return -35 + (flag - 19) * 14;
+  if (flag >= 11 && flag <= 18) return 113 + (flag - 11) * 14;
+  if (flag >= 92 && flag <= 99) return 72 + (flag - 92) * 13;
+  return null;
 }
 
 async function showKill(id: number): Promise<void> {
@@ -492,74 +930,194 @@ async function showKill(id: number): Promise<void> {
     const detail = await get<KillDetail>(`/api/kill?id=${id}`);
     if (!detail.kill) { output.replaceChildren(span(detail.error ?? "Report unavailable", "hostile")); return; }
     const k = detail.kill;
-    const layout = document.createElement("div"); layout.className = "kill-layout";
-    const main = document.createElement("div"); main.className = "kill-main";
-    const side = document.createElement("aside"); side.className = "kill-side";
+    const items = detail.items ?? [];
+    const parties = detail.participants ?? [];
+
+    // The fitting wheel: modules on the rim by slot, their charges just inside.
+    const stage = document.createElement("div"); stage.className = "fitting-stage";
+    const wheel = document.createElement("div"); wheel.className = "fitting-wheel";
     const portrait = document.createElement("div"); portrait.className = "ship-portrait";
     portrait.append(typeImage(k.shipTypeID, "render", 512));
-    const shipLabel = document.createElement("div"); shipLabel.className = "ship-label";
-    shipLabel.append(span(k.shipClass || "Destroyed ship", "eyebrow"), document.createElement("strong"));
-    shipLabel.querySelector("strong")!.textContent = k.ship;
-    portrait.append(shipLabel);
-    const fitting = document.createElement("div"); fitting.className = "fitting-ring";
-    for (const [i, item] of (detail.items ?? []).filter((item) => item.flag >= 11 && item.flag <= 35).slice(0, 20).entries()) {
-      const icon = document.createElement("div"); icon.className = "fitting-icon";
-      const angle = (i / Math.min(20, (detail.items ?? []).length)) * Math.PI * 2 - Math.PI / 2;
-      icon.style.left = `${50 + 43 * Math.cos(angle)}%`;
-      icon.style.top = `${50 + 43 * Math.sin(angle)}%`;
+    const ring = document.createElement("div"); ring.className = "fitting-ring";
+    const seen = new Set<number>();
+    for (const item of items) {
+      const angle = slotAngle(item.flag);
+      if (angle === null) continue;
+      const charge = seen.has(item.flag);
+      seen.add(item.flag);
+      const radius = charge ? 33 : 42.5;
+      const icon = document.createElement("div");
+      icon.className = charge ? "fitting-icon charge" : "fitting-icon";
+      icon.style.left = `${50 + radius * Math.cos((angle * Math.PI) / 180)}%`;
+      icon.style.top = `${50 + radius * Math.sin((angle * Math.PI) / 180)}%`;
       icon.title = item.name;
       icon.append(typeImage(item.typeID, "icon", 64));
-      fitting.append(icon);
+      ring.append(icon);
     }
-    const fittingStage = document.createElement("div"); fittingStage.className = "fitting-stage";
-    fittingStage.append(portrait, fitting);
-    main.append(fittingStage);
-    if (!detail.items?.length) main.append(span("Fitting and cargo were not recorded for this older killmail.", "kill-history-note"));
-    const itemTable = document.createElement("table"); itemTable.className = "kill-items";
-    const itemHead = itemTable.createTHead().insertRow();
-    for (const h of ["Item", "Qty", "Base value", "Status"]) { const th = document.createElement("th"); th.textContent = h; itemHead.append(th); }
-    const itemBody = itemTable.createTBody();
-    for (const item of detail.items ?? []) {
-      const tr = itemBody.insertRow();
-      const name = tr.insertCell(); name.className = "item-name";
-      name.append(typeImage(item.typeID, "icon", 64), span(item.name, ""));
-      tr.insertCell().textContent = numbers.format(item.quantity);
-      tr.insertCell().textContent = item.unitValue > 0 ? isk(item.unitValue * item.quantity) : "—";
-      const status = tr.insertCell(); status.textContent = item.dropped ? "Dropped" : "Destroyed";
-      status.className = item.dropped ? "dropped" : "hostile";
+    stage.append(wheel, portrait, ring);
+    const left = document.createElement("div");
+    left.append(stage);
+    if (!items.length) left.append(span("Fitting and cargo were not recorded for this killmail.", "kill-history-note"));
+
+    // Values: the hull and everything destroyed with it, and what dropped.
+    const dropped = items.filter((i) => i.dropped).reduce((sum, i) => sum + i.unitValue * i.quantity, 0);
+    const destroyed = (k.hullValue || 0) + items.filter((i) => !i.dropped).reduce((sum, i) => sum + i.unitValue * i.quantity, 0);
+    const total = destroyed + dropped;
+    const pct = (n: number) => (total > 0 ? `${((n / total) * 100).toFixed(1)}%` : "");
+
+    const info = document.createElement("table"); info.className = "km-info";
+    const body = info.createTBody();
+    const row = (label: string, ...content: (Node | string)[]) => {
+      const tr = body.insertRow();
+      const th = document.createElement("th"); th.textContent = label;
+      const td = tr.insertCell(); td.append(...content);
+      tr.prepend(th);
+      return tr;
+    };
+    const victimBlock = document.createElement("div"); victimBlock.className = "km-victim";
+    const victimNames = document.createElement("div");
+    victimNames.append(pilotLink(k.victimID, k.victim), corpLink(k.victimCorpID, k.victimCorporation), allianceLink(k.victimAllianceID, k.victimAlliance));
+    victimBlock.append(groupBadge(k.victimAllianceID, k.victimAlliance, k.victimCorpID, k.victimCorporation, null), victimNames);
+    const victimRow = body.insertRow();
+    const victimCell = victimRow.insertCell(); victimCell.colSpan = 2; victimCell.append(victimBlock);
+    row("Ship:", span(k.ship, "ship-name"), span(k.shipClass ? ` ( ${k.shipClass} )` : "", "dim"));
+    row("System:", span(k.system, ""), " (", securityLabel(k.security), ") / ", span(k.region, ""));
+    row("Time:", `${eveTime(k.time)}`);
+    row("Damage:", numbers.format(Math.round(k.damage)));
+    row("Destroyed:", span(iskFull(destroyed), "val-destroyed"), span(pct(destroyed), "pct val-destroyed"));
+    row("Dropped:", span(iskFull(dropped), "val-dropped"), span(pct(dropped), "pct val-dropped")).className = "row-dropped";
+    row("Total:", span(iskFull(total), "val-total"));
+
+    // The pilots involved, final blow and top damage first.
+    const people = document.createElement("div"); people.className = "km-people";
+    const finalBlow = parties.find((p) => p.finalBlow);
+    const topDamage = [...parties].sort((a, b) => b.damage - a.damage)[0];
+    const highlights = document.createElement("div"); highlights.className = "km-highlights";
+    for (const [label, p] of [["Final Blow", finalBlow], ["Top Damage", topDamage]] as [string, typeof finalBlow][]) {
+      const cell = document.createElement("div");
+      cell.append(span(label, ""));
+      if (p) cell.append(p.npc ? badge(p.pilot, null) : groupBadge(p.allianceID, p.alliance, p.corporationID, p.corporation, null), partyName(p));
+      else cell.append(span("—", "dim"));
+      highlights.append(cell);
     }
-    main.append(card(`Items destroyed & dropped (${detail.items?.length ?? 0})`, itemTable));
-    const victim = document.createElement("div"); victim.className = "victim-name";
-    victim.append(typeImage(k.shipTypeID, "icon", 64), pilotLink(k.victimID, k.victim));
-    side.append(card("Victim", victim, detailLine("Corporation", k.victimCorporation || "Unknown"), detailLine("Alliance", k.victimAlliance || "—")));
-    side.append(card("Kill details", detailLine("System", `${k.system} (${k.security.toFixed(1)})`), detailLine("Region", k.region), detailLine("Time", `${eveTime(k.time)} EVE`), detailLine("Total damage", numbers.format(k.damage))));
-    side.append(card("Estimated hull value", detailLine("Base price", k.hullValue > 0 ? isk(k.hullValue) : "Unavailable"), span("Historical kill values require prices that were not recorded at the time.", "dim small")));
-    const finalBlow = detail.participants?.find((p) => p.finalBlow);
-    const finalPilot = document.createElement("div"); finalPilot.className = "final-pilot";
-    finalPilot.append(pilotLink(finalBlow?.id, finalBlow?.pilot), span(finalBlow?.ship || "—", "dim"));
-    side.append(card("Final blow", finalPilot, detailLine("Weapon", finalBlow?.weapon || "—")));
-    const partyList = document.createElement("div"); partyList.className = "party-list";
-    for (const p of detail.participants ?? []) {
-      const party = document.createElement("div"); party.className = "party";
+    const involved = document.createElement("div"); involved.className = "km-involved";
+    const heading = document.createElement("h4");
+    heading.append(span(`${parties.length} Involved`, ""), span("Damage", ""));
+    involved.append(heading);
+    const totalDamage = parties.reduce((sum, p) => sum + p.damage, 0) || 1;
+    for (const p of parties) {
+      const party = document.createElement("div");
+      party.className = p.finalBlow ? "party final-blow" : "party";
       if (p.shipTypeID) party.append(typeImage(p.shipTypeID, "icon", 64));
-      const names = document.createElement("div"); names.append(pilotLink(p.id, p.pilot), span([p.corporation, p.alliance].filter(Boolean).join(" · "), "dim"));
-      party.append(names, span(`${numbers.format(p.damage)}${p.finalBlow ? " · FINAL BLOW" : ""}`, p.finalBlow ? "hostile" : "dim"));
-      partyList.append(party);
+      const names = document.createElement("div");
+      const corpName = corpLink(p.corporationID, p.corporation); corpName.classList.add("small");
+      const allianceName = allianceLink(p.allianceID, p.alliance); allianceName.classList.add("small");
+      names.append(partyName(p), corpName, allianceName);
+      const dmg = document.createElement("div"); dmg.className = "dmg";
+      dmg.append(numbers.format(Math.round(p.damage)));
+      const share = document.createElement("small"); share.textContent = `${((p.damage / totalDamage) * 100).toFixed(1)}%`;
+      dmg.append(share);
+      party.append(names, dmg);
+      involved.append(party);
     }
-    side.append(card(`Involved parties (${detail.participants?.length ?? 0})`, partyList));
-    layout.append(main, side);
-    output.replaceChildren(layout);
+    people.append(highlights, involved);
+
+    const top = document.createElement("div"); top.className = "km-top";
+    top.append(left, info, people);
+
+    // Items, grouped by where they were fitted or carried.
+    const itemsHead = document.createElement("div"); itemsHead.className = "km-items-head";
+    const itemsTitle = document.createElement("h2"); itemsTitle.textContent = "Item(s)";
+    itemsHead.append(itemsTitle, span(`${items.length} recorded`, "dim"));
+    const itemTable = document.createElement("table"); itemTable.className = "kill-items";
+    const head = itemTable.createTHead().insertRow();
+    for (const [h, cls] of [["Item Name", ""], ["Qty", "num"], ["Value", "num"]]) {
+      const th = document.createElement("th"); th.textContent = h; th.className = cls; head.append(th);
+    }
+    const itemBody = itemTable.createTBody();
+    const placed = new Set<number>();
+    const sections = [...SLOT_SECTIONS, { title: "Other", test: (_flag: number) => true }];
+    for (const { title, test } of sections) {
+      const group = items.map((item, index) => ({ item, index })).filter(({ item, index }) => !placed.has(index) && test(item.flag));
+      if (!group.length) continue;
+      const slotRow = itemBody.insertRow(); slotRow.className = "slot-row";
+      const slotCell = slotRow.insertCell(); slotCell.colSpan = 3; slotCell.textContent = title;
+      for (const { item, index } of group) {
+        placed.add(index);
+        const tr = itemBody.insertRow();
+        tr.className = item.dropped ? "item-dropped" : "item-destroyed";
+        const name = document.createElement("div"); name.className = "item-name";
+        name.append(typeImage(item.typeID, "icon", 64), span(item.name, ""));
+        tr.insertCell().append(name);
+        const qty = tr.insertCell(); qty.className = "num qty";
+        qty.textContent = `${numbers.format(item.quantity)} ${item.dropped ? "✓" : "✗"}`;
+        const value = tr.insertCell(); value.className = "val";
+        value.textContent = item.unitValue > 0 ? numbers.format(Math.round(item.unitValue * item.quantity * 100) / 100) : "—";
+      }
+    }
+    if (!items.length) {
+      const empty = itemBody.insertRow().insertCell(); empty.colSpan = 3; empty.className = "empty";
+      empty.textContent = "No items were recorded.";
+    }
+    output.replaceChildren(top, itemsHead, itemTable);
   } catch (e) { output.replaceChildren(span(`Could not load report: ${String(e)}`, "hostile")); }
+}
+
+function partyName(p: { id: number; pilot: string; npc?: boolean }): HTMLElement {
+  if (p.npc || p.id <= 0) {
+    const e = span(p.pilot || "NPC", "");
+    e.append(span("NPC", "npc-tag"));
+    return e;
+  }
+  return pilotLink(p.id, p.pilot);
 }
 
 interface PilotProfile {
   error?: string;
-  pilot?: { id: number; name: string; corporation: string; ticker: string; alliance: string; security: number };
-  kills: number;
-  losses: number;
+  pilot?: { id: number; name: string; corporation: string; ticker: string; alliance: string; allianceTicker: string;
+    corporationID: number | null; allianceID: number | null;
+    security: number; birthday: number | null; bot: boolean };
+  destroyed: number;
+  lost: number;
+  iskDestroyed: number;
+  iskLost: number;
+  soloKills: number;
+  avgInvolved: number;
   finalBlows: number;
+  podKills: number;
+  topKills: FeaturedKill[];
+  /// [ISO weekday 1-7, UTC hour, kills and losses] over the last 90 days.
+  activity: [number, number, number][];
+  week: { ships: number; systems: number; regions: number; kills: number };
   ships: { ship: string; typeID: number; kills: number }[];
-  recent: { id: number; time: number; victimID: number; victim: string; ship: string; shipTypeID: number; system: string; loss: boolean }[];
+  systems: { name: string; security: number; kills: number }[];
+  together: { id: number; name: string; kills: number }[];
+}
+
+let pilotView = { id: 0, mode: "all", page: 0 };
+
+const pct1 = (a: number, b: number) => (a + b > 0 ? (a / (a + b)) * 100 : 0);
+
+/// A two-coloured bar, as zKillboard's Dangerous / Snuggly and gang bars.
+function ratioBar(left: number, leftLabel: string, rightLabel: string, title: string): HTMLElement {
+  const wrap = document.createElement("div"); wrap.className = "zp-ratio"; wrap.title = title;
+  const bar = document.createElement("div"); bar.className = "zp-bar";
+  const a = document.createElement("span"); a.className = "zp-bar-left"; a.style.width = `${left}%`;
+  a.textContent = left >= 12 ? `${Math.round(left)}%` : "";
+  const b = document.createElement("span"); b.className = "zp-bar-right"; b.style.width = `${100 - left}%`;
+  b.textContent = 100 - left >= 12 ? `${Math.round(100 - left)}%` : "";
+  bar.append(a, b);
+  const labels = document.createElement("div"); labels.className = "zp-bar-labels";
+  labels.append(span(leftLabel, "hostile"), span(rightLabel, "dropped"));
+  wrap.append(bar, labels);
+  return wrap;
+}
+
+function sideBox(title: string, ...content: Node[]): HTMLElement {
+  const box = document.createElement("section"); box.className = "zp-side-box";
+  const h = document.createElement("h3"); h.textContent = title;
+  box.append(h, ...content);
+  return box;
 }
 
 async function showPilot(id: number): Promise<void> {
@@ -569,41 +1127,365 @@ async function showPilot(id: number): Promise<void> {
     const profile = await get<PilotProfile>(`/api/pilot?id=${id}`);
     if (!profile.pilot) { out.replaceChildren(span(profile.error || "Pilot unavailable", "hostile")); return; }
     const p = profile.pilot;
-    const hero = document.createElement("div"); hero.className = "pilot-hero";
-    const avatar = span(p.name.slice(0, 1).toUpperCase(), "pilot-avatar");
+    pilotView = { id, mode: "all", page: 0 };
+
+    // Who: portrait and identity, as zKillboard's character block.
+    const head = document.createElement("div"); head.className = "zp-head";
+    const who = document.createElement("div"); who.className = "zp-who";
+    const avatar = span(p.name.slice(0, 1).toUpperCase(), "pilot-avatar zp-portrait");
     const portrait = document.createElement("img");
     portrait.src = `https://images.evetech.net/characters/${p.id}/portrait?size=128`;
     portrait.alt = p.name;
     portrait.addEventListener("load", () => avatar.replaceChildren(portrait));
-    const identity = document.createElement("div");
-    const heading = document.createElement("h2"); heading.textContent = p.name;
-    identity.append(span("CAPSULEER RECORD", "eyebrow"), heading,
-      span([p.corporation, p.ticker ? `[${p.ticker}]` : "", p.alliance].filter(Boolean).join(" · "), "dim"));
-    hero.append(avatar, identity, security(p.security));
-    const stats = document.createElement("div"); stats.className = "profile-stats";
-    for (const [label, value] of [["Kills involved", profile.kills], ["Final blows", profile.finalBlows], ["Losses", profile.losses]] as [string, number][]) {
-      const tile = document.createElement("div"); tile.className = "stat-tile";
-      tile.append(span(label, "eyebrow"), span(numbers.format(value), "stat-number")); stats.append(tile);
+    const facts = document.createElement("table"); facts.className = "zp-facts";
+    const fact = (label: string, ...value: (Node | string)[]) => {
+      const tr = facts.insertRow();
+      const th = document.createElement("th"); th.textContent = label; tr.append(th);
+      tr.insertCell().append(...value);
+    };
+    fact("Character:", span(p.name, "zp-name"));
+    fact("Corporation:", corpLink(p.corporationID, p.corporation, "None"), p.ticker ? span(` [${p.ticker}]`, "dim") : "");
+    fact("Alliance:", allianceLink(p.allianceID, p.alliance, "None"), p.allianceTicker ? span(` <${p.allianceTicker}>`, "dim") : "");
+    fact("Sec. Status:", security(p.security));
+    if (p.birthday) {
+      const b = new Date(p.birthday);
+      fact("Birthday:", `${b.getUTCFullYear()}-${pad(b.getUTCMonth() + 1)}-${pad(b.getUTCDate())}`);
     }
-    const layout = document.createElement("div"); layout.className = "profile-layout";
-    const activity = card("Recent activity", document.createElement("table"));
-    activity.querySelector("table")!.id = "profile-kills";
-    const side = card("Most used ships", document.createElement("table"));
-    side.querySelector("table")!.id = "profile-ships";
-    layout.append(activity, side);
-    out.replaceChildren(hero, stats, layout);
-    list("profile-kills", [
-      { title: "Result", key: (k) => k.loss ? 1 : 0, cell: (k) => [span(k.loss ? "LOSS" : "KILL", k.loss ? "hostile" : "dropped")] },
-      { title: "Ship", key: (k) => k.ship, cell: (k) => [typeImage(k.shipTypeID, "icon", 64), span(k.ship, "ship-name")] },
-      { title: "Victim", key: (k) => k.victim, cell: (k) => [pilotLink(k.victimID, k.victim)] },
-      { title: "System", key: (k) => k.system, cell: (k) => [k.system] },
-      { title: "Time", key: (k) => k.time, cell: (k) => [eveTime(k.time)] },
-    ], profile.recent, "No recorded kills or losses.", 4, true);
-    list("profile-ships", [
-      { title: "Ship", key: (s) => s.ship, cell: (s) => [typeImage(s.typeID, "icon", 64), s.ship] },
-      { title: "Kills", num: true, key: (s) => s.kills, cell: (s) => count(s.kills) },
-    ], profile.ships, "No ships recorded in kills.", 1, true);
+    fact("Pilot:", p.bot ? span("Simulated capsuleer", "dim") : span("Player", "dropped"));
+    who.append(avatar, facts);
+
+    // The numbers: ships and ISK destroyed against lost, with efficiency.
+    const numbersTable = document.createElement("table"); numbersTable.className = "zp-numbers";
+    const nh = numbersTable.createTHead().insertRow();
+    for (const t of ["", "Destroyed", "Lost", "Eff. %"]) { const th = document.createElement("th"); th.textContent = t; nh.append(th); }
+    const nb = numbersTable.createTBody();
+    const numberRow = (label: string, destroyed: string, lost: string, eff: number) => {
+      const tr = nb.insertRow();
+      const th = document.createElement("th"); th.textContent = label; tr.append(th);
+      tr.insertCell().append(span(destroyed, "dropped"));
+      tr.insertCell().append(span(lost, "hostile"));
+      tr.insertCell().append(span(eff.toFixed(1), eff >= 50 ? "dropped" : "hostile"));
+    };
+    numberRow("Ships", numbers.format(profile.destroyed), numbers.format(profile.lost), pct1(profile.destroyed, profile.lost));
+    numberRow("ISK", iskShort(profile.iskDestroyed), iskShort(profile.iskLost), pct1(profile.iskDestroyed, profile.iskLost));
+    numberRow("Final blows", numbers.format(profile.finalBlows), "", profile.destroyed ? (profile.finalBlows / profile.destroyed) * 100 : 0);
+    const soloShare = profile.destroyed ? (profile.soloKills / profile.destroyed) * 100 : 0;
+    const bars = document.createElement("div"); bars.className = "zp-bars";
+    bars.append(
+      ratioBar(pct1(profile.destroyed, profile.lost), "Dangerous", "Snuggly", "Ships destroyed against ships lost"),
+      ratioBar(100 - soloShare, profile.avgInvolved ? `${profile.avgInvolved.toFixed(1)} avg gang` : "Gang", `${numbers.format(profile.soloKills)} solo kills`, "Kills with others against solo kills"),
+    );
+    const right = document.createElement("div"); right.className = "zp-stats";
+    right.append(numbersTable, bars);
+    head.append(who, right);
+
+    // Overview / Kills / Losses tabs, then the most valuable kills.
+    const tabs = document.createElement("nav"); tabs.className = "zp-tabs";
+    for (const [mode, label] of [["all", "Overview"], ["kills", "Kills"], ["losses", "Losses"]] as [string, string][]) {
+      const tab = document.createElement("button"); tab.type = "button"; tab.textContent = label;
+      tab.dataset.mode = mode;
+      tab.className = mode === "all" ? "active" : "";
+      tab.addEventListener("click", () => {
+        for (const t of tabs.querySelectorAll("button")) t.classList.toggle("active", t === tab);
+        pilotView = { id, mode, page: 0 };
+        void loadPilotKills();
+      });
+      tabs.append(tab);
+    }
+    const tiles = document.createElement("div"); tiles.id = "pilot-top"; tiles.className = "zkb-tiles";
+
+    const main = document.createElement("div"); main.className = "zp-main";
+    const listHead = document.createElement("div"); listHead.className = "zp-list-head";
+    const listTitle = document.createElement("h3"); listTitle.id = "pilot-list-title"; listTitle.textContent = "Kills and losses";
+    const pager = document.createElement("div"); pager.className = "zp-pager";
+    const prev = document.createElement("button"); prev.type = "button"; prev.id = "pilot-prev"; prev.textContent = "‹";
+    const page = span("", "dim"); page.id = "pilot-page";
+    const next = document.createElement("button"); next.type = "button"; next.id = "pilot-next"; next.textContent = "›";
+    prev.addEventListener("click", () => { if (pilotView.page > 0) { pilotView.page--; void loadPilotKills(); } });
+    next.addEventListener("click", () => { pilotView.page++; void loadPilotKills(); });
+    pager.append(prev, page, next);
+    listHead.append(listTitle, pager);
+    const table = document.createElement("table"); table.id = "pilot-kills"; table.className = "zkb-kills";
+    main.append(listHead, table);
+
+    // The sidebar: when they fight, the last week, ships, systems, wingmen.
+    const side = document.createElement("aside"); side.className = "zp-side";
+    const heat = document.createElement("div"); heat.className = "zp-heat";
+    const max = Math.max(1, ...profile.activity.map((a) => a[2]));
+    const cells = new Map(profile.activity.map((a) => [`${a[0]}-${a[1]}`, a[2]]));
+    const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    for (let d = 1; d <= 7; d++) {
+      heat.append(span(days[d - 1], "zp-heat-day"));
+      for (let h = 0; h < 24; h++) {
+        const n = cells.get(`${d}-${h}`) ?? 0;
+        const cell = document.createElement("span"); cell.className = "zp-heat-cell";
+        cell.style.setProperty("--heat", String(n / max));
+        cell.title = `${days[d - 1]} ${pad(h)}:00 EVE: ${n} kill${n === 1 ? "" : "s"} and losses`;
+        heat.append(cell);
+      }
+    }
+    const week = document.createElement("dl"); week.className = "zp-week";
+    for (const [label, value] of [["Ships", profile.week.ships], ["Systems", profile.week.systems], ["Regions", profile.week.regions], ["Total kills", profile.week.kills]] as [string, number][]) {
+      const dt = document.createElement("dt"); dt.textContent = label;
+      const dd = document.createElement("dd"); dd.textContent = numbers.format(value);
+      week.append(dt, dd);
+    }
+    const ranked = (entries: { label: Node; count: number }[], empty: string) => {
+      const ol = document.createElement("ol"); ol.className = "zp-ranked";
+      for (const e of entries) {
+        const li = document.createElement("li");
+        li.append(e.label, span(numbers.format(e.count), "count"));
+        ol.append(li);
+      }
+      return entries.length ? ol : span(empty, "dim");
+    };
+    const shipLabel = (s: { ship: string; typeID: number }) => {
+      const e = document.createElement("span"); e.className = "zp-ship"; e.append(typeImage(s.typeID, "icon", 32), s.ship); return e;
+    };
+    side.append(
+      sideBox("Activity (last 90 days)", heat, span("EVE time, Monday to Sunday", "zp-note")),
+      sideBox("Active PvP (last 7 days)", week),
+      sideBox("Top ships", ranked(profile.ships.map((s) => ({ label: shipLabel(s), count: s.kills })), "No kills yet.")),
+      sideBox("Top systems", ranked(profile.systems.map((s) => {
+        const e = document.createElement("span"); e.append(securityLabel(s.security), ` ${s.name}`);
+        return { label: e, count: s.kills };
+      }), "No kills yet.")),
+      sideBox("Flies with", ranked(profile.together.map((t) => ({ label: pilotLink(t.id, t.name), count: t.kills })), "Always solo so far.")),
+    );
+
+    const body = document.createElement("div"); body.className = "zp-body";
+    const left = document.createElement("div"); left.className = "zp-left";
+    left.append(tabs, tiles, main);
+    body.append(left, side);
+    out.replaceChildren(head, body);
+    featuredTiles("pilot-top", profile.topKills, false, "No ships destroyed yet.");
+    await loadPilotKills();
   } catch (e) { out.replaceChildren(span(`Could not load pilot: ${String(e)}`, "hostile")); }
+}
+
+interface GroupProfile {
+  error?: string;
+  kind: "corporation" | "alliance";
+  info?: { id: number; name: string; ticker: string; description: string; members: number;
+    ceoID?: number; ceo?: string; allianceID?: number | null; alliance?: string; allianceTicker?: string; npc?: boolean; outposts?: number;
+    executorID?: number | null; executor?: string; corporations?: number; systems?: number; founded?: number | null };
+  destroyed: number;
+  lost: number;
+  iskDestroyed: number;
+  iskLost: number;
+  soloKills: number;
+  avgInvolved: number;
+  topKills: FeaturedKill[];
+  activity: [number, number, number][];
+  week: { ships: number; systems: number; regions: number; kills: number; pilots: number };
+  pilots: { id: number; name: string; kills: number }[];
+  ships: { ship: string; typeID: number; kills: number }[];
+  systems: { name: string; security: number; kills: number }[];
+  corporations: { id: number; name: string; ticker: string; members: number }[];
+}
+
+let groupView = { kind: "corporation", id: 0, mode: "all", page: 0 };
+
+/// The 7-by-24 grid of when someone fights, as zKillboard's activity chart.
+function activityHeat(activity: [number, number, number][]): HTMLElement {
+  const heat = document.createElement("div"); heat.className = "zp-heat";
+  const max = Math.max(1, ...activity.map((a) => a[2]));
+  const cells = new Map(activity.map((a) => [`${a[0]}-${a[1]}`, a[2]]));
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  for (let d = 1; d <= 7; d++) {
+    heat.append(span(days[d - 1], "zp-heat-day"));
+    for (let h = 0; h < 24; h++) {
+      const n = cells.get(`${d}-${h}`) ?? 0;
+      const cell = document.createElement("span"); cell.className = "zp-heat-cell";
+      cell.style.setProperty("--heat", String(n / max));
+      cell.title = `${days[d - 1]} ${pad(h)}:00 EVE: ${n} kills and losses`;
+      heat.append(cell);
+    }
+  }
+  return heat;
+}
+
+function rankedList(entries: { label: Node; count: number }[], empty: string): HTMLElement {
+  if (!entries.length) return span(empty, "dim");
+  const ol = document.createElement("ol"); ol.className = "zp-ranked";
+  for (const e of entries) {
+    const li = document.createElement("li");
+    li.append(e.label, span(numbers.format(e.count), "count"));
+    ol.append(li);
+  }
+  return ol;
+}
+
+async function showGroup(kind: "corporation" | "alliance", id: number): Promise<void> {
+  const out = document.getElementById("group-profile") as HTMLElement;
+  setText("group-caption", kind === "alliance" ? "Alliance record" : "Corporation record");
+  out.replaceChildren(span("Loading…", "dim"));
+  try {
+    const g = await get<GroupProfile>(`/api/${kind}?id=${id}`);
+    if (!g.info) { out.replaceChildren(span(g.error || "Not found", "hostile")); return; }
+    const info = g.info;
+    groupView = { kind, id, mode: "all", page: 0 };
+    setText("page-title", info.name);
+
+    const head = document.createElement("div"); head.className = "zp-head";
+    const who = document.createElement("div"); who.className = "zp-who";
+    const logo = badge(info.name, info.ticker); logo.classList.add("zp-logo");
+    const facts = document.createElement("table"); facts.className = "zp-facts";
+    const fact = (label: string, ...value: (Node | string)[]) => {
+      const tr = facts.insertRow();
+      const th = document.createElement("th"); th.textContent = label; tr.append(th);
+      tr.insertCell().append(...value);
+    };
+    if (kind === "corporation") {
+      fact("Corporation:", span(info.name, "zp-name"), span(` [${info.ticker}]`, "dim"));
+      fact("Alliance:", allianceLink(info.allianceID, info.alliance, "None"), info.allianceTicker ? span(` <${info.allianceTicker}>`, "dim") : "");
+      fact("CEO:", info.ceo ? pilotLink(info.ceoID, info.ceo) : span("None", "dim"));
+      fact("Members:", numbers.format(info.members));
+      if (info.outposts) fact("Outposts:", numbers.format(info.outposts));
+      if (info.npc) fact("Type:", span("NPC corporation", "dim"));
+    } else {
+      fact("Alliance:", span(info.name, "zp-name"), span(` <${info.ticker}>`, "dim"));
+      fact("Executor:", corpLink(info.executorID, info.executor, "None"));
+      fact("Corporations:", numbers.format(info.corporations ?? 0));
+      fact("Members:", numbers.format(info.members));
+      fact("Systems held:", numbers.format(info.systems ?? 0));
+      if (info.founded) {
+        const f = new Date(info.founded);
+        fact("Founded:", `${f.getUTCFullYear()}-${pad(f.getUTCMonth() + 1)}-${pad(f.getUTCDate())}`);
+      }
+    }
+    who.append(logo, facts);
+
+    const numbersTable = document.createElement("table"); numbersTable.className = "zp-numbers";
+    const nh = numbersTable.createTHead().insertRow();
+    for (const t of ["", "Destroyed", "Lost", "Eff. %"]) { const th = document.createElement("th"); th.textContent = t; nh.append(th); }
+    const nb = numbersTable.createTBody();
+    const numberRow = (label: string, destroyed: string, lost: string, eff: number) => {
+      const tr = nb.insertRow();
+      const th = document.createElement("th"); th.textContent = label; tr.append(th);
+      tr.insertCell().append(span(destroyed, "dropped"));
+      tr.insertCell().append(span(lost, "hostile"));
+      tr.insertCell().append(span(eff.toFixed(1), eff >= 50 ? "dropped" : "hostile"));
+    };
+    numberRow("Ships", numbers.format(g.destroyed), numbers.format(g.lost), pct1(g.destroyed, g.lost));
+    numberRow("ISK", iskShort(g.iskDestroyed), iskShort(g.iskLost), pct1(g.iskDestroyed, g.iskLost));
+    const soloShare = g.destroyed ? (g.soloKills / g.destroyed) * 100 : 0;
+    const bars = document.createElement("div"); bars.className = "zp-bars";
+    bars.append(
+      ratioBar(pct1(g.destroyed, g.lost), "Dangerous", "Snuggly", "Ships destroyed against ships lost"),
+      ratioBar(100 - soloShare, g.avgInvolved ? `${g.avgInvolved.toFixed(1)} avg gang` : "Gang", `${numbers.format(g.soloKills)} solo kills`, "Kills with others against solo kills"),
+    );
+    const right = document.createElement("div"); right.className = "zp-stats";
+    right.append(numbersTable, bars);
+    if (info.description) {
+      const d = document.createElement("p"); d.className = "zp-description"; d.textContent = info.description.replace(/<[^>]*>/g, " ").slice(0, 400);
+      right.append(d);
+    }
+    head.append(who, right);
+
+    const tabs = document.createElement("nav"); tabs.className = "zp-tabs";
+    for (const [mode, label] of [["all", "Overview"], ["kills", "Kills"], ["losses", "Losses"]] as [string, string][]) {
+      const tab = document.createElement("button"); tab.type = "button"; tab.textContent = label;
+      tab.className = mode === "all" ? "active" : "";
+      tab.addEventListener("click", () => {
+        for (const t of tabs.querySelectorAll("button")) t.classList.toggle("active", t === tab);
+        groupView = { kind, id, mode, page: 0 };
+        void loadGroupKills();
+      });
+      tabs.append(tab);
+    }
+    const tiles = document.createElement("div"); tiles.id = "group-top"; tiles.className = "zkb-tiles";
+    const main = document.createElement("div"); main.className = "zp-main";
+    const listHead = document.createElement("div"); listHead.className = "zp-list-head";
+    const listTitle = document.createElement("h3"); listTitle.id = "group-list-title"; listTitle.textContent = "Kills and losses";
+    const pager = document.createElement("div"); pager.className = "zp-pager";
+    const prev = document.createElement("button"); prev.type = "button"; prev.id = "group-prev"; prev.textContent = "‹";
+    const page = span("", "dim"); page.id = "group-page";
+    const next = document.createElement("button"); next.type = "button"; next.id = "group-next"; next.textContent = "›";
+    prev.addEventListener("click", () => { if (groupView.page > 0) { groupView.page--; void loadGroupKills(); } });
+    next.addEventListener("click", () => { groupView.page++; void loadGroupKills(); });
+    pager.append(prev, page, next);
+    listHead.append(listTitle, pager);
+    const table = document.createElement("table"); table.id = "group-kills"; table.className = "zkb-kills";
+    main.append(listHead, table);
+
+    const side = document.createElement("aside"); side.className = "zp-side";
+    const week = document.createElement("dl"); week.className = "zp-week";
+    for (const [label, value] of [["Pilots", g.week.pilots], ["Ships", g.week.ships], ["Systems", g.week.systems], ["Regions", g.week.regions], ["Total kills", g.week.kills]] as [string, number][]) {
+      const dt = document.createElement("dt"); dt.textContent = label;
+      const dd = document.createElement("dd"); dd.textContent = numbers.format(value);
+      week.append(dt, dd);
+    }
+    const shipLabel = (s: { ship: string; typeID: number }) => {
+      const e = document.createElement("span"); e.className = "zp-ship"; e.append(typeImage(s.typeID, "icon", 32), s.ship); return e;
+    };
+    side.append(
+      sideBox("Activity (last 90 days)", activityHeat(g.activity), span("EVE time, Monday to Sunday", "zp-note")),
+      sideBox("Active PvP (last 7 days)", week),
+      sideBox("Top pilots", rankedList(g.pilots.map((p) => ({ label: pilotLink(p.id, p.name), count: p.kills })), "No kills yet.")),
+    );
+    if (kind === "alliance") {
+      side.append(sideBox("Member corporations", rankedList(g.corporations.map((c) => {
+        const e = document.createElement("span"); e.append(corpLink(c.id, c.name), corpTicker(c.ticker));
+        return { label: e, count: c.members };
+      }), "No member corporations.")));
+    }
+    side.append(
+      sideBox("Top ships", rankedList(g.ships.map((s) => ({ label: shipLabel(s), count: s.kills })), "No kills yet.")),
+      sideBox("Top systems", rankedList(g.systems.map((s) => {
+        const e = document.createElement("span"); e.append(securityLabel(s.security), ` ${s.name}`);
+        return { label: e, count: s.kills };
+      }), "No kills yet.")),
+    );
+
+    const body = document.createElement("div"); body.className = "zp-body";
+    const left = document.createElement("div"); left.className = "zp-left";
+    left.append(tabs, tiles, main);
+    body.append(left, side);
+    out.replaceChildren(head, body);
+    featuredTiles("group-top", g.topKills, false, "No ships destroyed yet.");
+    await loadGroupKills();
+  } catch (e) { out.replaceChildren(span(`Could not load: ${String(e)}`, "hostile")); }
+}
+
+async function loadGroupKills(): Promise<void> {
+  const { kind, id, mode, page } = groupView;
+  const table = document.getElementById("group-kills") as HTMLTableElement | null;
+  if (!table) return;
+  const titles: Record<string, string> = { all: "Kills and losses", kills: "Kills", losses: "Losses" };
+  setText("group-list-title", titles[mode] ?? "Kills and losses");
+  try {
+    const rows = await get<Kill[]>(`/api/group-kills?kind=${kind}&id=${id}&mode=${mode}&page=${page}`);
+    if (groupView.id !== id || groupView.mode !== mode || groupView.page !== page) return;
+    const empty = mode === "losses" ? "No losses recorded." : mode === "kills" ? "No kills recorded." : "No kills or losses recorded.";
+    renderKillTable(table, rows, page > 0 && !rows.length ? "No more on this page." : empty, 0, { kind: kind as "corporation" | "alliance", id });
+    setText("group-page", `Page ${page + 1}`);
+    (document.getElementById("group-prev") as HTMLButtonElement).disabled = page === 0;
+    (document.getElementById("group-next") as HTMLButtonElement).disabled = rows.length < 30;
+  } catch (e) {
+    table.replaceChildren();
+    const td = table.insertRow().insertCell(); td.className = "empty hostile"; td.textContent = `Could not load: ${String(e)}`;
+  }
+}
+
+async function loadPilotKills(): Promise<void> {
+  const { id, mode, page } = pilotView;
+  const table = document.getElementById("pilot-kills") as HTMLTableElement | null;
+  if (!table) return;
+  const titles: Record<string, string> = { all: "Kills and losses", kills: "Kills", losses: "Losses" };
+  setText("pilot-list-title", titles[mode] ?? "Kills and losses");
+  try {
+    const rows = await get<Kill[]>(`/api/pilot-kills?id=${id}&mode=${mode}&page=${page}`);
+    if (pilotView.id !== id || pilotView.mode !== mode || pilotView.page !== page) return;
+    const empty = mode === "losses" ? "No losses recorded." : mode === "kills" ? "No kills recorded." : "No kills or losses recorded.";
+    renderKillTable(table, rows, page > 0 && !rows.length ? "No more on this page." : empty, id);
+    setText("pilot-page", `Page ${page + 1}`);
+    (document.getElementById("pilot-prev") as HTMLButtonElement).disabled = page === 0;
+    (document.getElementById("pilot-next") as HTMLButtonElement).disabled = rows.length < 30;
+  } catch (e) {
+    table.replaceChildren();
+    const td = table.insertRow().insertCell(); td.className = "empty hostile"; td.textContent = `Could not load: ${String(e)}`;
+  }
 }
 
 async function searchKillboardPilots(): Promise<void> {
@@ -630,20 +1512,13 @@ const price = (n: number) => (n >= 1000 ? compact.format(n) : n.toFixed(2));
 
 // ---- windows ----------------------------------------------------------------------
 
-function showConnection(online: boolean): void {
-  const badge = document.getElementById("connection-state")!;
-  badge.dataset.state = online ? "online" : "unavailable";
-  const label = online ? "Server online" : "Connection lost";
-  if (badge.textContent !== label) badge.textContent = label;
-}
-
 function showStatus(s: Summary): void {
-  showConnection(true);
   setText("metric-players", numbers.format(s.players));
   setText("metric-bots", numbers.format(s.bots.online));
-  setText("metric-simulation", s.bots.running ? `${numbers.format(s.bots.inSpace)} simulated pilots in space` : "Simulation paused");
   setText("metric-wars", numbers.format(s.wars));
   setText("metric-uptime", uptime(s.uptimeSeconds));
+  setText("mast-players", numbers.format(s.players));
+  setText("mast-bots", numbers.format(s.bots.online));
   const rows: [string, string][] = [
     ["Pilots online", numbers.format(s.players)],
     ["Capsuleers simulated", numbers.format(s.bots.total)],
@@ -666,8 +1541,15 @@ function showStatus(s: Summary): void {
       return [dt, dd];
     }),
   );
+  const online = s.players + s.bots.online;
   const line = document.getElementById("statusline") as HTMLElement;
-  line.textContent = s.bots.running ? "Simulation running" : "Simulation paused";
+  line.textContent = `Status: OK, ${numbers.format(online)} players${s.bots.running ? "" : " (simulation paused)"}`;
+}
+
+function showConnectivity(online: boolean): void {
+  const indicator = document.getElementById("server-indicator") as HTMLElement;
+  indicator.dataset.state = online ? "online" : "pending";
+  indicator.textContent = online ? "Server online" : "Reconnecting";
 }
 
 function uptime(seconds: number): string {
@@ -678,13 +1560,15 @@ function uptime(seconds: number): string {
 }
 
 async function refresh(): Promise<void> {
-  const summary = get<Summary>("/api/summary").then(showStatus, () => {
-    showConnection(false);
-    setText("statusline", "Waiting for the server to reconnect.");
-  });
   try {
-    const [, wars, players, systems, alliances, corporations, kills, news, sieges] = await Promise.all([
-      summary,
+    const [summary, wars, players, systems, alliances, corporations, kills, news, sieges] = await Promise.all([
+      get<Summary>("/api/summary").then((summary) => {
+        showConnectivity(true);
+        return summary;
+      }, (error) => {
+        showConnectivity(false);
+        throw error;
+      }),
       get<War[]>("/api/wars"),
       get<Player[]>("/api/players"),
       get<SystemRow[]>("/api/systems"),
@@ -694,6 +1578,8 @@ async function refresh(): Promise<void> {
       get<NewsItem[]>("/api/news"),
       get<SiegeRow[]>("/api/sieges"),
     ]);
+    showStatus(summary);
+
     list<War>("wars", [
       { title: "Aggressor", key: (w) => w.declaredBy, cell: (w) => [w.declaredBy, allianceTicker(w.declaredByTicker)] },
       { title: "", key: () => "", cell: () => [span("vs", "hostile")] },
@@ -720,7 +1606,7 @@ async function refresh(): Promise<void> {
     ], systems, "No one is about.", 4, true);
 
     list<AllianceRow>("alliances", [
-      { title: "Alliance", key: (a) => a.name, cell: (a) => [a.name, allianceTicker(a.ticker)] },
+      { title: "Alliance", key: (a) => a.name, cell: (a) => [allianceLink(a.id, a.name), allianceTicker(a.ticker)] },
       { title: "Holds", key: (a) => a.region ?? "", cell: (a) => [a.region ?? span(a.kind === "players" ? "" : a.kind, "dim")] },
       { title: "Corps", num: true, key: (a) => a.corporations, cell: (a) => count(a.corporations) },
       { title: "Pilots", num: true, key: (a) => a.pilots, cell: (a) => count(a.pilots) },
@@ -728,8 +1614,8 @@ async function refresh(): Promise<void> {
     ], alliances, "No alliances have been founded.", 3, true);
 
     list<CorporationRow>("corporations", [
-      { title: "Corporation", key: (c) => c.name, cell: (c) => [c.name, corpTicker(c.ticker), c.bots ? "" : span(" (players)", "dim")] },
-      { title: "Alliance", key: (c) => c.alliance ?? "", cell: (c) => [allianceTicker(c.alliance)] },
+      { title: "Corporation", key: (c) => c.name, cell: (c) => [corpLink(c.id, c.name), corpTicker(c.ticker), c.bots ? "" : span(" (players)", "dim")] },
+      { title: "Alliance", key: (c) => c.alliance ?? "", cell: (c) => [c.alliance ? allianceLink(c.allianceID, c.alliance) : ""] },
       { title: "Members", num: true, key: (c) => c.members, cell: (c) => count(c.members) },
     ], corporations, "No corporations have been founded.", 2, true);
 
@@ -756,28 +1642,131 @@ async function refresh(): Promise<void> {
     showKillList();
     await refreshBots();
   } catch (e) {
-    console.warn("Dashboard data refresh failed", e);
+    const line = document.getElementById("statusline") as HTMLElement;
+    line.textContent = `Status: unreachable, retrying (${e instanceof Error ? e.message : String(e)})`;
   }
 }
 
 function showKillList(): void {
   const query = (document.getElementById("kill-search") as HTMLInputElement).value.trim().toLowerCase();
-  const kills = query ? killRows.filter((k) => [k.victim, k.ship, k.system, k.finalBlow].some((s) => s?.toLowerCase().includes(query))) : killRows;
-  list<Kill>("kills", [
-    { title: "Ship type", key: (k) => k.ship ?? "", cell: (k) => {
-      const cell = document.createElement("div"); cell.className = "kill-ship-cell";
-      if (k.shipTypeID) cell.append(typeImage(k.shipTypeID, "render", 64));
-      const labels = document.createElement("div"); labels.append(span(k.ship ?? "Unknown ship", "ship-name"), span(k.shipClass ?? "", "dim")); cell.append(labels); return [cell];
-    } },
-    { title: "Victim", key: (k) => k.victim ?? "", cell: (k) => [pilotLink(k.victimID, k.victim), span(k.victimCorporation ?? "", "subline")] },
-    { title: "Final blow", key: (k) => k.finalBlow ?? "", cell: (k) => [pilotLink(k.finalBlowID, k.finalBlow)] },
-    { title: "Location", key: (k) => k.system ?? "", cell: (k) => [k.system ?? "Unknown"] },
-    { title: "Hull base value", num: true, key: (k) => k.hullValue ?? 0, cell: (k) => [k.hullValue ? isk(k.hullValue) : "—"] },
-    { title: "Time", key: (k) => k.time ?? 0, cell: (k) => [eveTime(k.time)] },
-  ], kills, "No kills found on this page.", 5, true);
+  const kills = query
+    ? killRows.filter((k) => [k.victim, k.ship, k.system, k.region, k.finalBlow, k.victimCorporation, k.victimAlliance, k.finalBlowCorporation, k.finalBlowAlliance]
+      .some((s) => s?.toLowerCase().includes(query)))
+    : killRows;
+  renderKillTable(document.getElementById("kills") as HTMLTableElement, kills,
+    query ? "No kills on this page match." : "No kills recorded yet.");
   setText("kills-page", `Page ${killPage + 1} of ${Math.max(1, Math.ceil(killTotal / 30))}`);
   (document.getElementById("kills-prev") as HTMLButtonElement).disabled = killPage === 0;
   (document.getElementById("kills-next") as HTMLButtonElement).disabled = (killPage + 1) * 30 >= killTotal;
+}
+
+/// zKillboard's kill list, grouped by day. On a pilot's page (`pilotID`) the
+/// pilot's kills are green and losses red.
+function renderKillTable(table: HTMLTableElement, kills: Kill[], empty: string, pilotID = 0,
+  group?: { kind: "corporation" | "alliance"; id: number }): void {
+  table.replaceChildren();
+  const head = table.createTHead().insertRow();
+  for (const [title, span2] of [["Time", 1], ["Ship", 1], ["Location", 1], ["Victim", 2], ["Final Blow", 2]] as [string, number][]) {
+    const th = document.createElement("th"); th.textContent = title; th.colSpan = span2; head.append(th);
+  }
+  const body = table.createTBody();
+  if (!kills.length) {
+    const td = body.insertRow().insertCell(); td.colSpan = 7; td.className = "empty";
+    td.textContent = empty;
+  }
+  let day = "";
+  for (const k of kills) {
+    const date = k.time ? new Date(k.time) : null;
+    const dayLabel = date ? `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}` : "Unknown date";
+    if (dayLabel !== day) {
+      day = dayLabel;
+      const dateRow = body.insertRow(); dateRow.className = "date-row";
+      const cell = dateRow.insertCell(); cell.colSpan = 7; cell.textContent = dayLabel;
+    }
+    const tr = body.insertRow();
+    const mine = pilotID > 0 || !!group;
+    const loss = (pilotID > 0 && k.victimID === pilotID)
+      || (!!group && (group.kind === "alliance" ? k.victimAllianceID : k.victimCorpID) === group.id);
+    tr.className = ["kill-row", k.pod ? "is-pod" : "", mine ? (loss ? "is-loss" : "is-kill") : ""].filter(Boolean).join(" ");
+    tr.tabIndex = 0;
+    tr.setAttribute("role", "link");
+    tr.setAttribute("aria-label", `Open kill report ${k.id}`);
+    tr.addEventListener("click", () => openKill(k.id));
+    tr.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openKill(k.id); }
+    });
+    const time = tr.insertCell(); time.className = "k-time";
+    if (mine) time.append(span(loss ? "✕ " : "✓ ", loss ? "hostile" : "dropped"));
+    time.append(date ? `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}` : "");
+    const value = document.createElement("small"); value.textContent = iskShort(k.totalValue ?? k.hullValue ?? 0); time.append(value);
+    const ship = tr.insertCell(); ship.className = "k-ship";
+    if (k.shipTypeID) { const img = typeImage(k.shipTypeID, "render", 64); img.title = k.ship ?? ""; ship.append(img); }
+    const loc = tr.insertCell(); loc.className = "k-loc";
+    loc.append(line(securityLabel(k.security), " ", k.system ?? "Unknown"), line(span(k.region ?? "", "")));
+    const victimBadge = tr.insertCell(); victimBadge.className = "k-badge-cell";
+    victimBadge.append(groupBadge(k.victimAllianceID, k.victimAlliance, k.victimCorpID, k.victimCorporation, k.victimAllianceTicker || k.victimCorpTicker));
+    const victim = tr.insertCell();
+    victim.append(
+      line(pilotLink(k.victimID, k.victim), ` (${k.ship ?? "Unknown ship"})`),
+      line(corpLink(k.victimCorpID, k.victimCorporation)),
+      line(allianceLink(k.victimAllianceID, k.victimAlliance)),
+    );
+    const finalBadge = tr.insertCell(); finalBadge.className = "k-badge-cell";
+    const finalCell = tr.insertCell();
+    if (k.finalBlowNpc || (k.finalBlowID ?? 0) <= 0) {
+      finalBadge.append(badge(k.finalBlow || "NPC", "NPC"));
+      const npc = span(k.finalBlow ?? "NPC", ""); npc.append(span("NPC", "npc-tag"));
+      finalCell.append(line(npc));
+    } else {
+      finalBadge.append(groupBadge(k.finalBlowAllianceID, k.finalBlowAlliance, k.finalBlowCorpID, k.finalBlowCorporation, k.finalBlowAllianceTicker || k.finalBlowCorpTicker));
+      const who = line(pilotLink(k.finalBlowID, k.finalBlow));
+      if ((k.involved ?? 0) === 1) who.append(span("SOLO", "solo-tag"));
+      else if (k.involved) who.append(` (${k.involved})`);
+      finalCell.append(who, line(corpLink(k.finalBlowCorpID, k.finalBlowCorporation)), line(allianceLink(k.finalBlowAllianceID, k.finalBlowAlliance)));
+    }
+    for (const a of tr.querySelectorAll("a")) a.addEventListener("click", (event) => event.stopPropagation());
+  }
+}
+
+function featuredTiles(id: string, kills: FeaturedKill[], structures: boolean, empty?: string): void {
+  const out = document.getElementById(id) as HTMLElement;
+  out.replaceChildren(...kills.map((kill) => {
+    const tile = document.createElement("article"); tile.className = "zkb-tile";
+    tile.tabIndex = 0;
+    tile.addEventListener("click", () => openKill(kill.id));
+    tile.addEventListener("keydown", (e) => { if (e.key === "Enter") openKill(kill.id); });
+    const image = document.createElement("div"); image.className = "tile-image";
+    image.append(typeImage(kill.shipTypeID, "render", 128));
+    const owner = structures ? span(kill.victimCorporation || kill.victim, "tile-victim") : pilotLink(kill.victimID, kill.victim);
+    owner.classList.add("tile-victim");
+    owner.addEventListener("click", (e) => e.stopPropagation());
+    tile.title = `${kill.ship} in ${kill.system}, ${eveTime(kill.time)}`;
+    tile.append(span(kill.ship, "tile-ship"), image, span(`${iskShort(kill.totalValue || kill.hullValue)} ISK`, "tile-value"), owner);
+    return tile;
+  }));
+  if (!kills.length) out.replaceChildren(span(empty ?? (structures ? "No structures destroyed this week." : "No ships destroyed this week."), "zkb-empty"));
+}
+
+function definitions(id: string, rows: [string, number][]): void {
+  const dl = document.getElementById(id) as HTMLElement;
+  dl.replaceChildren(...rows.flatMap(([label, value]) => {
+    const dt = document.createElement("dt"); dt.textContent = label;
+    const dd = document.createElement("dd"); dd.textContent = numbers.format(value);
+    return [dt, dd];
+  }));
+}
+
+function topList(id: string, entries: TopEntry[], kind: "character" | "corporation" | "alliance"): void {
+  const ol = document.getElementById(id) as HTMLElement;
+  ol.replaceChildren(...entries.map((entry) => {
+    const li = document.createElement("li");
+    const who = kind === "character" ? pilotLink(entry.id, entry.name) : groupLink(kind, entry.id, entry.name);
+    if (entry.ticker) who.title = `${entry.name} [${entry.ticker}]`;
+    if (kind !== "character") li.append(badge(entry.name, entry.ticker, true));
+    li.append(who, span(numbers.format(entry.kills), "count"));
+    return li;
+  }));
+  if (!entries.length) ol.replaceChildren(span("No kills in the last 7 days.", "empty"));
 }
 
 // ---- the bots' windows -------------------------------------------------------------
@@ -797,41 +1786,27 @@ async function refreshBots(): Promise<void> {
 
   killTotal = board.total;
   showKillList();
-  const stats = document.getElementById("killboard-stats") as HTMLElement;
-  stats.replaceChildren(...([
-    ["Total killmails", board.total], ["Kills (24h)", board.day], ["Kills (7d)", board.week], ["Pod kills", board.pods],
-  ] as [string, number][]).map(([label, value]) => {
-    const item = document.createElement("div"); item.className = "stat-tile";
-    item.append(span(label, "eyebrow"), span(numbers.format(value), "stat-number")); return item;
+  featuredTiles("killboard-featured", board.featured, false);
+  featuredTiles("killboard-structures", board.structures, true);
+  (document.getElementById("zkb-structures-block") as HTMLElement).hidden = !board.structures.length;
+  definitions("killboard-activity", [
+    ["Characters", board.activity.characters], ["Corporations", board.activity.corporations],
+    ["Alliances", board.activity.alliances], ["Ships", board.activity.ships],
+    ["Systems", board.activity.systems], ["Regions", board.activity.regions], ["Total Kills", board.activity.kills],
+  ]);
+  definitions("killboard-stats", [
+    ["All-time killmails", board.total], ["Kills (24h)", board.day], ["Kills (7 days)", board.week], ["Pod kills", board.pods],
+  ]);
+  topList("killboard-top-characters", board.topCharacters, "character");
+  topList("killboard-top-corporations", board.topCorporations, "corporation");
+  topList("killboard-top-alliances", board.topAlliances, "alliance");
+  const ships = document.getElementById("killboard-ships") as HTMLElement;
+  ships.replaceChildren(...board.ships.map((s) => {
+    const li = document.createElement("li");
+    li.append(span(s.ship, ""), span(numbers.format(s.lost), "count"));
+    return li;
   }));
-  const featured = document.getElementById("killboard-featured") as HTMLElement;
-  featured.replaceChildren(...board.featured.map((kill) => {
-    const item = document.createElement("article"); item.className = "featured-kill";
-    item.tabIndex = 0;
-    item.addEventListener("click", () => openKill(kill.id));
-    item.addEventListener("keydown", (e) => { if (e.key === "Enter") openKill(kill.id); });
-    const image = typeImage(kill.shipTypeID, "render", 256);
-    const ship = span(kill.ship, "featured-ship");
-    const name = pilotLink(kill.victimID, kill.victim);
-    const value = span(isk(kill.hullValue), "featured-value");
-    const location = span(`${kill.system} · ${eveTime(kill.time)} EVE`, "dim small");
-    item.append(image, ship, name, value, location);
-    return item;
-  }));
-  if (!board.featured.length) featured.replaceChildren(span("No valued kills in the last seven days.", "dim"));
-  list("killboard-pilots", [
-    { title: "Pilot", key: (p) => p.name, cell: (p) => [pilotLink(p.id, p.name), corpTicker(p.corporation)] },
-    { title: "Final blows", num: true, key: (p) => p.kills, cell: (p) => count(p.kills) },
-  ], board.pilots, "No kills in the last day.", 1, true);
-  list("killboard", [
-    { title: "Alliance / corporation", key: (k) => k.name, cell: (k) => [k.name, allianceTicker(k.ticker), k.bots ? "" : span(" (players)", "dim")] },
-    { title: "Kills", num: true, key: (k) => k.kills, cell: (k) => count(k.kills) },
-    { title: "Losses", num: true, key: (k) => k.losses, cell: (k) => count(k.losses) },
-  ], board.sides, "Nothing has died today.", 1, true);
-  list("killboard-ships", [
-    { title: "Hull", key: (s) => s.ship, cell: (s) => [s.ship] },
-    { title: "Lost", num: true, key: (s) => s.lost, cell: (s) => count(s.lost) },
-  ], board.ships, "", 1, true);
+  if (!board.ships.length) ships.replaceChildren(span("Nothing lost in the last day.", "empty"));
 
   if (mkt && mkt.hubs) {
     market = mkt;
@@ -1006,9 +1981,52 @@ function searchPilots(): void {
 (document.getElementById("hub") as HTMLSelectElement).addEventListener("change", showMarket);
 (document.getElementById("users-refresh") as HTMLButtonElement).addEventListener("click", () => void refreshUsers());
 (document.getElementById("article-form") as HTMLFormElement).addEventListener("submit", (e) => void publishArticle(e as SubmitEvent));
+(document.querySelector("#article-form textarea[name=body]") as HTMLTextAreaElement).addEventListener("input", schedulePreview);
+for (const button of document.querySelectorAll<HTMLButtonElement>("#article-format button")) {
+  button.addEventListener("mousedown", (e) => e.preventDefault());
+  button.addEventListener("click", () => formatArticle(button));
+}
+(document.getElementById("seeding-form") as HTMLFormElement).addEventListener("submit", (e) => { e.preventDefault(); void refreshSeeding(); });
+(document.getElementById("seeding-refresh") as HTMLButtonElement).addEventListener("click", () => void refreshSeeding());
 (document.getElementById("downtime-form") as HTMLFormElement).addEventListener("submit", (e) => { e.preventDefault(); void changeDowntime("schedule"); });
 (document.getElementById("downtime-cancel") as HTMLButtonElement).addEventListener("click", () => void changeDowntime("cancel"));
 (document.getElementById("downtime-now") as HTMLButtonElement).addEventListener("click", () => void changeDowntime("now"));
+(document.getElementById("restart-countdown") as HTMLButtonElement).addEventListener("click", () => void changeDowntime("restart"));
+(document.getElementById("restart-now") as HTMLButtonElement).addEventListener("click", () => void changeDowntime("restart-now"));
+(document.getElementById("bots-count") as HTMLInputElement).addEventListener("input", () => { botCountEdited = true; });
+(document.getElementById("bots-count-form") as HTMLFormElement).addEventListener("submit", (e) => {
+  e.preventDefault();
+  const count = botCountInput();
+  if (count !== null) void changeBots({ count });
+});
+(document.getElementById("bots-count-restart") as HTMLButtonElement).addEventListener("click", () => {
+  const count = botCountInput();
+  if (count !== null) void changeBots({ count, restart: true });
+});
+for (const group of document.querySelectorAll<HTMLElement>(".bot-choice[data-setting]")) {
+  for (const button of group.querySelectorAll<HTMLButtonElement>("button[data-value]")) {
+    button.addEventListener("click", () => {
+      const raw = button.dataset.value ?? "";
+      const value = raw === "true" ? true : raw === "false" ? false : raw;
+      void changeBots({ [group.dataset.setting ?? ""]: value });
+    });
+  }
+}
+(document.getElementById("bots-activity") as HTMLInputElement).addEventListener("input", (e) => {
+  botActivityEdited = true;
+  setText("bots-activity-value", `${Number((e.target as HTMLInputElement).value).toFixed(1)}x`);
+});
+(document.getElementById("bots-activity-form") as HTMLFormElement).addEventListener("submit", (e) => {
+  e.preventDefault();
+  void changeBots({ onlineActivity: Number((document.getElementById("bots-activity") as HTMLInputElement).value) });
+});
+(document.getElementById("bots-shown-form") as HTMLFormElement).addEventListener("submit", (e) => {
+  e.preventDefault();
+  const input = document.getElementById("bots-shown") as HTMLInputElement;
+  if (!input.checkValidity()) { input.reportValidity(); return; }
+  void changeBots({ shownPerSystem: Number(input.value) });
+});
+(document.getElementById("bots-refresh") as HTMLButtonElement).addEventListener("click", () => void refreshBotSettings());
 (document.getElementById("killboard-search-form") as HTMLFormElement).addEventListener("submit", (e) => { e.preventDefault(); void searchKillboardPilots(); });
 (document.getElementById("kill-search") as HTMLInputElement).addEventListener("input", showKillList);
 (document.getElementById("kills-prev") as HTMLButtonElement).addEventListener("click", () => { if (killPage > 0) { killPage--; void refresh(); } });
@@ -1031,6 +2049,651 @@ for (const b of document.querySelectorAll<HTMLButtonElement>("#event-buttons but
   void control(`density ${f.get("region")} ${f.get("factor")}`);
 });
 
+// ---- the sovereignty map ------------------------------------------------------------
+// In the manner of verite.space: territory drawn as alliance influence that
+// fades with distance from each held system, borders where it meets another
+// alliance's, and tickers over each contiguous block. The server's
+// sovereignty resolution moves systems between alliances; the map follows.
+
+interface SovStatic {
+  systems: [number, string, number, number, number, number][];
+  jumps: [number, number][];
+  regions: [number, string][];
+}
+
+interface SovAlliance { id: number; name: string; ticker: string; systems: number; bots: boolean; pilots: number }
+
+interface SovState {
+  systems: [number, number, number | null][];
+  alliances: SovAlliance[];
+  recent: { id: number; system: string; region: string; alliance: string; ticker: string; since: number | null }[];
+  sieges: { system: string; attacker: string; defender: string; starts: number; fighting: boolean }[];
+  now: number;
+}
+
+interface MapSystem { id: number; name: string; region: number; x: number; y: number; sec: number; holder: number | null; since: number | null }
+
+const SOV_REFRESH_MS = 60_000;
+
+const sov = {
+  loaded: false,
+  loading: null as Promise<void> | null,
+  systems: [] as MapSystem[],
+  byId: new Map<number, MapSystem>(),
+  byName: new Map<string, MapSystem>(),
+  jumps: [] as [MapSystem, MapSystem][],
+  regions: new Map<number, { name: string; x: number; y: number; nullsec: boolean }>(),
+  alliances: new Map<number, SovAlliance>(),
+  order: [] as SovAlliance[],
+  rgb: new Map<number, [number, number, number]>(),
+  palette: new Map<number, string>(),
+  labels: [] as { alliance: number; x: number; y: number; count: number }[],
+  sieges: [] as SovState["sieges"],
+  influence: null as HTMLCanvasElement | null,
+  field: null as { width: number; height: number; winners: Int32Array; strengths: Float32Array } | null,
+  bounds: { minX: 0, maxX: 1, minY: 0, maxY: 1 },
+  sigma: 1,
+  view: { cx: 0, cy: 0, scale: 1 },
+  fitted: false,
+  focus: null as number | null,
+  hover: null as MapSystem | null,
+  signature: "",
+  timer: 0,
+  queued: false,
+};
+
+function hslToRgb(css: string): [number, number, number] {
+  const m = css.match(/hsl\((\d+(?:\.\d+)?) (\d+(?:\.\d+)?)% (\d+(?:\.\d+)?)%\)/);
+  if (!m) return [128, 128, 128];
+  const h = Number(m[1]) / 360, s = Number(m[2]) / 100, l = Number(m[3]) / 100;
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const channel = (t: number) => {
+    t = (t + 1) % 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  return [Math.round(channel(h + 1 / 3) * 255), Math.round(channel(h) * 255), Math.round(channel(h - 1 / 3) * 255)];
+}
+
+function allianceColour(id: number): string {
+  return sov.palette.get(id) ?? colourFor(id);
+}
+
+/// Well-separated hues for the holding alliances, by the golden angle in the
+/// order of their IDs, so a colour stays with its alliance between refreshes.
+function buildSovPalette(alliances: SovAlliance[]): void {
+  const ids = alliances.map((a) => a.id).sort((a, b) => a - b);
+  sov.palette = new Map(ids.map((id, i) => {
+    const hue = Math.round((i * 137.508 + 25) % 360);
+    const light = [56, 48, 63][Math.floor(i / 8) % 3];
+    return [id, `hsl(${hue} 72% ${light}%)`];
+  }));
+  sov.rgb = new Map(ids.map((id) => [id, hslToRgb(sov.palette.get(id)!)]));
+}
+
+async function openSovMap(): Promise<void> {
+  if (!sov.loading) sov.loading = loadSovStatic();
+  await sov.loading;
+  resizeSovCanvas();
+  await refreshSov();
+  if (!sov.timer) sov.timer = window.setInterval(() => void refreshSov(), SOV_REFRESH_MS);
+}
+
+async function loadSovStatic(): Promise<void> {
+  try {
+    const data = await get<SovStatic>("/api/sovmap/static");
+    sov.systems = data.systems.map(([id, name, region, x, z, sec]) => ({ id, name, region, x, y: -z, sec, holder: null, since: null }));
+    sov.byId = new Map(sov.systems.map((s) => [s.id, s]));
+    sov.byName = new Map(sov.systems.map((s) => [s.name, s]));
+    sov.jumps = data.jumps.flatMap(([a, b]) => {
+      const from = sov.byId.get(a), to = sov.byId.get(b);
+      return from && to ? [[from, to] as [MapSystem, MapSystem]] : [];
+    });
+    const xs = sov.systems.map((s) => s.x), ys = sov.systems.map((s) => s.y);
+    const pad = 0.04 * Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+    sov.bounds = { minX: Math.min(...xs) - pad, maxX: Math.max(...xs) + pad, minY: Math.min(...ys) - pad, maxY: Math.max(...ys) + pad };
+    const names = new Map(data.regions);
+    const sums = new Map<number, { x: number; y: number; n: number; nullsec: number }>();
+    for (const s of sov.systems) {
+      const sum = sums.get(s.region) ?? { x: 0, y: 0, n: 0, nullsec: 0 };
+      sum.x += s.x; sum.y += s.y; sum.n++; if (s.sec < 0.05) sum.nullsec++;
+      sums.set(s.region, sum);
+    }
+    for (const [id, sum] of sums) {
+      sov.regions.set(id, { name: names.get(id) ?? "", x: sum.x / sum.n, y: sum.y / sum.n, nullsec: sum.nullsec > sum.n / 2 });
+    }
+    sov.sigma = typicalSpacing() * 2.3;
+    sov.loaded = true;
+  } catch (e) {
+    sov.loading = null;
+    setText("sov-updated", `Map unavailable: ${String(e)}`);
+    throw e;
+  }
+}
+
+/// The median distance from a system to its nearest neighbour, which sets how
+/// far each system's influence reaches.
+function typicalSpacing(): number {
+  const { minX, maxX } = sov.bounds;
+  const size = (maxX - minX) / 160;
+  const grid = new Map<string, MapSystem[]>();
+  const key = (x: number, y: number) => `${Math.floor(x / size)},${Math.floor(y / size)}`;
+  for (const s of sov.systems) {
+    const k = key(s.x, s.y);
+    (grid.get(k) ?? grid.set(k, []).get(k)!).push(s);
+  }
+  const nearest: number[] = [];
+  for (const s of sov.systems) {
+    let best = Infinity;
+    const cx = Math.floor(s.x / size), cy = Math.floor(s.y / size);
+    for (let dx = -2; dx <= 2; dx++) for (let dy = -2; dy <= 2; dy++) {
+      for (const o of grid.get(`${cx + dx},${cy + dy}`) ?? []) {
+        if (o === s) continue;
+        const d = Math.hypot(o.x - s.x, o.y - s.y);
+        if (d < best) best = d;
+      }
+    }
+    if (best < Infinity) nearest.push(best);
+  }
+  nearest.sort((a, b) => a - b);
+  return nearest[Math.floor(nearest.length / 2)] || size;
+}
+
+async function refreshSov(): Promise<void> {
+  if (!sov.loaded || document.body.dataset.page !== "sovereignty") return;
+  try {
+    const state = await get<SovState>("/api/sovmap");
+    sov.alliances = new Map(state.alliances.map((a) => [a.id, a]));
+    sov.order = state.alliances;
+    sov.sieges = state.sieges;
+    for (const s of sov.systems) { s.holder = null; s.since = null; }
+    for (const [id, alliance, since] of state.systems) {
+      const s = sov.byId.get(id);
+      if (s) { s.holder = alliance; s.since = since; }
+    }
+    const signature = state.systems.map(([id, a]) => `${id}:${a}`).join(",");
+    if (signature !== sov.signature) {
+      sov.signature = signature;
+      buildSovPalette(state.alliances);
+      buildSovLabels();
+      buildInfluence();
+    }
+    showSovPanels(state);
+    const at = new Date(state.now);
+    setText("sov-updated", `${numbers.format(state.systems.length)} systems held · updated ${pad(at.getUTCHours())}:${pad(at.getUTCMinutes())}:${pad(at.getUTCSeconds())} EVE · refreshes every minute`);
+    drawSov();
+  } catch (e) {
+    setText("sov-updated", `Could not refresh sovereignty: ${String(e)}`);
+  }
+}
+
+/// Each alliance's contiguous blocks of space (linked by stargates), labelled
+/// at the member system nearest the block's centre.
+function buildSovLabels(): void {
+  const parent = new Map<number, number>();
+  const find = (id: number): number => {
+    let root = id;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    let walk = id;
+    while (parent.get(walk) !== root) { const next = parent.get(walk)!; parent.set(walk, root); walk = next; }
+    return root;
+  };
+  for (const s of sov.systems) if (s.holder !== null) parent.set(s.id, s.id);
+  for (const [a, b] of sov.jumps) {
+    if (a.holder !== null && a.holder === b.holder) parent.set(find(a.id), find(b.id));
+  }
+  const blocks = new Map<number, MapSystem[]>();
+  for (const s of sov.systems) {
+    if (s.holder === null) continue;
+    const root = find(s.id);
+    (blocks.get(root) ?? blocks.set(root, []).get(root)!).push(s);
+  }
+  const largest = new Map<number, number>();
+  for (const members of blocks.values()) {
+    const holder = members[0].holder!;
+    largest.set(holder, Math.max(largest.get(holder) ?? 0, members.length));
+  }
+  sov.labels = [];
+  for (const members of blocks.values()) {
+    const holder = members[0].holder!;
+    if (members.length < 4 && members.length < (largest.get(holder) ?? 0)) continue;
+    const cx = members.reduce((sum, s) => sum + s.x, 0) / members.length;
+    const cy = members.reduce((sum, s) => sum + s.y, 0) / members.length;
+    const anchor = members.reduce((best, s) => (Math.hypot(s.x - cx, s.y - cy) < Math.hypot(best.x - cx, best.y - cy) ? s : best));
+    sov.labels.push({ alliance: holder, x: anchor.x, y: anchor.y, count: members.length });
+  }
+  sov.labels.sort((a, b) => b.count - a.count);
+}
+
+/// The influence field, computed once per change of hands over a grid
+/// covering the whole cluster: which alliance's influence is strongest at
+/// each point, and how strong. Panning, zooming and focusing reuse it.
+function buildInfluence(): void {
+  const { minX, maxX, minY, maxY } = sov.bounds;
+  const width = 1000;
+  const height = Math.max(1, Math.round((width * (maxY - minY)) / (maxX - minX)));
+  const sigma = sov.sigma;
+  const reach = sigma * 2.6;
+  const twoSigmaSq = 2 * sigma * sigma;
+  const grid = new Map<string, MapSystem[]>();
+  for (const s of sov.systems) {
+    if (s.holder === null) continue;
+    const k = `${Math.floor(s.x / reach)},${Math.floor(s.y / reach)}`;
+    (grid.get(k) ?? grid.set(k, []).get(k)!).push(s);
+  }
+  const winners = new Int32Array(width * height).fill(-1);
+  const strengths = new Float32Array(width * height);
+  const ids: number[] = [], values: number[] = [];
+  for (let py = 0; py < height; py++) {
+    const wy = minY + ((py + 0.5) / height) * (maxY - minY);
+    const gy = Math.floor(wy / reach);
+    for (let px = 0; px < width; px++) {
+      const wx = minX + ((px + 0.5) / width) * (maxX - minX);
+      const gx = Math.floor(wx / reach);
+      ids.length = 0; values.length = 0;
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+        const cell = grid.get(`${gx + dx},${gy + dy}`);
+        if (!cell) continue;
+        for (const s of cell) {
+          const d2 = (s.x - wx) ** 2 + (s.y - wy) ** 2;
+          if (d2 > reach * reach) continue;
+          const w = Math.exp(-d2 / twoSigmaSq);
+          const at = ids.indexOf(s.holder!);
+          if (at < 0) { ids.push(s.holder!); values.push(w); } else values[at] += w;
+        }
+      }
+      if (!ids.length) continue;
+      let best = 0;
+      for (let i = 1; i < ids.length; i++) if (values[i] > values[best]) best = i;
+      const index = py * width + px;
+      winners[index] = ids[best];
+      strengths[index] = values[best];
+    }
+  }
+  sov.field = { width, height, winners, strengths };
+  paintInfluence();
+}
+
+/// Colours the influence field: each alliance's territory with a brighter
+/// border, the rest faded while one alliance is in focus.
+function paintInfluence(): void {
+  const field = sov.field;
+  if (!field) return;
+  const { width, height, winners, strengths } = field;
+  const canvas = sov.influence ?? document.createElement("canvas");
+  canvas.width = width; canvas.height = height;
+  const ctx = canvas.getContext("2d")!;
+  const image = ctx.createImageData(width, height);
+  const data = image.data;
+  const threshold = 0.33;
+  for (let py = 0; py < height; py++) {
+    for (let px = 0; px < width; px++) {
+      const index = py * width + px;
+      const owner = winners[index];
+      if (owner < 0 || strengths[index] < threshold) continue;
+      const rgb = sov.rgb.get(owner) ?? [128, 128, 128];
+      const neighbours = [px + 1 < width ? index + 1 : -1, px > 0 ? index - 1 : -1, py + 1 < height ? index + width : -1, py > 0 ? index - width : -1];
+      const edge = neighbours.some((n) => n >= 0 && (winners[n] !== owner || strengths[n] < threshold));
+      const fill = Math.min(1, (strengths[index] - threshold) / (1.4 - threshold));
+      const faded = sov.focus !== null && owner !== sov.focus ? 0.22 : 1;
+      const o = index * 4;
+      if (edge) {
+        data[o] = Math.min(255, rgb[0] + 60); data[o + 1] = Math.min(255, rgb[1] + 60); data[o + 2] = Math.min(255, rgb[2] + 60);
+        data[o + 3] = Math.round(235 * faded);
+      } else {
+        data[o] = rgb[0]; data[o + 1] = rgb[1]; data[o + 2] = rgb[2];
+        data[o + 3] = Math.round((70 + fill * 95) * faded);
+      }
+    }
+  }
+  ctx.putImageData(image, 0, 0);
+  sov.influence = canvas;
+}
+
+function setSovFocus(id: number | null): void {
+  sov.focus = id;
+  paintInfluence();
+  showSovAlliances();
+  drawSov();
+}
+
+function sovCanvas(): HTMLCanvasElement { return document.getElementById("sov-canvas") as HTMLCanvasElement; }
+
+function resizeSovCanvas(): void {
+  const canvas = sovCanvas();
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(rect.width * dpr);
+  canvas.height = Math.round(rect.height * dpr);
+  if (!sov.fitted && sov.loaded) fitSov(sov.bounds);
+  drawSov();
+}
+
+function fitSov(box: { minX: number; maxX: number; minY: number; maxY: number }): void {
+  const rect = sovCanvas().getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const w = Math.max(box.maxX - box.minX, sov.sigma * 6), h = Math.max(box.maxY - box.minY, sov.sigma * 6);
+  sov.view = { cx: (box.minX + box.maxX) / 2, cy: (box.minY + box.maxY) / 2, scale: Math.min(rect.width / w, rect.height / h) * 0.9 };
+  sov.fitted = true;
+}
+
+function toScreen(x: number, y: number, rect: DOMRect): [number, number] {
+  return [(x - sov.view.cx) * sov.view.scale + rect.width / 2, (y - sov.view.cy) * sov.view.scale + rect.height / 2];
+}
+
+function drawSov(): void {
+  if (sov.queued) return;
+  sov.queued = true;
+  requestAnimationFrame(() => { sov.queued = false; paintSov(); });
+}
+
+function paintSov(): void {
+  const canvas = sovCanvas();
+  const rect = canvas.getBoundingClientRect();
+  if (!sov.loaded || !rect.width) return;
+  const ctx = canvas.getContext("2d")!;
+  const dpr = canvas.width / rect.width;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, rect.width, rect.height);
+  const scale = sov.view.scale;
+  const showEmpire = (document.getElementById("sov-empire") as HTMLInputElement).checked;
+  const visible = (sx: number, sy: number) => sx > -40 && sy > -40 && sx < rect.width + 40 && sy < rect.height + 40;
+
+  if (sov.influence) {
+    const { minX, maxX, minY, maxY } = sov.bounds;
+    const [x0, y0] = toScreen(minX, minY, rect);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(sov.influence, x0, y0, (maxX - minX) * scale, (maxY - minY) * scale);
+  }
+
+  if ((document.getElementById("sov-gates") as HTMLInputElement).checked) {
+    ctx.lineWidth = scale > 40 ? 1 : 0.6;
+    for (const empire of [true, false]) {
+      ctx.strokeStyle = empire ? (showEmpire ? "rgba(140,160,175,0.22)" : "rgba(140,160,175,0.07)") : "rgba(150,180,200,0.26)";
+      ctx.beginPath();
+      for (const [a, b] of sov.jumps) {
+        if ((a.sec >= 0.05 || b.sec >= 0.05) !== empire) continue;
+        const [ax, ay] = toScreen(a.x, a.y, rect), [bx, by] = toScreen(b.x, b.y, rect);
+        if (!visible(ax, ay) && !visible(bx, by)) continue;
+        ctx.moveTo(ax, ay); ctx.lineTo(bx, by);
+      }
+      ctx.stroke();
+    }
+  }
+
+  const dot = Math.max(0.9, Math.min(3.4, scale * 0.045));
+  for (const s of sov.systems) {
+    const [sx, sy] = toScreen(s.x, s.y, rect);
+    if (!visible(sx, sy)) continue;
+    let colour: string;
+    if (s.holder !== null) {
+      const rgb = sov.rgb.get(s.holder) ?? [200, 200, 200];
+      const dimmed = sov.focus !== null && s.holder !== sov.focus;
+      colour = `rgba(${Math.min(255, rgb[0] + 70)},${Math.min(255, rgb[1] + 70)},${Math.min(255, rgb[2] + 70)},${dimmed ? 0.35 : 1})`;
+    } else if (s.sec < 0.05) {
+      colour = "rgba(150,158,165,0.55)";
+    } else {
+      const sc = SECURITY_COLOURS[Math.max(0, Math.round(Math.min(1, s.sec) * 10))];
+      colour = showEmpire ? sc : "rgba(110,120,128,0.3)";
+    }
+    ctx.fillStyle = colour;
+    ctx.beginPath();
+    ctx.arc(sx, sy, s.holder !== null ? dot * 1.15 : dot * 0.85, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Sieges under way or announced.
+  const now = Date.now();
+  for (const siege of sov.sieges) {
+    const s = sov.byName.get(siege.system);
+    if (!s) continue;
+    const [sx, sy] = toScreen(s.x, s.y, rect);
+    if (!visible(sx, sy)) continue;
+    const pulse = siege.fighting ? 6 + 3 * Math.sin(now / 250) : 6;
+    ctx.strokeStyle = siege.fighting ? "rgba(255,90,70,0.95)" : "rgba(255,190,90,0.85)";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.arc(sx, sy, pulse, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(sx - pulse - 4, sy); ctx.lineTo(sx - pulse + 2, sy);
+    ctx.moveTo(sx + pulse - 2, sy); ctx.lineTo(sx + pulse + 4, sy);
+    ctx.moveTo(sx, sy - pulse - 4); ctx.lineTo(sx, sy - pulse + 2);
+    ctx.moveTo(sx, sy + pulse - 2); ctx.lineTo(sx, sy + pulse + 4);
+    ctx.stroke();
+  }
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  if ((document.getElementById("sov-regions") as HTMLInputElement).checked) {
+    ctx.font = `600 ${Math.max(10, Math.min(15, scale * 0.16))}px Bahnschrift, "Segoe UI", sans-serif`;
+    for (const region of sov.regions.values()) {
+      if (!region.nullsec && !showEmpire) continue;
+      const [sx, sy] = toScreen(region.x, region.y, rect);
+      if (!visible(sx, sy)) continue;
+      ctx.fillStyle = region.nullsec ? "rgba(205,220,230,0.42)" : "rgba(205,220,230,0.22)";
+      ctx.fillText(region.name.toUpperCase(), sx, sy);
+    }
+  }
+
+  if ((document.getElementById("sov-names") as HTMLInputElement).checked && scale > 22) {
+    ctx.font = `${Math.min(12, 8 + scale * 0.02)}px "Segoe UI", sans-serif`;
+    ctx.textAlign = "left";
+    for (const s of sov.systems) {
+      if (s.sec >= 0.05 && !showEmpire) continue;
+      const [sx, sy] = toScreen(s.x, s.y, rect);
+      if (!visible(sx, sy)) continue;
+      ctx.fillStyle = "rgba(220,228,234,0.75)";
+      ctx.fillText(s.name, sx + dot + 3, sy);
+    }
+    ctx.textAlign = "center";
+  }
+
+  // Alliance tickers: the larger blocks always, smaller ones as the view zooms in.
+  const placed: [number, number, number, number][] = [];
+  for (const label of sov.labels) {
+    if (sov.focus !== null && label.alliance !== sov.focus) continue;
+    const alliance = sov.alliances.get(label.alliance);
+    if (!alliance) continue;
+    const size = Math.max(10, Math.min(26, 9 + Math.sqrt(label.count) * 2.4 + scale * 0.02));
+    const [sx, sy] = toScreen(label.x, label.y, rect);
+    if (!visible(sx, sy)) continue;
+    ctx.font = `700 ${size}px Bahnschrift, "Segoe UI", sans-serif`;
+    const text = alliance.ticker || alliance.name;
+    const w = ctx.measureText(text).width / 2 + 3, h = size / 2 + 2;
+    if (placed.some(([x, y, pw, ph]) => Math.abs(x - sx) < pw + w && Math.abs(y - sy) < ph + h)) continue;
+    placed.push([sx, sy, w, h]);
+    ctx.lineWidth = 3.5;
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "rgba(0,0,0,0.85)";
+    ctx.strokeText(text, sx, sy);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(text, sx, sy);
+  }
+
+  if (sov.hover) {
+    const [sx, sy] = toScreen(sov.hover.x, sov.hover.y, rect);
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(sx, sy, dot + 5, 0, Math.PI * 2); ctx.stroke();
+  }
+  if (sov.sieges.some((s) => s.fighting)) drawSov();
+}
+
+function showSovPanels(state: SovState): void {
+  const nullsec = sov.systems.filter((s) => s.sec < 0.05);
+  const heldNull = nullsec.filter((s) => s.holder !== null).length;
+  const stats = document.getElementById("sov-stats") as HTMLElement;
+  stats.replaceChildren(...([
+    [numbers.format(state.systems.length), "Systems held"],
+    [numbers.format(state.alliances.length), "Alliances"],
+    [nullsec.length ? `${Math.round((heldNull / nullsec.length) * 100)}%` : "—", "Null-sec claimed"],
+  ] as [string, string][]).map(([value, label]) => {
+    const tile = document.createElement("div");
+    const strong = document.createElement("strong"); strong.textContent = value;
+    const small = document.createElement("small"); small.textContent = label;
+    tile.append(strong, small);
+    return tile;
+  }));
+  showSovAlliances();
+
+  const recent = document.getElementById("sov-recent") as HTMLElement;
+  recent.replaceChildren(...state.recent.map((r) => {
+    const li = document.createElement("li");
+    const time = document.createElement("time"); time.textContent = r.since ? `${eveTime(r.since)} EVE` : "";
+    li.append(time, `${r.system} (${r.region}) → ${r.alliance}${r.ticker ? ` <${r.ticker}>` : ""}`);
+    li.addEventListener("click", () => centreSovOn(r.id));
+    return li;
+  }));
+  if (!state.recent.length) recent.replaceChildren(span("No changes of hands recorded yet.", "empty"));
+
+  const sieges = document.getElementById("sov-sieges") as HTMLElement;
+  sieges.replaceChildren(...state.sieges.map((s) => {
+    const li = document.createElement("li");
+    const time = document.createElement("time");
+    time.textContent = s.fighting ? "BATTLE UNDER WAY" : `${eveTime(s.starts)} EVE`;
+    if (s.fighting) time.className = "hostile";
+    li.append(time, `${s.attacker} vs ${s.defender} · ${s.system}`);
+    li.addEventListener("click", () => { const target = sov.byName.get(s.system); if (target) centreSovOn(target.id); });
+    return li;
+  }));
+  if (!state.sieges.length) sieges.replaceChildren(span("No sieges announced.", "empty"));
+}
+
+function showSovAlliances(): void {
+  const filter = (document.getElementById("sov-filter") as HTMLInputElement).value.trim().toLowerCase();
+  const out = document.getElementById("sov-alliances") as HTMLElement;
+  const shown = sov.order.filter((a) => !filter || a.name.toLowerCase().includes(filter) || a.ticker.toLowerCase().includes(filter));
+  out.replaceChildren(...shown.map((a) => {
+    const li = document.createElement("li");
+    if (sov.focus === a.id) li.className = "focused";
+    const swatch = span("", "swatch"); swatch.style.background = allianceColour(a.id);
+    const name = span(`${a.name} <${a.ticker}>`, "name"); name.title = `${a.name} <${a.ticker}> · ${numbers.format(a.pilots)} pilots`;
+    li.append(swatch, name, span(a.bots ? "sim" : "players", "kind"), span(numbers.format(a.systems), "count"));
+    li.addEventListener("click", () => focusSovAlliance(sov.focus === a.id ? null : a.id));
+    return li;
+  }));
+  if (!shown.length) out.replaceChildren(span(sov.order.length ? "No alliance matches." : "No alliance holds sovereignty yet.", "empty"));
+}
+
+function focusSovAlliance(id: number | null): void {
+  if (id !== null) {
+    const owned = sov.systems.filter((s) => s.holder === id);
+    if (owned.length) {
+      fitSov({
+        minX: Math.min(...owned.map((s) => s.x)), maxX: Math.max(...owned.map((s) => s.x)),
+        minY: Math.min(...owned.map((s) => s.y)), maxY: Math.max(...owned.map((s) => s.y)),
+      });
+    }
+  }
+  setSovFocus(id);
+}
+
+function centreSovOn(systemID: number): void {
+  const s = sov.byId.get(systemID);
+  if (!s) return;
+  sov.view = { cx: s.x, cy: s.y, scale: Math.max(sov.view.scale, 40) };
+  sov.hover = s;
+  drawSov();
+}
+
+function sovSystemAt(clientX: number, clientY: number): MapSystem | null {
+  const rect = sovCanvas().getBoundingClientRect();
+  const mx = clientX - rect.left, my = clientY - rect.top;
+  let best: MapSystem | null = null;
+  let bestDistance = 10;
+  for (const s of sov.systems) {
+    const [sx, sy] = toScreen(s.x, s.y, rect);
+    const d = Math.hypot(sx - mx, sy - my);
+    if (d < bestDistance) { bestDistance = d; best = s; }
+  }
+  return best;
+}
+
+function showSovTooltip(s: MapSystem | null, clientX: number, clientY: number): void {
+  const tip = document.getElementById("sov-tooltip") as HTMLElement;
+  if (!s) { tip.hidden = true; return; }
+  const stage = (document.getElementById("sov-stage") as HTMLElement).getBoundingClientRect();
+  const title = document.createElement("strong"); title.textContent = s.name;
+  const where = document.createElement("div");
+  where.append(security(s.sec), ` ${sov.regions.get(s.region)?.name ?? ""}`);
+  tip.replaceChildren(title, where);
+  const holder = document.createElement("div"); holder.className = "holder";
+  if (s.holder !== null) {
+    const alliance = sov.alliances.get(s.holder);
+    const swatch = span("", "swatch"); swatch.style.background = allianceColour(s.holder);
+    holder.append(swatch, `${alliance?.name ?? "Unknown alliance"}${alliance?.ticker ? ` <${alliance.ticker}>` : ""}`);
+    tip.append(holder);
+    if (s.since) tip.append(span(`Held since ${eveTime(s.since)} EVE`, "dim small"));
+  } else {
+    holder.append(span(s.sec < 0.05 ? "Unclaimed" : "Empire space", "dim"));
+    tip.append(holder);
+  }
+  const siege = sov.sieges.find((x) => x.system === s.name);
+  if (siege) tip.append(span(siege.fighting ? `Battle: ${siege.attacker} vs ${siege.defender}` : `Siege by ${siege.attacker} at ${eveTime(siege.starts)}`, "hostile small"));
+  tip.hidden = false;
+  const x = Math.min(clientX - stage.left + 14, stage.width - tip.offsetWidth - 8);
+  const y = Math.min(clientY - stage.top + 14, stage.height - tip.offsetHeight - 8);
+  tip.style.left = `${Math.max(8, x)}px`;
+  tip.style.top = `${Math.max(8, y)}px`;
+}
+
+function wireSovMap(): void {
+  const canvas = sovCanvas();
+  let drag: { x: number; y: number; cx: number; cy: number; moved: boolean } | null = null;
+  canvas.addEventListener("wheel", (event) => {
+    if (!sov.loaded) return;
+    event.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const mx = event.clientX - rect.left - rect.width / 2, my = event.clientY - rect.top - rect.height / 2;
+    const wx = sov.view.cx + mx / sov.view.scale, wy = sov.view.cy + my / sov.view.scale;
+    const scale = Math.max(2, Math.min(600, sov.view.scale * Math.exp(-event.deltaY * 0.0016)));
+    sov.view = { cx: wx - mx / scale, cy: wy - my / scale, scale };
+    drawSov();
+  }, { passive: false });
+  canvas.addEventListener("pointerdown", (event) => {
+    drag = { x: event.clientX, y: event.clientY, cx: sov.view.cx, cy: sov.view.cy, moved: false };
+    canvas.setPointerCapture(event.pointerId);
+    canvas.classList.add("dragging");
+  });
+  canvas.addEventListener("pointermove", (event) => {
+    if (drag) {
+      const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+      sov.view.cx = drag.cx - dx / sov.view.scale;
+      sov.view.cy = drag.cy - dy / sov.view.scale;
+      showSovTooltip(null, 0, 0);
+      drawSov();
+      return;
+    }
+    const s = sovSystemAt(event.clientX, event.clientY);
+    if (s !== sov.hover) { sov.hover = s; drawSov(); }
+    showSovTooltip(s, event.clientX, event.clientY);
+  });
+  canvas.addEventListener("pointerup", (event) => {
+    const clicked = drag && !drag.moved;
+    drag = null;
+    canvas.classList.remove("dragging");
+    if (clicked) {
+      const s = sovSystemAt(event.clientX, event.clientY);
+      if (s?.holder != null) focusSovAlliance(sov.focus === s.holder ? null : s.holder);
+    }
+  });
+  canvas.addEventListener("pointerleave", () => { sov.hover = null; showSovTooltip(null, 0, 0); drawSov(); });
+  canvas.addEventListener("dblclick", () => { fitSov(sov.bounds); setSovFocus(null); });
+  for (const id of ["sov-gates", "sov-regions", "sov-names", "sov-empire"]) {
+    (document.getElementById(id) as HTMLInputElement).addEventListener("change", drawSov);
+  }
+  (document.getElementById("sov-reset") as HTMLButtonElement).addEventListener("click", () => { fitSov(sov.bounds); setSovFocus(null); });
+  (document.getElementById("sov-filter") as HTMLInputElement).addEventListener("input", showSovAlliances);
+  new ResizeObserver(() => { if (document.body.dataset.page === "sovereignty") resizeSovCanvas(); }).observe(document.getElementById("sov-stage") as HTMLElement);
+}
+
+wireSovMap();
+
 // ---- the neocom clock and the minimize buttons ------------------------------------
 
 function tick(): void {
@@ -1040,18 +2703,12 @@ function tick(): void {
 }
 
 for (const button of document.querySelectorAll<HTMLButtonElement>(".window .min")) {
-  button.setAttribute("aria-expanded", "true");
-  button.addEventListener("click", () => {
-    const collapsed = button.closest(".window")?.classList.toggle("minimized") ?? false;
-    button.setAttribute("aria-expanded", String(!collapsed));
-    button.setAttribute("aria-label", collapsed ? "Expand panel" : "Collapse panel");
-    button.textContent = collapsed ? "+" : "−";
-  });
+  button.addEventListener("click", () => button.closest(".window")?.classList.toggle("minimized"));
 }
 
 const pages: Record<string, { title: string; description: string; windows: string[] }> = {
   home: { title: "Command overview", description: "Live activity across New Eden.", windows: ["w-status", "w-wars", "w-pilots", "w-news"] },
-  status: { title: "Server status", description: "Connections, simulation and uptime.", windows: ["w-status"] },
+  status: { title: "Server status", description: "Connections, simulation, uptime and how hard the machine is working.", windows: ["w-status", "w-health"] },
   wars: { title: "War report", description: "Active wars and losses.", windows: ["w-wars"] },
   pilots: { title: "Pilots online", description: "Capsuleers currently connected.", windows: ["w-pilots"] },
   systems: { title: "Busiest systems", description: "Where pilots are flying now.", windows: ["w-systems"] },
@@ -1059,9 +2716,12 @@ const pages: Record<string, { title: string; description: string; windows: strin
   corporations: { title: "Corporations", description: "Corporation roster and members.", windows: ["w-corporations"] },
   sieges: { title: "Sieges", description: "Campaigns and system assaults.", windows: ["w-sieges"] },
   news: { title: "Galactic news", description: "Published articles and recent events from across the cluster.", windows: ["w-articles", "w-news"] },
-  killboard: { title: "Killboard", description: "Killmails, top killers and recent destruction.", windows: ["w-killboard", "w-kills"] },
-  downtime: { title: "Server downtime", description: "Announce and schedule a graceful shutdown.", windows: ["w-downtime"] },
+  killboard: { title: "Killboard", description: "Killmails, top killers and recent destruction.", windows: ["w-killboard"] },
+  sovereignty: { title: "Sovereignty map", description: "Who holds which systems, updated as sovereignty changes hands.", windows: ["w-sovmap"] },
+  downtime: { title: "Server downtime", description: "Announce and schedule a graceful shutdown or restart.", windows: ["w-downtime"] },
+  bots: { title: "Bots", description: "How many bots the server plays, and how aggressive they are.", windows: ["w-bots"] },
   market: { title: "Market", description: "Trade activity and hub stock.", windows: ["w-market"] },
+  seeding: { title: "Market seeding", description: "Pick a station, such as a newly built outpost, and stock its market.", windows: ["w-seeding"] },
   relations: { title: "Standings", description: "Bot relationships and grudges.", windows: ["w-relations"] },
   follow: { title: "Follow a pilot", description: "Track a pilot's current activity.", windows: ["w-follow"] },
   control: { title: "Events and controls", description: "Simulation events and commands.", windows: ["w-control"] },
@@ -1069,39 +2729,45 @@ const pages: Record<string, { title: string; description: string; windows: strin
 };
 
 function route(): void {
-  const fragment = window.location.hash.slice(1);
-  const hash = fragment || "home";
+  const hash = window.location.hash.slice(1) || "home";
   const killID = Number(hash.match(/^kill-(\d+)$/)?.[1] ?? 0);
   const pilotID = Number(hash.match(/^pilot-(\d+)$/)?.[1] ?? 0);
+  const groupMatch = hash.match(/^(corporation|alliance)-(\d+)$/);
+  const groupKind = (groupMatch?.[1] ?? "") as "corporation" | "alliance" | "";
+  const groupID = Number(groupMatch?.[2] ?? 0);
   const page = killID > 0 ? { title: `Killmail #${killID}`, description: "Fitting, loss and involved pilots.", windows: ["w-kill-detail"] }
     : pilotID > 0 ? { title: "Pilot record", description: "Kills, losses and ships flown.", windows: ["w-pilot-profile"] }
+    : groupID > 0 ? { title: groupKind === "alliance" ? "Alliance record" : "Corporation record",
+      description: "Kills, losses, top pilots and ships.", windows: ["w-group-profile"] }
     : pages[hash] ?? pages.home;
   setText("page-title", page.title);
   setText("page-description", page.description);
-  setText("page-kicker", killID > 0 || pilotID > 0 || hash === "killboard" ? "KILLBOARD / NEW EDEN" : "COMMAND CENTER / NEW EDEN");
+  setText("page-kicker", killID > 0 || pilotID > 0 || groupID > 0 || hash === "killboard" ? "KILLBOARD / NEW EDEN"
+    : hash === "sovereignty" ? "SOVEREIGNTY / NEW EDEN" : "CLUSTER ADMINISTRATION / NEW EDEN");
   document.title = `${page.title} · Red Moon Rising`;
-  const overview = page === pages.home;
-  document.getElementById("overview-metrics")!.hidden = !overview;
-  document.querySelector(".desktop")!.classList.toggle("overview", overview);
+  const activePage = killID > 0 || pilotID > 0 || groupID > 0 ? "killboard" : (hash in pages ? hash : "home");
+  document.body.dataset.page = activePage;
+  (document.getElementById("home-metrics") as HTMLElement).hidden = activePage !== "home";
   for (const window of document.querySelectorAll<HTMLElement>(".desktop .window")) {
     window.classList.toggle("page-hidden", !page.windows.includes(window.id));
   }
   (document.getElementById("w-kill-detail") as HTMLElement).hidden = killID === 0;
   (document.getElementById("w-pilot-profile") as HTMLElement).hidden = pilotID === 0;
+  (document.getElementById("w-group-profile") as HTMLElement).hidden = groupID === 0;
   for (const link of document.querySelectorAll<HTMLAnchorElement>(".neocom a")) {
-    const active = link.hash === (killID > 0 || pilotID > 0 ? "#killboard" : `#${pages[hash] ? hash : "home"}`);
-    if (active) link.setAttribute("aria-current", "page");
+    if (link.hash === `#${activePage}`) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
   if (killID > 0) void showKill(killID);
   if (pilotID > 0) void showPilot(pilotID);
+  if (groupID > 0 && groupKind) void showGroup(groupKind, groupID);
   if (hash === "users") void refreshUsers();
-  if (fragment !== "main-content") window.scrollTo(0, 0);
+  if (hash === "seeding") void refreshSeeding();
+  if (hash === "status") void refreshHealth();
+  if (hash === "bots") void refreshBotSettings();
+  if (hash === "sovereignty") void openSovMap();
+  window.scrollTo(0, 0);
 }
-document.querySelector(".skip-link")?.addEventListener("click", (event) => {
-  event.preventDefault();
-  document.getElementById("main-content")?.focus();
-});
 window.addEventListener("hashchange", route);
 
 tick();
@@ -1112,5 +2778,9 @@ setInterval(() => void refresh(), REFRESH_MS);
 void refreshArticles();
 setInterval(() => void refreshArticles(), REFRESH_MS);
 void refreshDowntime();
+void refreshBotSettings();
+setInterval(() => void refreshBotSettings(), 15_000);
+void refreshHealth();
+setInterval(() => void refreshHealth(), 2_000);
 setInterval(() => void refreshDowntime(), 5_000);
 setInterval(renderDowntime, 1_000);

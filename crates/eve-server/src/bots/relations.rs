@@ -308,6 +308,14 @@ impl Relations {
         rng: &mut Rng,
     ) -> Vec<(u32, u32)> {
         self.hunting.retain(|i, (p, until)| *until > clock && bots[*i as usize].online && players.iter().any(|(c, _)| c == p));
+        if super::aggression() == super::Aggression::Calm {
+            // Calm bots send nobody after players; current hunts are called off.
+            if !self.hunting.is_empty() {
+                self.hunting.clear();
+                self.changed = true;
+            }
+            return Vec::new();
+        }
         let mut sent = Vec::new();
         for &(player, system) in players {
             if atlas.systems.get(&system).is_none_or(|s| s.security >= 0.45) {
@@ -671,17 +679,38 @@ pub async fn mail(db: &Client, world: &crate::world::World, from: Sender, player
 
 // ---- corporations ------------------------------------------------------------------------------
 
-/// Applications to bot corporations: accepted unless the applicant is
-/// hostile to the corporation's side, rejected if so.
-pub async fn answer_applications(r: &Relations, db: &Client, world: &crate::world::World, p: &Politics) -> Result<(), tokio_postgres::Error> {
-    let sql = r#"SELECT a."corporationID", a."characterID", a."applicationText", a."applicationDateTime"
+/// Applications to bot corporations, answered as the dashboard's
+/// acceptApplications says: closed turns everyone down; open takes anyone
+/// not hostile to the corporation's side; selective also keeps outlaws out
+/// of industrial corporations.
+pub async fn answer_applications(r: &Relations, db: &Client, world: &crate::world::World, p: &Politics, rng: &mut Rng) -> Result<(), tokio_postgres::Error> {
+    let sql = r#"SELECT a."corporationID", a."characterID", a."applicationText", a."applicationDateTime", COALESCE(c."securityRating", 0)
                    FROM "crpApplications" a JOIN "botGroups" g ON g."ownerID" = a."corporationID"
+                   LEFT JOIN "character_" c ON c."characterID" = a."characterID"
                   WHERE a."status" = $1 AND a."deleted" = 0"#;
+    let door = super::door();
     for row in db.query(sql, &[&APPLIED_BY_CHARACTER]).await? {
         let (corp, char_id) = (int(&row, 0).unwrap_or(0) as i32, int(&row, 1).unwrap_or(0) as i32);
+        let security = float(&row, 4).unwrap_or(0.0);
         let side = p.side_of(corp).unwrap_or(corp);
+        let kind = p.corps.get(&corp).map_or(0, |c| c.kind);
         let hostile = r.get(side, char_id).flags & HOSTILE != 0;
-        let (status, note) = if hostile { (REJECTED_BY_CORPORATION, "We do not take pilots who kill ours.") } else { (ACCEPTED_BY_CORPORATION, "Welcome aboard. Accept to join us.") };
+        let refusal: Option<&[&str]> = if door == super::Door::Closed {
+            Some(&["We're not recruiting right now. Try again later.", "Recruitment is closed, sorry.", "Not taking anyone at the moment."])
+        } else if hostile {
+            Some(&["We do not take pilots who kill ours.", "You've shot our members. No.", "Our killboard remembers you. Denied."])
+        } else if door == super::Door::Selective && kind == super::politics::KIND_INDUSTRIAL_CORP && security < -2.0 {
+            Some(&["Our miners need to feel safe. Fix your security status first.", "We don't take outlaws. Come back when CONCORD likes you again."])
+        } else {
+            None
+        };
+        let accept = refusal.is_none();
+        let note = match refusal {
+            Some(lines) => lines[rng.below(lines.len())],
+            None if kind == super::politics::KIND_COMBAT_CORP => ["Welcome aboard. Accept to join, then get on comms.", "You're in. Fit for PvP and don't fly what you can't lose.", "Accepted. Bring a ship, we roam at prime time."][rng.below(3)],
+            None => ["Welcome aboard. Accept to join us.", "Accepted! Read the corp bulletin and fly safe.", "Welcome to the corp. Ask in chat if you need anything.", "You're in. Taxes are low, help is free."][rng.below(4)],
+        };
+        let status = if accept { ACCEPTED_BY_CORPORATION } else { REJECTED_BY_CORPORATION };
         db.execute(
             r#"UPDATE "crpApplications" SET "status" = $3, "corporationText" = $4 WHERE "corporationID" = $1 AND "characterID" = $2"#,
             &[&corp, &char_id, &status, &note],
@@ -692,19 +721,147 @@ pub async fn answer_applications(r: &Relations, db: &Client, world: &crate::worl
         let change = crate::svc::rows::change(APPLICATION_HEADER, Some(&line(APPLIED_BY_CHARACTER)), Some(&line(status)));
         let w = world.lock();
         w.notify(&w.clients_of(char_id as i64), "OnCorporationApplicationChanged", Value::Tuple(vec![Value::Int(char_id as i64), Value::Int(corp as i64), change]));
-        info!("bots: corporation {corp} {} {char_id}'s application", if hostile { "turned down" } else { "accepted" });
+        info!("bots: corporation {corp} {} {char_id}'s application", if accept { "accepted" } else { "turned down" });
     }
     Ok(())
 }
 
-const PITCHES: [&str; 6] = [
-    "Experienced pilot looking for a corporation that actually flies together.",
-    "I mine, I haul, I pay my taxes. Looking for a home.",
-    "Combat pilot, a few years in. Want to be useful to someone.",
-    "Saw your corporation around. Would like to join if you'll have me.",
-    "Solo too long. Looking for people to fly with.",
-    "Industrialist with my own ships. Happy to work near your headquarters.",
-];
+/// eveConstants allianceApplicationNew.
+const ALLIANCE_APPLICATION_NEW: i16 = 1;
+
+/// Player corporations' applications to bot alliances, answered by the
+/// executor as the dashboard's acceptApplications says. Hostile or warring
+/// corporations are turned down; selective industry alliances also keep
+/// outlaws out. Applications wait a few minutes, as a director would.
+pub async fn answer_alliance_applications(r: &Relations, db: &Client, world: &crate::world::World, p: &Politics, rng: &mut Rng) -> Result<(), tokio_postgres::Error> {
+    let due = crate::bulkdata::filetime_now() - 3 * 60 * SECOND_FT;
+    let sql = r#"SELECT a."allianceID", a."corporationID", co."ceoID", COALESCE(c."securityRating", 0),
+                        EXISTS (SELECT 1 FROM "crpWars" w WHERE w."retracted" IS NULL
+                                   AND ((w."declaredByID" = a."allianceID" AND w."againstID" = a."corporationID")
+                                     OR (w."declaredByID" = a."corporationID" AND w."againstID" = a."allianceID")))
+                   FROM "allianceApplications" a
+                   JOIN alliances al ON al."allianceID" = a."allianceID"
+                   JOIN "botGroups" g ON g."ownerID" = al."executorCorpID"
+                   JOIN "corporation" co ON co."corporationID" = a."corporationID"
+                   LEFT JOIN "character_" c ON c."characterID" = co."ceoID"
+                  WHERE a."state" = $1 AND a."deleted" = 0 AND a."applicationDateTime" <= $2
+                    AND NOT EXISTS (SELECT 1 FROM "botGroups" b WHERE b."ownerID" = a."corporationID")"#;
+    let door = super::door();
+    for row in db.query(sql, &[&ALLIANCE_APPLICATION_NEW, &due]).await? {
+        let (alliance, corp, ceo) = (int(&row, 0).unwrap_or(0) as i32, int(&row, 1).unwrap_or(0) as i32, int(&row, 2).unwrap_or(0) as i32);
+        let security = float(&row, 3).unwrap_or(0.0);
+        let at_war: bool = row.get(4);
+        let kind = p.alliances.get(&alliance).map_or(0, |a| a.kind);
+        let hostile = r.get(alliance, ceo).flags & HOSTILE != 0;
+        let refusal: Option<&[&str]> = if door == super::Door::Closed {
+            Some(&["The alliance isn't taking new members right now.", "Membership is closed for now. Try again later."])
+        } else if at_war {
+            Some(&["We're at war with you. Surrender first.", "Not while we're at war."])
+        } else if hostile {
+            Some(&["Your CEO has blood on their hands. Ours. Denied.", "Our members don't trust your corporation."])
+        } else if door == super::Door::Selective && kind == super::politics::KIND_INDUSTRY_ALLIANCE && security < -2.0 {
+            Some(&["We protect miners, not pirates. Denied.", "Your CEO's record doesn't fit an industrial alliance."])
+        } else {
+            None
+        };
+        let accept = refusal.is_none();
+        let note = match refusal {
+            Some(lines) => lines[rng.below(lines.len())],
+            None if kind == super::politics::KIND_PIRATE_ALLIANCE => ["Welcome to the hunt. Your membership starts tomorrow.", "Accepted. Don't make us regret it."][rng.below(2)],
+            None => ["Welcome to the alliance. Your membership takes effect in a day.", "Accepted. Join alliance chat once you're in.", "Approved by the executor. See you on the battlefield."][rng.below(3)],
+        };
+        if crate::svc::alliance::answer_for_bots(db, world, alliance as i64, corp as i64, accept, note).await {
+            if let Some((executor, executor_ceo)) = leader(db, alliance).await {
+                let name = owner_name(db, alliance).await;
+                let subject = if accept { format!("Your application to {name}") } else { format!("{name}: application declined") };
+                let body = format!("{note}<br><br>The directors of {}", owner_name(db, executor).await);
+                if let Err(e) = crate::svc::chat::deliver(db, world, executor_ceo as i64, &[ceo as i64], &subject, &body).await {
+                    error!("bots: mailing corporation {corp}'s CEO: {}", crate::logging::chain(&e));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Bot corporations outside an alliance apply to player alliances now and
+/// then, as the dashboard's joinPlayerAlliances says. One accepted joins a
+/// day later, through the same path as a player corporation.
+pub async fn apply_to_alliances(db: &Client, world: &crate::world::World, p: &Politics, rng: &mut Rng) -> Result<(), tokio_postgres::Error> {
+    const CHANCE: f64 = 1.0 / 30.0;
+    const PENDING: i64 = 2;
+    const PITCHES: [&str; 6] = [
+        "Established corporation looking for a strong alliance to fight alongside.",
+        "We bring pilots, ships and industry. Looking for a long-term home.",
+        "Active corporation, multiple time zones, ready to contribute to your wars.",
+        "Our miners and haulers keep a fleet fed. We'd like to keep yours fed.",
+        "Small but loyal. We show up for fleets.",
+        "We've watched your alliance hold its space. We want in.",
+    ];
+    let factor = super::alliance_applying().factor();
+    if factor <= 0.0 {
+        return Ok(());
+    }
+    let free: Vec<i32> = p.corps.iter().filter(|(_, c)| c.alliance.is_none() && c.members > 0).map(|(id, _)| *id).collect();
+    if free.is_empty() {
+        return Ok(());
+    }
+    let sql = r#"SELECT a."allianceID",
+                        (SELECT count(*) FROM "allianceApplications" x JOIN "botGroups" g ON g."ownerID" = x."corporationID"
+                          WHERE x."allianceID" = a."allianceID" AND x."state" = 1 AND x."deleted" = 0)
+                   FROM alliances a
+                  WHERE a."deleted" = 0
+                    AND NOT EXISTS (SELECT 1 FROM "botGroups" g WHERE g."ownerID" = a."allianceID" OR g."ownerID" = a."executorCorpID")"#;
+    for row in db.query(sql, &[]).await? {
+        let (alliance, pending) = (int(&row, 0).unwrap_or(0), int(&row, 1).unwrap_or(0));
+        if pending >= PENDING || rng.unit() >= CHANCE * factor {
+            continue;
+        }
+        let corp = free[rng.below(free.len())];
+        let pitch = PITCHES[rng.below(PITCHES.len())];
+        crate::svc::alliance::apply_for_bots(db, world, alliance, corp as i64, pitch).await;
+    }
+    Ok(())
+}
+
+/// Bot corporations whose alliance changed outside the simulation (a player
+/// alliance took one in, or let it go): politics and Local follow.
+pub async fn sync_alliances(db: &Client, p: &mut Politics, ids: &mut [Identity]) -> Result<bool, tokio_postgres::Error> {
+    let sql = r#"SELECT g."ownerID", COALESCE(co."allianceID", 0) FROM "botGroups" g JOIN "corporation" co ON co."corporationID" = g."ownerID""#;
+    let mut moved: HashMap<i32, Option<i32>> = HashMap::new();
+    for row in db.query(sql, &[]).await? {
+        let corp = int(&row, 0).unwrap_or(0) as i32;
+        let alliance = int(&row, 1).map(|a| a as i32).filter(|a| *a != 0);
+        if let Some(c) = p.corps.get_mut(&corp) {
+            if c.alliance != alliance {
+                info!("bots: corporation {corp} is now in alliance {alliance:?} (was {:?})", c.alliance);
+                c.alliance = alliance;
+                moved.insert(corp, alliance);
+            }
+        }
+    }
+    for id in ids.iter_mut() {
+        if let Some(alliance) = moved.get(&id.corp) {
+            id.alliance = *alliance;
+        }
+    }
+    Ok(!moved.is_empty())
+}
+
+/// What a bot says about itself when it applies to a corporation.
+fn pitch(role: Role, rng: &mut Rng) -> String {
+    let opening = ["Hi.", "Hello!", "o7.", "Hey there.", "Greetings."];
+    let about: &[&str] = match role {
+        Role::Miner => &["I mine every day and haul my own ore.", "Barge pilot, can fly an exhumer soon.", "Industrial pilot looking to boost corp output."],
+        Role::Hauler => &["I haul. Big hold, careful pilot, never lost a freighter.", "Logistics pilot, happy to move whatever you need."],
+        Role::Trader => &["Market trader, I can keep the corp supplied.", "I run buy orders in three hubs and know the markets."],
+        Role::Ratter => &["Combat pilot, I rat and run missions.", "PvE pilot learning PvP, good with drones.", "I clear belts and anomalies all day."],
+        Role::Explorer => &["Explorer. I find sites, I scan, I bring loot home.", "Prober and hacker, can scan down anything."],
+        Role::Pirate => &["PvP pilot. I hunt. You point, I shoot.", "Solo roamer looking for a fleet to bring targets to.", "Low sec veteran with a killboard you'll like."],
+    };
+    let close = ["Looking for a home.", "Would love to fly with you.", "Active most evenings EU time.", "Active in US time zones.", "Not looking for drama, just good people.", "Can contribute to corp ops."];
+    format!("{} {} {}", opening[rng.below(opening.len())], about[rng.below(about.len())], close[rng.below(close.len())])
+}
 
 /// Bots in NPC corporations apply to player corporations now and then;
 /// those accepted join (changing corporation as a player would), move near
@@ -789,7 +946,7 @@ pub async fn recruit(
                     AND NOT EXISTS (SELECT 1 FROM "botGroups" g WHERE g."ownerID" = co."corporationID")"#;
     for row in db.query(sql, &[]).await? {
         let (corp, region, pending) = (int(&row, 0).unwrap_or(0) as i32, int(&row, 1).unwrap_or(0) as i32, int(&row, 2).unwrap_or(0));
-        if pending >= PENDING_MAX || rng.unit() >= APPLY_CHANCE {
+        if pending >= PENDING_MAX || rng.unit() >= APPLY_CHANCE * super::recruiting().factor() {
             continue;
         }
         // A bot of an NPC corporation, living in the region if one does.
@@ -800,7 +957,8 @@ pub async fn recruit(
         let local: Vec<u32> = free.iter().copied().filter(|i| atlas.region_of(atlas.system_of(bots[*i as usize].home)) == region).take(500).collect();
         let pool = if local.is_empty() { &free } else { &local };
         let i = pool[rng.below(pool.len())];
-        let pitch = PITCHES[rng.below(PITCHES.len())];
+        let pitch = pitch(bots[i as usize].role, rng);
+        let pitch = pitch.as_str();
         let now = crate::bulkdata::filetime_now();
         db.execute(
             r#"INSERT INTO "crpApplications" ("corporationID","characterID","applicationText","applicationDateTime","status","deleted")

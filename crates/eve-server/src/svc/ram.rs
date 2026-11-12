@@ -814,11 +814,15 @@ async fn within_reach(ctx: &Ctx<'_>, line: &Line) -> Refused<()> {
 
 // ---- delivering --------------------------------------------------------------------------
 
+/// Staff who may rush a job: CCP, GM and BH accounts carry ROLE_GML (8),
+/// ISD BH carries 2048 (see config::staff_role). Plain ISD may not.
+const RUSH_JOB_ROLES: i64 = 8 | 2_048;
+
 /// CompleteJob(installationLocationData, jobID, cancel): a finished job's
 /// output and its blueprint go to the owner's hangar at the station; a
 /// cancelled one gives the blueprint back alone.
 async fn complete(ctx: &Ctx<'_>, job_id: i64, cancel: bool, rush: bool) -> Refused<Value> {
-    if rush && ctx.session.role & crate::svc::gm::ROLE_GML == 0 {
+    if rush && ctx.session.role & RUSH_JOB_ROLES == 0 {
         return Err(message("RamCompletionAccessDenied"));
     }
     let me = ctx.session.char_id.unwrap_or(0);

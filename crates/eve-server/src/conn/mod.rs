@@ -76,6 +76,9 @@ pub struct Conn {
     authenticated: bool,
     pending_session_change: Option<MachoPacket>,
     pending_dock: Option<location::PendingDock>,
+    /// The newest destiny stamp this client has been sent (see
+    /// `monotonic_destiny`).
+    last_destiny_stamp: i64,
     /// Calls made on the client, by call ID, waiting for its answer.
     client_calls: std::collections::HashMap<i64, tokio::sync::oneshot::Sender<Option<Value>>>,
     next_call_id: i64,
@@ -102,6 +105,7 @@ impl Conn {
             authenticated: false,
             pending_session_change: None,
             pending_dock: None,
+            last_destiny_stamp: 0,
             client_calls: std::collections::HashMap::new(),
             next_call_id: 0,
         }
@@ -480,7 +484,8 @@ impl Conn {
             return Ok(());
         }
         trace!(event = n.event, "notify");
-        let inner = Value::Tuple(vec![Value::Int(0), Value::Tuple(vec![Value::Int(1), n.args.clone()])]);
+        let args = if n.event == "DoDestinyUpdate" { self.monotonic_destiny(&n.args) } else { n.args.clone() };
+        let inner = Value::Tuple(vec![Value::Int(0), Value::Tuple(vec![Value::Int(1), args])]);
         let blob = eve_marshal::save(&inner, &self.server.table)?;
         let mut note = MachoPacket::notification(Value::Tuple(vec![Value::Int(0), Value::Bytes(blob)]));
         note.source = Some(self.notification_source());
@@ -491,6 +496,42 @@ impl Conn {
         });
         note.user_id = self.session.user_id;
         self.send_packet(&note).await
+    }
+
+    /// The client keeps only the state of its last update once it has
+    /// applied one (michelle.py RealFlushState rebases after every update), so
+    /// an update stamped before one it already applied cannot be placed: it
+    /// asks for the whole grid again (UpdateStateRequest), which re-adds
+    /// every ball, duplicates overview rows and snaps ships back. Updates
+    /// reach a client from the heartbeat, from calls and from combat, each
+    /// stamped when it was built, so they can arrive out of order on a busy
+    /// grid. Hold each client's stamps to never go backwards; a SetState
+    /// starts the count again from its own stamp.
+    fn monotonic_destiny(&mut self, args: &Value) -> Value {
+        let mut args = args.clone();
+        let mut raised = 0;
+        if let Value::Tuple(parts) = &mut args {
+            if let Some(Value::List(entries)) = parts.first_mut() {
+                for entry in entries.iter_mut() {
+                    let Value::Tuple(e) = entry else { continue };
+                    let Some(stamp) = e.first().and_then(Value::as_i64) else { continue };
+                    let set_state = e.get(1).and_then(Value::seq).and_then(|call| call.first())
+                        .is_some_and(|name| *name == Value::bytes("SetState"));
+                    if set_state {
+                        self.last_destiny_stamp = stamp;
+                    } else if stamp < self.last_destiny_stamp {
+                        e[0] = Value::Int(self.last_destiny_stamp);
+                        raised += 1;
+                    } else {
+                        self.last_destiny_stamp = stamp;
+                    }
+                }
+            }
+        }
+        if raised > 0 {
+            debug!(raised, stamp = self.last_destiny_stamp, "destiny update stamps held in order");
+        }
+        args
     }
 
     async fn reply(&mut self, req: &MachoPacket, value: &Value) -> Result {

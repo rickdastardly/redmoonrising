@@ -30,6 +30,14 @@ const CATEGORY_DRONE: i64 = 18;
 const EFFECT_MINING: i64 = 17;
 /// A drone this close to its ship is back in the bay.
 const DOCK_RANGE: f64 = 1_500.0;
+/// A returning drone also docks once it is within this many seconds of
+/// flight at its top speed. destiny eases a follower's thrust over the last
+/// second of travel at full speed (`steer`), so a fast light drone (5-8 km/s)
+/// crawls through its last few kilometres and could take half a minute to
+/// cover the final 1,500 m.
+const DOCK_REACH_SECONDS: f64 = 0.6;
+/// How often a drone on its way into the bay checks whether it has arrived.
+const RETURN_THINK_MS: i64 = 250;
 /// How far from its ship it waits.
 const IDLE_ORBIT: f64 = 1_000.0;
 /// How far a pilot reaches to scoop a drone (const.maxCargoContainerTransferDistance).
@@ -367,6 +375,10 @@ fn command(ctx: &Ctx<'_>, ids: &[i64], order: Order) -> Value {
         .is_some_and(Ship::in_warp);
     let now = combat::now_ms();
     for id in ids {
+        // A drone already back in the bay has done what a return asks.
+        if matches!(order, Order::ReturnHome | Order::ReturnBay) && !park.ships.contains_key(id) {
+            continue;
+        }
         let Some(drone) = park.ships.get_mut(id).and_then(|s| s.drone.as_mut()).filter(|d| d.owner == char_id && d.controller.is_some()) else {
             failed.push((*id, "That is not your drone."));
             continue;
@@ -551,7 +563,9 @@ pub fn arrive_following_fighters(park: &mut Park, now: i64, out: &mut Out) {
             if let Some((pos, radius)) = at {
                 ship.pos = pos + Vec3::new(radius + ship.stats.radius + 1_500.0, 0.0, 0.0);
                 ship.vel = Vec3::ZERO;
-                out.jobs.push(Job::DronePosition { drone_id: id, pos: ship.pos });
+                if ship.drone.as_ref().is_some_and(|d| d.client_id != 0) {
+                    out.jobs.push(Job::DronePosition { drone_id: id, pos: ship.pos });
+                }
             }
             if let Some(drone) = ship.drone.as_mut() {
                 if at.is_none() { drone.order = Order::Idle; }
@@ -567,6 +581,13 @@ pub fn arrive_following_fighters(park: &mut Park, now: i64, out: &mut Out) {
 fn think_one(park: &mut Park, id: i64, now: i64, out: &mut Out) {
     let Some(drone) = park.ships.get(&id).and_then(|s| s.drone.clone()) else { return };
     let controller = drone.controller.filter(|c| park.ships.contains_key(c));
+    // A bot's drones go with their ship: lost or gone, they leave too.
+    if drone.client_id == 0 && controller.is_none() {
+        if crate::fight::detach(park, id, now, out).is_some() {
+            out.destiny(park.solar_system_id, space::entry(park.tick, "RemoveBalls", vec![Value::List(vec![Value::Int(id)])]));
+        }
+        return;
+    }
     let mut order = drone.order.clone();
     // An order with nothing left to do becomes waiting.
     let gone = match &order {
@@ -599,7 +620,8 @@ fn think_one(park: &mut Park, id: i64, now: i64, out: &mut Out) {
     // Home: into the bay.
     if order == Order::ReturnBay {
         if let Some(c) = controller {
-            if park.surface_distance(id, c).is_some_and(|d| d <= DOCK_RANGE) {
+            let reach = park.ships.get(&id).map_or(DOCK_RANGE, |s| DOCK_RANGE.max(s.stats.max_velocity * DOCK_REACH_SECONDS));
+            if park.surface_distance(id, c).is_some_and(|d| d <= reach) {
                 dock(park, id, c, now, out);
                 return;
             }
@@ -684,10 +706,11 @@ fn think_one(park: &mut Park, id: i64, now: i64, out: &mut Out) {
     }
     let activity = if order == Order::Idle { activity::IDLE } else { activity };
     let changed = d.activity != activity;
+    let returning = order == Order::ReturnBay;
     d.order = order;
     d.activity = activity;
     d.controller = controller.or(d.controller);
-    d.next_think_ms = now + THINK_MS;
+    d.next_think_ms = now + if returning { RETURN_THINK_MS } else { THINK_MS };
     let line = state_line(id, d, ship.pilot.type_id);
     let client = d.client_id;
     if changed {
@@ -714,7 +737,90 @@ fn dock(park: &mut Park, id: i64, controller: i64, now: i64, out: &mut Out) {
     let Some(ship) = crate::fight::detach(park, id, now, out) else { return };
     out.destiny(park.solar_system_id, space::entry(park.tick, "RemoveBalls", vec![Value::List(vec![Value::Int(id)])]));
     let client_id = ship.drone.as_ref().map_or(ship.client_id, |d| d.client_id);
-    out.jobs.push(Job::DroneHome { client_id, drone_id: id, ship_id: controller });
+    // A bot's drones are not items: back in the bay is gone from space.
+    if client_id != 0 {
+        out.jobs.push(Job::DroneHome { client_id, drone_id: id, ship_id: controller });
+    }
+}
+
+// ---- bots' drones ------------------------------------------------------------------------------
+
+/// How far from its target a bot ship sends its drones.
+const BOT_DRONE_RANGE: f64 = 30_000.0;
+
+/// A bot ship's drones: the type in its bay and how many fly at once. They
+/// fly as a player's do, with no client and no items behind them.
+#[derive(Debug, Clone)]
+pub struct BotDrones {
+    pub kind: npc::NpcType,
+    pub count: usize,
+}
+
+/// The drones a bot ship has out.
+fn bot_drones_of(park: &Park, controller: i64) -> Vec<i64> {
+    park.ships.values().filter(|s| s.drone.as_ref().is_some_and(|d| d.client_id == 0 && d.controller == Some(controller))).map(|s| s.id).collect()
+}
+
+/// A bot ship fighting `target` sends its drones when it is close enough,
+/// sets them on a new target when it switches, and calls them back to the
+/// bay when the fight is over (`None`).
+pub fn bot_drones_follow(park: &mut Park, controller: i64, target: Option<i64>, now: i64, out: &mut Out) {
+    let Some(ship) = park.ships.get(&controller) else { return };
+    let Some(plan) = ship.bot_drones.clone() else { return };
+    let (char_id, corp_id, alliance_id, pos, radius) = (ship.pilot.char_id, ship.pilot.corp_id, ship.pilot.alliance_id, ship.pos, ship.stats.radius);
+    let flying = bot_drones_of(park, controller);
+    let Some(target) = target else {
+        for id in flying {
+            if let Some(d) = park.ships.get_mut(&id).and_then(|s| s.drone.as_mut()) {
+                if d.order != Order::ReturnBay {
+                    order_drone(d, &Order::ReturnBay, None, false, now);
+                }
+            }
+        }
+        return;
+    };
+    if !flying.is_empty() {
+        for id in flying {
+            if let Some(d) = park.ships.get_mut(&id).and_then(|s| s.drone.as_mut()) {
+                if d.order != Order::Engage(target) {
+                    order_drone(d, &Order::Engage(target), Some(target), false, now);
+                }
+            }
+        }
+        return;
+    }
+    if park.surface_distance(controller, target).is_none_or(|d| d > BOT_DRONE_RANGE) {
+        return;
+    }
+    let system = park.solar_system_id;
+    for n in 0..plan.count {
+        let id = npc::next_id();
+        let angle = n as f64 * std::f64::consts::TAU / plan.count.max(1) as f64;
+        let at = pos + Vec3::new(angle.cos(), 0.0, angle.sin()) * (radius + LAUNCH_CLEARANCE);
+        let pilot = Pilot {
+            type_id: plan.kind.type_id,
+            group_id: plan.kind.group_id,
+            name: plan.kind.name.clone(),
+            char_id,
+            corp_id,
+            alliance_id,
+            security: 0.0,
+            bounty: 0.0,
+        };
+        let mut drone = make(&plan.kind, id, pilot, 0, controller, at, now, &mut park.rng);
+        if let Some(d) = drone.drone.as_mut() {
+            order_drone(d, &Order::Engage(target), Some(target), false, now);
+        }
+        park.ships.insert(id, drone);
+        for (client, e) in space::add_ball_entries_for_nearby(park, id) {
+            out.destiny_to(system, client, e);
+        }
+    }
+}
+
+/// Every drone a bot ship has out, for taking them out of space with it.
+pub fn bot_drone_ids(park: &Park, controller: i64) -> Vec<i64> {
+    bot_drones_of(park, controller)
 }
 
 /// ship.ScoopDrone(ids): drones close to the ship go straight into the bay.
@@ -936,7 +1042,7 @@ mod tests {
                 if now <= 6_000 {
                     locked_promptly |= park.ships[&20].fight.as_ref().unwrap().is_locked(10);
                 }
-                if !fired && out.destiny_entries().iter().any(|(_, entry)| {
+                if !fired && out.destiny_entries().any(|entry| {
                     let event = &entry.seq().unwrap()[1].seq().unwrap();
                     event[0] == Value::bytes("OnSpecialFX")
                 }) {

@@ -34,13 +34,14 @@ mod relations;
 mod schema;
 mod ships;
 mod sov;
+pub mod talk;
 
 pub use presence::eject;
 pub use relations::{stance, Stance};
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -71,10 +72,302 @@ const FIRST_OWNED_CORP: i32 = 2_000_000;
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
 static CONTROLS: AtomicBool = AtomicBool::new(false);
+/// How long bots that answered a fight call wait there, bot seconds.
+const MEET_SECS: u32 = 20 * 60;
+static AGGRESSION: AtomicU8 = AtomicU8::new(Aggression::Usual as u8);
+/// How many bots this run of the simulation plays (0: none or not started).
+static PLAYING: AtomicUsize = AtomicUsize::new(0);
+
+/// Whom the bots attack on sight: no player (calm), the usual ones (pirates
+/// outside high-sec, sides a player has angered, hunters), or every player
+/// they do not count as a friend. Bots always fight back when shot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Aggression {
+    Calm = 0,
+    Usual = 1,
+    All = 2,
+}
+
+impl Aggression {
+    pub fn parse(word: &str) -> Option<Aggression> {
+        match word.trim().to_ascii_lowercase().as_str() {
+            "calm" | "none" => Some(Aggression::Calm),
+            "some" | "default" | "normal" => Some(Aggression::Usual),
+            "all" | "aggressive" => Some(Aggression::All),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Aggression::Calm => "calm",
+            Aggression::Usual => "some",
+            Aggression::All => "all",
+        }
+    }
+}
+
+pub fn aggression() -> Aggression {
+    match AGGRESSION.load(Ordering::Relaxed) {
+        0 => Aggression::Calm,
+        2 => Aggression::All,
+        _ => Aggression::Usual,
+    }
+}
+
+/// Takes effect at once: each bot looks again at its next think.
+pub fn set_aggression(mode: Aggression) {
+    AGGRESSION.store(mode as u8, Ordering::Relaxed);
+}
+
+/// How many bots the running simulation plays.
+pub fn running_count() -> usize {
+    PLAYING.load(Ordering::Relaxed)
+}
+
+// ---- settings the dashboard changes while the server runs --------------------------------------
+
+/// How much bots talk in Local.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Chatter {
+    Off = 0,
+    Quiet = 1,
+    Normal = 2,
+    Chatty = 3,
+}
+
+impl Chatter {
+    pub fn parse(word: &str) -> Option<Chatter> {
+        match word.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" => Some(Chatter::Off),
+            "quiet" | "low" => Some(Chatter::Quiet),
+            "normal" | "default" => Some(Chatter::Normal),
+            "chatty" | "high" => Some(Chatter::Chatty),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        ["off", "quiet", "normal", "chatty"][self as usize]
+    }
+
+    /// How often, relative to normal, bots start talking unprompted.
+    pub fn rate(self) -> f64 {
+        [0.0, 0.4, 1.0, 2.2][self as usize]
+    }
+}
+
+/// How often something happens: bots applying to player corporations, or
+/// bot corporations applying to player alliances.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Rate {
+    Off = 0,
+    Low = 1,
+    Normal = 2,
+    High = 3,
+}
+
+impl Rate {
+    pub fn parse(word: &str) -> Option<Rate> {
+        match word.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" | "never" => Some(Rate::Off),
+            "low" | "rare" => Some(Rate::Low),
+            "normal" | "default" => Some(Rate::Normal),
+            "high" | "often" => Some(Rate::High),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        ["off", "low", "normal", "high"][self as usize]
+    }
+
+    pub fn factor(self) -> f64 {
+        [0.0, 0.35, 1.0, 3.0][self as usize]
+    }
+}
+
+/// Whom bot corporations and alliances take in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Door {
+    /// Nobody: every application is turned down.
+    Closed = 0,
+    /// Anyone not hostile to them, with a good enough record.
+    Selective = 1,
+    /// Anyone not hostile to them.
+    Open = 2,
+}
+
+impl Door {
+    pub fn parse(word: &str) -> Option<Door> {
+        match word.trim().to_ascii_lowercase().as_str() {
+            "closed" | "never" | "off" => Some(Door::Closed),
+            "selective" | "normal" | "default" => Some(Door::Selective),
+            "open" | "always" => Some(Door::Open),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        ["closed", "selective", "open"][self as usize]
+    }
+}
+
+static CHATTER: AtomicU8 = AtomicU8::new(Chatter::Normal as u8);
+static TRASH_TALK: AtomicBool = AtomicBool::new(true);
+static RECRUITING: AtomicU8 = AtomicU8::new(Rate::Normal as u8);
+static ALLIANCE_APPLYING: AtomicU8 = AtomicU8::new(Rate::Normal as u8);
+static DOOR: AtomicU8 = AtomicU8::new(Door::Selective as u8);
+/// How many bots are online, relative to normal (f32 bits).
+static ACTIVITY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3f80_0000);
+static SHOWN: AtomicUsize = AtomicUsize::new(0);
+/// Bumped on every change, so the simulation applies what it must.
+static SETTINGS_VERSION: AtomicUsize = AtomicUsize::new(0);
+
+/// The most bots shown in one system, and the range of online activity.
+pub const SHOWN_RANGE: (usize, usize) = (10, 1_000);
+pub const ACTIVITY_RANGE: (f64, f64) = (0.1, 4.0);
+
+fn changed() {
+    SETTINGS_VERSION.fetch_add(1, Ordering::Relaxed);
+}
+
+pub fn chatter() -> Chatter {
+    match CHATTER.load(Ordering::Relaxed) {
+        0 => Chatter::Off,
+        1 => Chatter::Quiet,
+        3 => Chatter::Chatty,
+        _ => Chatter::Normal,
+    }
+}
+
+pub fn set_chatter(c: Chatter) {
+    CHATTER.store(c as u8, Ordering::Relaxed);
+    changed();
+}
+
+pub fn trash_talk() -> bool {
+    TRASH_TALK.load(Ordering::Relaxed)
+}
+
+pub fn set_trash_talk(on: bool) {
+    TRASH_TALK.store(on, Ordering::Relaxed);
+    changed();
+}
+
+fn rate_of(v: u8) -> Rate {
+    match v {
+        0 => Rate::Off,
+        1 => Rate::Low,
+        3 => Rate::High,
+        _ => Rate::Normal,
+    }
+}
+
+pub fn recruiting() -> Rate {
+    rate_of(RECRUITING.load(Ordering::Relaxed))
+}
+
+pub fn set_recruiting(r: Rate) {
+    RECRUITING.store(r as u8, Ordering::Relaxed);
+    changed();
+}
+
+pub fn alliance_applying() -> Rate {
+    rate_of(ALLIANCE_APPLYING.load(Ordering::Relaxed))
+}
+
+pub fn set_alliance_applying(r: Rate) {
+    ALLIANCE_APPLYING.store(r as u8, Ordering::Relaxed);
+    changed();
+}
+
+pub fn door() -> Door {
+    match DOOR.load(Ordering::Relaxed) {
+        0 => Door::Closed,
+        2 => Door::Open,
+        _ => Door::Selective,
+    }
+}
+
+pub fn set_door(d: Door) {
+    DOOR.store(d as u8, Ordering::Relaxed);
+    changed();
+}
+
+pub fn activity_factor() -> f64 {
+    f32::from_bits(ACTIVITY.load(Ordering::Relaxed)) as f64
+}
+
+pub fn set_activity_factor(f: f64) {
+    let f = f.clamp(ACTIVITY_RANGE.0, ACTIVITY_RANGE.1) as f32;
+    ACTIVITY.store(f.to_bits(), Ordering::Relaxed);
+    changed();
+}
+
+/// The most bot ships shown in one system (0 before the bots start).
+pub fn shown_per_system() -> usize {
+    SHOWN.load(Ordering::Relaxed)
+}
+
+pub fn set_shown_per_system(n: usize) {
+    SHOWN.store(n.clamp(SHOWN_RANGE.0, SHOWN_RANGE.1), Ordering::Relaxed);
+    changed();
+}
+
+pub fn pirates_attack_players() -> bool {
+    presence::pirates_attack_players()
+}
+
+pub fn set_pirates_attack_players(on: bool) {
+    presence::set_pirates_attack_players(on);
+    changed();
+}
+
+/// The settings above as the config file sets them at start.
+#[derive(Debug, Clone, Copy)]
+pub struct Settings {
+    pub chatter: Chatter,
+    pub trash_talk: bool,
+    pub recruiting: Rate,
+    pub alliance_applying: Rate,
+    pub door: Door,
+    pub activity: f64,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings { chatter: Chatter::Normal, trash_talk: true, recruiting: Rate::Normal, alliance_applying: Rate::Normal, door: Door::Selective, activity: 1.0 }
+    }
+}
+
+pub fn apply_settings(s: &Settings, shown: usize) {
+    set_chatter(s.chatter);
+    set_trash_talk(s.trash_talk);
+    set_recruiting(s.recruiting);
+    set_alliance_applying(s.alliance_applying);
+    set_door(s.door);
+    set_activity_factor(s.activity);
+    set_shown_per_system(shown);
+}
+
+fn settings_version() -> usize {
+    SETTINGS_VERSION.load(Ordering::Relaxed)
+}
+
 static STATUS: Mutex<String> = Mutex::new(String::new());
 static DB_URL: OnceLock<String> = OnceLock::new();
 
 /// /bots on|off.
+/// Whether the simulation is running (not paused from the dashboard).
+pub fn is_running() -> bool {
+    RUNNING.load(Ordering::Relaxed)
+}
+
 pub fn set_running(on: bool) {
     RUNNING.store(on, Ordering::Relaxed);
 }
@@ -106,6 +399,7 @@ pub fn request(words: &[&str]) -> Result<String, String> {
         control::Request::Density(r, f) => format!("Asked for {r} at {f}x."),
         control::Request::Follow(n) => format!("Following {n}."),
         control::Request::Unfollow(n) => format!("No longer following {n}."),
+        control::Request::Meet { bots, .. } => format!("{} bots answering a fight call.", bots.len()),
     };
     control::ask(r);
     Ok(said)
@@ -121,6 +415,7 @@ pub async fn run(server: Arc<Server>, target: usize, speed: f64, shown: usize, s
         return;
     }
     let _ = DB_URL.set(server.db_url.clone());
+    PLAYING.store(target, Ordering::Relaxed);
     match start(&server, target).await {
         Ok((mut db, atlas, mut bots, mut ids)) => {
             let mut rng = Rng::seeded(crate::bulkdata::filetime_now() as u64 ^ 0x5eed);
@@ -141,11 +436,11 @@ pub async fn run(server: Arc<Server>, target: usize, speed: f64, shown: usize, s
                 Ok(_) => {}
                 Err(e) => error!("bots: settling null-sec: {}", crate::logging::chain(&e)),
             }
-            let (yard, econ) = match markets(&db, &atlas, &mut bots, &ids, &politics).await {
+            let (yard, econ) = match markets(&db, &atlas, &mut bots, &mut ids, &politics).await {
                 Ok(v) => v,
                 Err(e) => return error!("bots: the economy: {}", crate::logging::chain(&e)),
             };
-            let mut presence = Presence::new(presence::hulls(&db, &ids, yard.all().map(i64::from)).await, shown);
+            let mut presence = Presence::new(presence::hulls(&db, &ids, yard.all().chain(yard.drone_types()).map(i64::from)).await, shown);
             let yard = Arc::new(yard);
             presence.yard = Some(Arc::clone(&yard));
             let relations = match relations::load(&db).await {
@@ -174,21 +469,54 @@ async fn start(server: &Server, target: usize) -> Result<(Client, Atlas, Vec<Bot
     Ok((db, atlas, bots, ids))
 }
 
+/// Bots flying a hull the shipyard does not sell (one from outside the
+/// market's Ships tab, made before bots kept to it) get the starting hull of
+/// their role and race instead, in the database too.
+async fn rehull(db: &Client, yard: &ships::Shipyard, bots: &[Bot], ids: &mut [Identity]) -> Result<(), tokio_postgres::Error> {
+    let odd: Vec<usize> = (0..ids.len()).filter(|i| ids[*i].hull != 0 && !yard.hulls.contains_key(&(ids[*i].hull as i32))).collect();
+    if odd.is_empty() {
+        return Ok(());
+    }
+    let mut types: Vec<i32> = odd.iter().map(|i| ids[*i].hull as i32).collect();
+    types.sort_unstable();
+    types.dedup();
+    let races: HashMap<i32, i64> = db
+        .query(r#"SELECT "typeID", COALESCE("raceID", 0) FROM "invTypes" WHERE "typeID" = ANY($1)"#, &[&types])
+        .await?
+        .iter()
+        .map(|r| (r.get::<_, i32>(0), r.get::<_, i32>(1) as i64))
+        .collect();
+    let mut moves: HashMap<i32, Vec<i32>> = HashMap::new();
+    for i in odd {
+        let race = races.get(&(ids[i].hull as i32)).copied().filter(|r| *r > 0).unwrap_or(1);
+        let Some(hull) = yard.hull_for(bots[i].role, race, 0, bots[i].id as u64).or_else(|| yard.hull_for(bots[i].role, 1, 0, bots[i].id as u64)) else { continue };
+        ids[i].hull = hull as i64;
+        moves.entry(hull).or_default().push(ids[i].ship as i32);
+    }
+    let count: usize = moves.values().map(Vec::len).sum();
+    for (hull, ships) in moves {
+        db.execute(r#"UPDATE entity SET "typeID" = $1 WHERE "itemID" = ANY($2)"#, &[&hull, &ships]).await?;
+    }
+    info!("bots: {count} bots were flying hulls not sold under the market's Ships tab; they fly market hulls now");
+    Ok(())
+}
+
 /// The ships bots fly and the economy they trade in: hulls and their
 /// prices, each bot's place on its ladder, and the market hubs (the trade
 /// hubs and each null-sec alliance's capital, where most of its pilots live).
-async fn markets(db: &Client, atlas: &Atlas, bots: &mut [Bot], ids: &[Identity], p: &politics::Politics) -> Result<(ships::Shipyard, economy::Economy), tokio_postgres::Error> {
+async fn markets(db: &Client, atlas: &Atlas, bots: &mut [Bot], ids: &mut [Identity], p: &politics::Politics) -> Result<(ships::Shipyard, economy::Economy), tokio_postgres::Error> {
     let hulls = ships::hull_types(db).await?;
     let mut econ = economy::load(db, atlas, &hulls).await?;
     let prices: HashMap<i32, f64> = econ.goods.iter().filter(|(_, g)| g.kind == economy::Kind::Hull).map(|(t, g)| (*t, g.ask)).collect();
     let yard = ships::Shipyard::load(db, &prices).await?;
-    for (b, id) in bots.iter_mut().zip(ids) {
+    rehull(db, &yard, bots, ids).await?;
+    for (b, id) in bots.iter_mut().zip(ids.iter()) {
         b.hull = id.hull as i32;
         b.tier = yard.tier_of(b.role, b.hull);
         b.prime = id.alliance.map_or_else(|| behaviour::prime_for(b.id), |a| p.prime_of(a));
     }
     let mut homes: HashMap<i32, HashMap<i32, u32>> = HashMap::new();
-    for (b, id) in bots.iter().zip(ids) {
+    for (b, id) in bots.iter().zip(ids.iter()) {
         if let Some(a) = id.alliance.filter(|a| p.alliances.get(a).is_some_and(|x| x.kind == politics::KIND_NULL_ALLIANCE)) {
             *homes.entry(a).or_default().entry(b.home).or_default() += 1;
         }
@@ -255,6 +583,9 @@ struct Sim {
     changed: Vec<u32>,
     hulls_changed: Vec<u32>,
     said: std::collections::VecDeque<(i64, String)>,
+    /// The dashboard settings last applied, and the online activity then.
+    applied_settings: usize,
+    applied_activity: f64,
     tally: Tally,
 }
 
@@ -310,6 +641,8 @@ impl Sim {
             changed: (0..n as u32).collect(),
             hulls_changed: Vec::new(),
             said: std::collections::VecDeque::new(),
+            applied_settings: usize::MAX,
+            applied_activity: activity_factor(),
             tally: Tally::default(),
         }
     }
@@ -326,6 +659,39 @@ impl Sim {
         self.generation[i as usize] += 1;
         self.due.push(Reverse((self.clock as u32 + wait, i, self.generation[i as usize])));
         self.touch(i);
+    }
+
+    /// What the dashboard changed: the bots shown per system at once, and
+    /// how many play. More activity brings offline bots on soon; less sends
+    /// some of those online home to log off.
+    fn apply_settings(&mut self) {
+        self.applied_settings = settings_version();
+        let shown = shown_per_system();
+        if shown > 0 && shown != self.presence.cap() {
+            info!("bots: showing up to {shown} bot ships per system");
+            self.presence.set_cap(shown);
+        }
+        let activity = activity_factor();
+        let before = self.applied_activity;
+        if (activity - before).abs() < 1e-3 {
+            return;
+        }
+        self.applied_activity = activity;
+        let now = self.clock as u32;
+        let mut changed = Vec::new();
+        {
+            let ctx = Ctx { atlas: &self.atlas, econ: &mut self.econ, yard: Some(&*self.yard), day0: self.day0, density: &self.density };
+            for (i, bot) in self.bots.iter_mut().enumerate() {
+                if let Some(wait) = behaviour::new_activity(bot, now, before, activity, &ctx, &mut self.rng) {
+                    changed.push((i as u32, wait));
+                }
+            }
+        }
+        let count = changed.len();
+        for (i, wait) in changed {
+            self.reschedule(i, wait);
+        }
+        info!("bots: online activity {before:.2}x -> {activity:.2}x; {count} bots changed plans");
     }
 
     fn say(&mut self, text: String) {
@@ -355,7 +721,7 @@ impl Sim {
         publish_counts(&self.server, &self.bots, &self.politics, &self.sieges, RUNNING.load(Ordering::Relaxed));
         let (mut next_politics, mut next_skirmish) = (POLITICS_EVERY, SKIRMISH_EVERY);
         let mut last_sync = Instant::now();
-        let (mut last_flush, mut last_report, mut last_tick, mut last_balances, mut last_battle) = (Instant::now(), Instant::now(), Instant::now(), Instant::now(), Instant::now());
+        let (mut last_flush, mut last_report, mut last_tick, mut last_balances) = (Instant::now(), Instant::now(), Instant::now(), Instant::now());
         let mut interval = tokio::time::interval(TICK);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         info!("bots: running {} at {}x", self.bots.len(), self.speed);
@@ -372,6 +738,9 @@ impl Sim {
             let elapsed = last_tick.elapsed();
             last_tick = Instant::now();
             let running = RUNNING.load(Ordering::Relaxed);
+            if self.applied_settings != settings_version() {
+                self.apply_settings();
+            }
             if running {
                 self.clock += elapsed.as_secs_f64() * self.speed;
                 let now = self.clock as u32;
@@ -409,7 +778,8 @@ impl Sim {
                 }
             }
             if last_report.elapsed() >= REPORT {
-                if running { local_banter(&self.server.world, self.clock as u64); }
+                let window = last_report.elapsed().as_secs_f64().max(1.0);
+                crate::health::record_bots(self.tally.steps as f64 / window, self.tally.step_time.div_f64(window), self.tally.worst_tick);
                 let mut summary = report(&self.bots, &self.tally, last_report.elapsed(), self.clock, self.speed, running);
                 let s = &self.econ.stats;
                 summary.push_str(&format!(
@@ -436,10 +806,6 @@ impl Sim {
                 self.tally = Tally::default();
                 last_report = Instant::now();
             }
-            if running && last_battle.elapsed() >= Duration::from_secs(10) {
-                local_battle_banter(&self.server.world, self.clock as u64);
-                last_battle = Instant::now();
-            }
         }
     }
 
@@ -455,6 +821,8 @@ impl Sim {
             if gen != self.generation[i as usize] {
                 continue;
             }
+            // A fight call it answered is over by its next step.
+            self.presence.end_meet(i);
             let bot = &mut self.bots[i as usize];
             let before = (bot.system, bot.station, bot.activity);
             let wait = behaviour::step(bot, now, &mut ctx, &mut self.rng).max(1);
@@ -528,8 +896,17 @@ impl Sim {
         if let Err(e) = economy::tick(&mut self.econ, &self.db, &self.server.db_url, &self.server.world, &self.bots, &mut roll).await {
             error!("bots: the economy: {}", crate::logging::chain(&e));
         }
-        if let Err(e) = relations::answer_applications(&self.relations, &self.db, &self.server.world, &self.politics).await {
+        if let Err(e) = relations::answer_applications(&self.relations, &self.db, &self.server.world, &self.politics, &mut self.rng).await {
             error!("bots: applications to bot corporations: {}", crate::logging::chain(&e));
+        }
+        if let Err(e) = relations::answer_alliance_applications(&self.relations, &self.db, &self.server.world, &self.politics, &mut self.rng).await {
+            error!("bots: applications to bot alliances: {}", crate::logging::chain(&e));
+        }
+        if let Err(e) = relations::apply_to_alliances(&self.db, &self.server.world, &self.politics, &mut self.rng).await {
+            error!("bots: applications to player alliances: {}", crate::logging::chain(&e));
+        }
+        if let Err(e) = relations::sync_alliances(&self.db, &mut self.politics, &mut self.ids).await {
+            error!("bots: reading bot corporations' alliances: {}", crate::logging::chain(&e));
         }
         match relations::recruit(&self.db, &self.server.world, &self.atlas, &self.politics, &mut self.bots, &mut self.ids, &self.by_char, &mut self.rng).await {
             Ok(moved) => {
@@ -755,6 +1132,30 @@ impl Sim {
                         self.following.unfollow(i);
                     }
                 }
+                control::Request::Meet { system, anchor, point, bots } => {
+                    let m = presence::Meet { system, anchor, point: crate::ballpark::Vec3::new(point.0, point.1, point.2) };
+                    let mut came = 0;
+                    for char_id in bots {
+                        let Some(&i) = self.by_char.get(&char_id) else { continue };
+                        let b = &mut self.bots[i as usize];
+                        if !b.online || b.system != system || b.pod.is_some() || matches!(b.activity, behaviour::Activity::Sieging | behaviour::Activity::Escorting) {
+                            continue;
+                        }
+                        let docked = (b.station != 0).then_some(b.station);
+                        b.station = 0;
+                        b.activity = behaviour::Activity::Camping;
+                        b.route.clear();
+                        b.session_end = b.session_end.max(now + 3_600);
+                        let bot = b.clone();
+                        {
+                            let mut w = self.server.world.lock();
+                            self.presence.meet(&mut w, i, &bot, m, docked);
+                        }
+                        self.reschedule(i, MEET_SECS);
+                        came += 1;
+                    }
+                    info!("bots: {came} bots answered a fight call in system {system}");
+                }
             }
         }
     }
@@ -915,10 +1316,15 @@ async fn write_kills(db: &Client, kills: &[(u32, u32, i32, i32)], bots: &[Bot], 
 /// system; and the dashboard's figures follow.
 fn publish_counts(server: &Server, bots: &[Bot], politics: &politics::Politics, sieges: &[sov::Siege], running: bool) {
     let mut counts: HashMap<i64, (i64, i64)> = HashMap::new();
+    let mut local: HashMap<i64, Vec<u32>> = HashMap::new();
+    let mut bot_online = vec![false; bots.len()];
     if running {
-        for b in bots.iter().filter(|b| b.online) {
-            let c = counts.entry(b.system as i64).or_default();
+        for (index, b) in bots.iter().enumerate().filter(|(_, b)| b.online) {
+            let system = i64::from(b.system);
+            let c = counts.entry(system).or_default();
             if b.station == 0 { c.0 += 1 } else { c.1 += 1 }
+            local.entry(system).or_default().push(index as u32);
+            bot_online[index] = true;
         }
     }
     let (online, in_space) = counts.values().fold((0, 0), |(o, s), (sp, dk)| (o + sp + dk, s + sp));
@@ -949,12 +1355,6 @@ fn publish_counts(server: &Server, bots: &[Bot], politics: &politics::Politics, 
             .collect(),
         running,
     };
-    let mut local: HashMap<i64, Vec<u32>> = HashMap::new();
-    if running {
-        for (i, b) in bots.iter().enumerate().filter(|(_, b)| b.online) {
-            local.entry(b.system as i64).or_default().push(i as u32);
-        }
-    }
     let mut w = server.world.lock();
     w.bot_counts = counts;
     w.bot_stats = stats;
@@ -962,6 +1362,7 @@ fn publish_counts(server: &Server, bots: &[Bot], politics: &politics::Politics, 
     // A player may join before the first population snapshot. Announce that
     // first roster too, or their Local window stays empty until bots move.
     tell_local(&w, &before);
+    w.set_bot_online(bot_online);
 }
 
 /// Tells everyone with a Local channel open which bots came and went there
@@ -971,7 +1372,7 @@ fn tell_local(w: &crate::world::WorldState, before: &HashMap<i64, Vec<u32>>) {
     for (system, channel, members) in w.local_channels() {
         let was: std::collections::HashSet<u32> = before.get(&system).map(|v| v.iter().copied().collect()).unwrap_or_default();
         let now: std::collections::HashSet<u32> = w.bot_local.get(&system).map(|v| v.iter().copied().collect()).unwrap_or_default();
-        let count = members.len() + now.len();
+        let count = chat::channel_population(w, &channel, members.len());
         let came = now.difference(&was).map(|i| (*i, "JoinChannel"));
         let went = was.difference(&now).map(|i| (*i, "LeaveChannel"));
         for (i, method) in came.chain(went) {
@@ -994,6 +1395,9 @@ mod local_tests {
         let mut w = world.lock();
         let mut client = w.connect(7);
         let local = Value::List(vec![Value::Tuple(vec![Value::bytes("solarsystemid2"), Value::Int(30002780)])]);
+        w.set_presence(7, Some(crate::world::Presence {
+            char_id: 140000001, corp_id: 1000002, solar_system_id: 30002780, docked: true, station_id: Some(60000001), role: 0,
+        }));
         w.join_channel(&local, 7);
         w.bot_roster = std::sync::Arc::new(vec![LocalBot {
             char_id: 140000002,
@@ -1001,6 +1405,7 @@ mod local_tests {
             alliance_id: None,
             name: "Bot".into(),
             type_id: 1373,
+            role: 1,
         }]);
         w.bot_local.insert(30002780, vec![0]);
 
@@ -1016,53 +1421,6 @@ mod local_tests {
     }
 }
 
-/// A short exchange in watched Local channels once a minute.
-fn local_banter(world: &crate::world::World, clock: u64) {
-    use crate::svc::chat;
-    let w = world.lock();
-    let open = w.local_channels();
-    let lines = [
-        ("That wreck in the belt wasn't mine when I got here.", "Sure. And you just happened to be looting it?"),
-        ("Anyone hunting today, or just hiding in station?", "I am in space. Where are you?"),
-        ("I see new pilots on scan. Hope they brought insurance.", "Careful. They might be looking for you."),
-        ("The belts are busy tonight.", "Good. I was getting bored."),
-    ];
-    let (first, second) = lines[(clock as usize / 60) % lines.len()];
-    for (system, channel, members) in open {
-        let Some(bots) = w.bot_local.get(&system) else { continue };
-        if bots.len() < 2 || members.is_empty() { continue; }
-        let start = (clock as usize / 60) % bots.len();
-        let Some(a) = w.bot_roster.get(bots[start] as usize) else { continue };
-        let Some(b) = w.bot_roster.get(bots[(start + 1) % bots.len()] as usize) else { continue };
-        let count = members.len() + bots.len();
-        chat::announce_counted(&w, &members, count, &channel, "SendMessage", &chat::bot_who(a), vec![eve_marshal::Value::text(first)]);
-        chat::announce_counted(&w, &members, count, &channel, "SendMessage", &chat::bot_who(b), vec![eve_marshal::Value::text(second)]);
-    }
-}
-
-fn local_battle_banter(world: &crate::world::World, clock: u64) {
-    use crate::svc::chat;
-    let w = world.lock();
-    for (system, channel, members) in w.local_channels() {
-        if members.is_empty() { continue; }
-        let Some(park) = w.parks.get(&system) else { continue };
-        let active: Vec<_> = park.ships.values().filter(|s| s.fight.as_ref().is_some_and(|f| f.modules.iter().any(|m| m.offensive))).collect();
-        let crowded = active.iter().any(|a| active.iter().filter(|b| (a.pos - b.pos).len() <= 200_000.0).count() >= 4);
-        if !crowded { continue; }
-        let Some(bots) = w.bot_local.get(&system) else { continue };
-        if bots.len() < 2 { continue; }
-        let lines = ["Break their lock and push in!", "That armor is folding. Stay on target!", "Someone's about to lose a ship.", "Keep talking in local. I can still hear you over the guns."];
-        let count = members.len() + bots.len();
-        for turn in 0..bots.len().min(3) {
-            let index = (clock as usize / 10 + turn) % bots.len();
-            if let Some(bot) = w.bot_roster.get(bots[index] as usize) {
-                let line = lines[(clock as usize / 10 + turn) % lines.len()];
-                chat::announce_counted(&w, &members, count, &channel, "SendMessage", &chat::bot_who(bot), vec![eve_marshal::Value::text(line)]);
-            }
-        }
-    }
-}
-
 /// Every bot as Local shows it: name, corporation, alliance, portrait type.
 fn roster(bots: &[Bot], ids: &[Identity], types: &HashMap<i32, i64>) -> std::sync::Arc<Vec<crate::world::LocalBot>> {
     let list = bots
@@ -1074,6 +1432,7 @@ fn roster(bots: &[Bot], ids: &[Identity], types: &HashMap<i32, i64>) -> std::syn
             alliance_id: id.alliance.map(i64::from),
             name: id.name.clone(),
             type_id: types.get(&b.id).copied().unwrap_or(1373),
+            role: b.role as u8,
         })
         .collect();
     std::sync::Arc::new(list)

@@ -101,9 +101,10 @@ impl PendingDock {
         }
 
         if gap > DOCK_WARP_DISTANCE {
-            if park.inside_warp_bubble(ship.pos)
-                || ship.fight.as_ref().is_some_and(|fight| fight.afflictions.scrambled >= 1.0)
-            {
+            if park.warp_disruptor_at(ship.pos).is_some() {
+                return Err("Your ship cannot warp to the station from inside a warp disruption field.");
+            }
+            if ship.fight.as_ref().is_some_and(|fight| fight.afflictions.scrambled >= 1.0) {
                 return Err("Your ship cannot warp to the station while warp scrambled.");
             }
             let target = space::station_warp_point(ship, at, radius, 0.0);
@@ -280,6 +281,14 @@ impl Conn {
                 return self.reply(req, &Value::None).await;
             }
             return self.refuse_dock(req, "A docking request is already in progress.").await;
+        }
+        // The owner's Station Management docking rule (outposts).
+        if !towed {
+            if let Some(char_id) = self.session.char_id {
+                if let Some(why) = crate::svc::outpost::docking_refusal(&self.server.db, station_id, char_id).await {
+                    return self.refuse_dock(req, &why).await;
+                }
+            }
         }
         let pending = PendingDock {
             request: req.clone(),

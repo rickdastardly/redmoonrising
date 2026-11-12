@@ -6,14 +6,12 @@ set "RMR_INVOCATION_DIRECTORY=%CD%"
 set "RMR_MODE=ui"
 set "RMR_UI_PID="
 set "RMR_RUN_ID="
-set "RMR_RESTART="
 :parse
 if "%~1"=="" goto parsed
 if /i "%~1"=="--help" goto help
 if /i "%~1"=="-h" goto help
 if /i "%~1"=="--headless" goto headless
 if /i "%~1"=="--stop" goto stop
-if /i "%~1"=="--restart" goto restart
 if /i "%~1"=="--check" goto check
 if /i "%~1"=="--server-only" goto serveronly
 if /i "%~1"=="--no-auto-client" goto noautoclient
@@ -25,11 +23,6 @@ echo Unknown option. Use --help for usage. 1>&2
 exit /b 2
 :headless
 set "RMR_MODE=headless"
-shift
-goto parse
-:restart
-set "RMR_RESTART=1"
-if "%RMR_MODE%"=="ui" set "RMR_MODE=headless"
 shift
 goto parse
 :stop
@@ -88,11 +81,10 @@ echo An option is missing its value. Use --help for usage. 1>&2
 exit /b 2
 :help
 echo Red Moon Rising launcher
- echo Usage: Start.bat [--headless ^| --server-only ^| --check ^| --stop] [--restart]
+ echo Usage: Start.bat [--headless ^| --server-only ^| --check ^| --stop]
 echo                  [--no-auto-client] [--client "folder"]
 echo                  [--game-port N] [--web-port N] [--database-port N]
 echo No options opens the launcher window. --check tests the server then stops it.
-echo --restart saves and stops the current server, then starts it again.
 echo --server-only runs without selecting or starting a game client.
 echo EVE starts automatically when the server is ready. --no-auto-client keeps it closed.
 echo Default ports: game 26000, web 18080, database 5432; busy ports advance automatically.
@@ -155,12 +147,73 @@ function Set-Status([string]$Stage, [string]$Message, [int]$Progress) {
     [IO.File]::WriteAllText($StatusPath, ($script:Status | ConvertTo-Json -Compress), $Utf8)
     Write-Log ('[{0}] {1}' -f $Stage, $Message)
 }
-function Test-RmrWorkerStopped([string]$Directory) {
+function Invoke-RmrWindowRestart {
+    # Clicks the launcher window's own Restart server button, so a dashboard
+    # restart does exactly what that button does. WinForms buttons are real
+    # windows: find the one with that label and send it a button click.
+    if (-not $env:RMR_UI_PID) { return $false }
     try {
-        $probe = [IO.File]::Open((Join-Path $Directory 'launcher.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
-        $probe.Dispose()
-        return $true
-    } catch [IO.IOException] { return $false }
+        if (-not ('RmrUi.WindowButtons' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+namespace RmrUi {
+    public static class WindowButtons {
+        delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+        [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc callback, IntPtr lParam);
+        [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent, EnumProc callback, IntPtr lParam);
+        [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hWnd, StringBuilder name, int size);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, IntPtr wParam, StringBuilder lParam, uint flags, uint timeout, out IntPtr result);
+        [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr hWnd);
+        [DllImport("user32.dll")] static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+        const uint WM_GETTEXT = 0x000D, BM_CLICK = 0x00F5, SMTO_ABORTIFHUNG = 0x0002;
+
+        static string Text(IntPtr hWnd) {
+            StringBuilder text = new StringBuilder(256);
+            IntPtr ignored;
+            SendMessageTimeout(hWnd, WM_GETTEXT, (IntPtr)text.Capacity, text, SMTO_ABORTIFHUNG, 2000, out ignored);
+            return text.ToString();
+        }
+
+        // Clicks the enabled button labelled `label` in a window of process
+        // `pid`. Returns "clicked", or what was seen, for the log.
+        public static string Click(int pid, string label) {
+            List<IntPtr> windows = new List<IntPtr>();
+            EnumWindows(delegate (IntPtr hWnd, IntPtr l) {
+                uint owner; GetWindowThreadProcessId(hWnd, out owner);
+                if (owner == (uint)pid) windows.Add(hWnd);
+                return true;
+            }, IntPtr.Zero);
+            List<string> seen = new List<string>();
+            IntPtr found = IntPtr.Zero;
+            foreach (IntPtr window in windows) {
+                EnumChildWindows(window, delegate (IntPtr child, IntPtr l) {
+                    StringBuilder cls = new StringBuilder(256);
+                    GetClassName(child, cls, cls.Capacity);
+                    if (cls.ToString().IndexOf("BUTTON", StringComparison.OrdinalIgnoreCase) < 0) return true;
+                    string text = Text(child).Replace("&", "");
+                    seen.Add(text + (IsWindowEnabled(child) ? "" : " (disabled)"));
+                    if (found == IntPtr.Zero && string.Equals(text, label, StringComparison.OrdinalIgnoreCase) && IsWindowEnabled(child)) found = child;
+                    return true;
+                }, IntPtr.Zero);
+            }
+            if (found != IntPtr.Zero && PostMessage(found, BM_CLICK, IntPtr.Zero, IntPtr.Zero)) return "clicked";
+            return windows.Count + " window(s); buttons: " + (seen.Count > 0 ? string.Join(", ", seen.ToArray()) : "none");
+        }
+    }
+}
+'@
+        }
+        $result = [RmrUi.WindowButtons]::Click([int]$env:RMR_UI_PID, 'Restart server')
+        if ($result -eq 'clicked') { return $true }
+        Write-Log ('Dashboard restart: the launcher window''s Restart server button was not available (' + $result + ').')
+    } catch {
+        Write-Log ('Dashboard restart: could not click the launcher window''s Restart server button: ' + $_.Exception.Message)
+    }
+    return $false
 }
 function Assert-Running {
     if ($script:Stopping) { return }
@@ -793,29 +846,19 @@ function Start-RmrWorker {
         Install-PostgresRuntime $pgBin
         Invoke-Native (Join-Path $pgBin 'postgres.exe') @('--version')
         if ($needsBuild) {
-            # Raw DLL imports need a matching GNU dlltool and assembler.
-            $binutilsDir = Join-Path $toolDir 'winlibs-16.2.0-r3'
-            $gnuTools = Join-Path $binutilsDir 'mingw64\bin'
-            $binutilsFiles = @('dlltool.exe','as.exe','libintl-8.dll','libiconv-2.dll','libzstd.dll','zlib1.dll','libwinpthread-1.dll','libgcc_s_seh-1.dll')
-            $missingBinutils = $binutilsFiles | Where-Object { -not [IO.File]::Exists((Join-Path $gnuTools $_)) }
-            $binutilsReady = Join-Path $binutilsDir 'installed.ok'
-            if ($missingBinutils -or -not [IO.File]::Exists($binutilsReady)) {
-                Set-Status 'Toolchain' 'Preparing portable MinGW tools for Windows DLL imports' 30
-                $binutilsArchive = Get-Download 'https://github.com/brechtsanders/winlibs_mingw/releases/download/16.2.0posix-23.1.3-14.0.0-ucrt-r3/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r3.7z' 'winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r3.7z' 'db014a73b71907c6c778fd1c938056cddcae9023f89f8dfff7783d9e45baf975'
-                [IO.Directory]::CreateDirectory($binutilsDir) | Out-Null
-                [IO.File]::Delete($binutilsReady)
-                $entries = $binutilsFiles | ForEach-Object { "mingw64/bin/$_" }
-                Invoke-Native (Join-Path $env:SystemRoot 'System32\tar.exe') (@('-xf',$binutilsArchive,'-C',$binutilsDir) + $entries)
-                [IO.File]::WriteAllText($binutilsReady, '16.2.0-r3', $Utf8)
-            }
             Set-Status 'Building' 'Compiling RMR; later launches reuse the verified build' 35
-            $originalPath = $env:Path
-            try {
-                $env:Path = "$gnuTools;$originalPath"
-                Invoke-Native $rustup @('run','1.97.0-x86_64-pc-windows-gnu','cargo','build','--release','--locked','-p','eve-server','--bins','--target','x86_64-pc-windows-gnu')
-            } finally {
-                $env:Path = $originalPath
+            # Crates that link Windows DLLs by name (windows-sys, getrandom, chrono,
+            # parking_lot) need dlltool.exe. The toolchain's rust-mingw component
+            # ships one, but rustc only finds it on PATH; a PC without MinGW
+            # installed otherwise fails with "error calling dlltool 'dlltool.exe'".
+            $selfContained = Join-Path $env:RUSTUP_HOME 'toolchains\1.97.0-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\self-contained'
+            if (-not [IO.File]::Exists((Join-Path $selfContained 'dlltool.exe'))) {
+                Write-Log 'The Rust toolchain has no dlltool.exe; reinstalling its MinGW component.'
+                Invoke-Native $rustup @('component','add','rust-mingw','--toolchain','1.97.0-x86_64-pc-windows-gnu')
             }
+            if (-not [IO.File]::Exists((Join-Path $selfContained 'dlltool.exe'))) { throw 'The Rust toolchain is missing dlltool.exe. Delete the .rmr\rustup folder and run start.bat again.' }
+            if (($env:PATH -split ';') -notcontains $selfContained) { $env:PATH = $selfContained + ';' + $env:PATH }
+            Invoke-Native $rustup @('run','1.97.0-x86_64-pc-windows-gnu','cargo','build','--release','--locked','-p','eve-server','--bins','--target','x86_64-pc-windows-gnu')
             if (-not (Test-Path -LiteralPath $serverExe) -or -not (Test-Path -LiteralPath $fakeClientExe)) { throw 'The build did not produce both server and fakeclient executables.' }
             $buildRecord = [pscustomobject]@{ fingerprint = $fingerprint; serverHash = (Get-RmrFileHash $serverExe); clientHash = (Get-RmrFileHash $fakeClientExe) }
             [IO.File]::WriteAllText($buildStamp, ($buildRecord | ConvertTo-Json), $Utf8)
@@ -942,50 +985,106 @@ function Start-RmrWorker {
         $env:RMR_LOG_FILE = Join-Path $Logs 'server.log'
         $env:RMR_DUMP_DIR = Join-Path $Logs 'dumps'
         $env:RMR_SHUTDOWN_FILE = Join-Path $Runtime 'shutdown.request'
+        # With a launcher window, a dashboard restart asks the window to do
+        # what its Restart server button does. Headless runs restart in place.
+        if ($env:RMR_MODE -eq 'worker' -and $env:RMR_UI_PID) {
+            $env:RMR_RESTART_FILE = Join-Path $Runtime 'restart.request'
+            if ([IO.File]::Exists($env:RMR_RESTART_FILE)) { Remove-Item -LiteralPath $env:RMR_RESTART_FILE -Force }
+        } else { $env:RMR_RESTART_FILE = $null }
         # A generic shell RUST_LOG must not override this server's rmr.yml
         # log.level. RMR_LOG remains available as the deliberate override.
         $env:RUST_LOG = $null
-        if ([IO.File]::Exists($env:RMR_SHUTDOWN_FILE)) { Remove-Item -LiteralPath $env:RMR_SHUTDOWN_FILE -Force }
         [IO.Directory]::CreateDirectory($env:RMR_DUMP_DIR) | Out-Null
         $binaryDir = Join-Path $Root 'target\x86_64-pc-windows-gnu\release'
-        $server = New-NativeProcess (Join-Path $binaryDir 'eve-server.exe') @()
-        $watch = [Diagnostics.Stopwatch]::StartNew()
-        while (-not (Test-RmrOwnedPort $gamePort $server.Process.Id) -or -not (Test-RmrOwnedPort $webPort $server.Process.Id)) {
-            Assert-Running; Read-NativeOutput $server
-            if ($server.Process.HasExited) { Read-NativeOutput $server; throw "Server exited with code $($server.Process.ExitCode). See logs/launcher.log." }
-            if ($watch.Elapsed.TotalSeconds -gt 180) { throw 'Server startup timed out. See logs/server.log.' }
-            Start-Sleep -Milliseconds 200
-        }
-        Assert-Running
-        if ($server.Process.HasExited) { throw "The server stopped before setup finished. See logs/server.log." }
-        [IO.File]::WriteAllText((Join-Path $Runtime 'setup-complete'), (Get-Date -Format s), $Utf8)
-        $script:Status.ready = $true
-        Set-Status 'Online' ("Client: 127.0.0.1:{0}   |   Dashboard: http://127.0.0.1:{1}" -f $gamePort,$webPort) 100
-        Assert-Running
-        if ($env:RMR_MODE -eq 'worker' -and $env:RMR_NO_AUTO_CLIENT -ne '1' -and $env:RMR_NO_CLIENT -ne '1') {
-            try {
-                Start-RmrGameClient -ClientPath $script:Status.clientPath -GamePort $gamePort
-                Write-Log 'EVE client launched.'
-            } catch {
-                Write-Log ('EVE client did not launch: ' + $_.Exception.Message)
+        # A dashboard restart ends with the server writing 'restart' to the
+        # shutdown file; the launcher then starts it again, keeping PostgreSQL.
+        $firstStart = $true
+        $restartServer = $true
+        while ($restartServer) {
+            $restartServer = $false
+            if ([IO.File]::Exists($env:RMR_SHUTDOWN_FILE)) { Remove-Item -LiteralPath $env:RMR_SHUTDOWN_FILE -Force }
+            $server = New-NativeProcess (Join-Path $binaryDir 'eve-server.exe') @()
+            $watch = [Diagnostics.Stopwatch]::StartNew()
+            while (-not (Test-RmrOwnedPort $gamePort $server.Process.Id) -or -not (Test-RmrOwnedPort $webPort $server.Process.Id)) {
+                Assert-Running; Read-NativeOutput $server
+                if ($server.Process.HasExited) { Read-NativeOutput $server; throw "Server exited with code $($server.Process.ExitCode). See logs/launcher.log." }
+                if ($watch.Elapsed.TotalSeconds -gt 180) { throw 'Server startup timed out. See logs/server.log.' }
+                Start-Sleep -Milliseconds 200
             }
-        }
-        if ($env:RMR_CHECK -eq '1') {
-            Set-Status 'Checking' 'Testing the server handshake and login' 100
-            $checkOutput = Invoke-Native $fakeClientExe @("127.0.0.1:$gamePort",'--no-cache') -Capture -Timeout 90
-            if ($checkOutput -notmatch '(?i)session change' -or $checkOutput -match '(?im)(FAILED|\bFAIL\b|-> refused:|-> no reply|-> no usable reply)') { throw 'Protocol/login check did not complete successfully. See logs/launcher.log.' }
-            Write-Log 'Protocol/login check passed.'
-        } else {
-            # The launcher keeps the server alive until stopped.
-            while (-not $server.Process.HasExited) { Assert-Running; Read-NativeOutput $server; Start-Sleep -Milliseconds 100 }
-            Read-NativeOutput $server
-            $scheduledDowntime = $server.Process.ExitCode -eq 0 -and $env:RMR_SHUTDOWN_FILE -and
-                [IO.File]::Exists($env:RMR_SHUTDOWN_FILE) -and
-                [IO.File]::ReadAllText($env:RMR_SHUTDOWN_FILE).Trim() -eq 'downtime'
-            if ($scheduledDowntime) {
-                Write-Log 'Scheduled downtime completed; game state saved.'
+            Assert-Running
+            if ($server.Process.HasExited) { throw "The server stopped before setup finished. See logs/server.log." }
+            [IO.File]::WriteAllText((Join-Path $Runtime 'setup-complete'), (Get-Date -Format s), $Utf8)
+            $script:Status.ready = $true
+            Set-Status 'Online' ("Client: 127.0.0.1:{0}   |   Dashboard: http://127.0.0.1:{1}" -f $gamePort,$webPort) 100
+            if (-not $firstStart) { Write-Log 'Server restarted.' }
+            Assert-Running
+            if ($firstStart -and $env:RMR_MODE -eq 'worker' -and $env:RMR_NO_AUTO_CLIENT -ne '1' -and $env:RMR_NO_CLIENT -ne '1') {
+                try {
+                    Start-RmrGameClient -ClientPath $script:Status.clientPath -GamePort $gamePort
+                    Write-Log 'EVE client launched.'
+                } catch {
+                    Write-Log ('EVE client did not launch: ' + $_.Exception.Message)
+                }
+            }
+            $firstStart = $false
+            if ($env:RMR_CHECK -eq '1') {
+                Set-Status 'Checking' 'Testing the server handshake and login' 100
+                $checkOutput = Invoke-Native $fakeClientExe @("127.0.0.1:$gamePort",'--no-cache') -Capture -Timeout 90
+                if ($checkOutput -notmatch '(?i)session change' -or $checkOutput -match '(?im)(FAILED|\bFAIL\b|-> refused:|-> no reply|-> no usable reply)') { throw 'Protocol/login check did not complete successfully. See logs/launcher.log.' }
+                Write-Log 'Protocol/login check passed.'
             } else {
-                throw "Server exited unexpectedly with code $($server.Process.ExitCode). See logs/server.log."
+                # The launcher keeps the server alive until stopped.
+                $unclaimedRestart = $null
+                $pressedRestart = $false
+                while (-not $server.Process.HasExited) {
+                    Assert-Running; Read-NativeOutput $server
+                    # A dashboard restart is the launcher window's Restart server
+                    # button. A current window takes the request itself; for one
+                    # opened before it knew how, press that button for it.
+                    if ($env:RMR_RESTART_FILE -and [IO.File]::Exists($env:RMR_RESTART_FILE)) {
+                        if ($null -eq $unclaimedRestart) { $unclaimedRestart = [Diagnostics.Stopwatch]::StartNew() }
+                        elseif (-not $pressedRestart -and $unclaimedRestart.Elapsed.TotalSeconds -ge 1.5) {
+                            $pressedRestart = $true
+                            if (Invoke-RmrWindowRestart) {
+                                Remove-Item -LiteralPath $env:RMR_RESTART_FILE -Force -ErrorAction SilentlyContinue
+                                Write-Log 'Dashboard restart: pressed the launcher window''s Restart server button.'
+                            }
+                        } elseif ($unclaimedRestart.Elapsed.TotalSeconds -ge 6) {
+                            Remove-Item -LiteralPath $env:RMR_RESTART_FILE -Force -ErrorAction SilentlyContinue
+                            Write-Log 'Dashboard restart: the launcher window did not respond; restarting the game server here without rebuilding.'
+                            [IO.File]::WriteAllText($env:RMR_SHUTDOWN_FILE, 'restart-in-place', $Utf8)
+                            $unclaimedRestart = $null
+                        }
+                    } else { $unclaimedRestart = $null; $pressedRestart = $false }
+                    Start-Sleep -Milliseconds 100
+                }
+                Read-NativeOutput $server
+                $planned = ''
+                if ($server.Process.ExitCode -eq 0 -and $env:RMR_SHUTDOWN_FILE -and [IO.File]::Exists($env:RMR_SHUTDOWN_FILE)) {
+                    $planned = [IO.File]::ReadAllText($env:RMR_SHUTDOWN_FILE).Trim()
+                }
+                if ($planned -eq 'restart' -and $env:RMR_MODE -eq 'worker' -and $env:RMR_UI_PID) {
+                    # A dashboard restart is a full launcher restart: the window
+                    # starts a fresh worker that rebuilds changed code, redeploys
+                    # the client scripts and starts PostgreSQL and the server.
+                    Write-Log 'Dashboard restart: game state saved; the launcher will rebuild if needed and start the server again.'
+                    $script:Status['restartRequested'] = $true
+                    $script:Status.ready = $false
+                    Set-Status 'Restarting' 'Restarting Red Moon Rising: stopping the database before starting again' 90
+                    $server.Process.Dispose()
+                    $server = $null
+                } elseif ($planned -eq 'restart' -or $planned -eq 'restart-in-place') {
+                    Write-Log 'Scheduled restart: game state saved; starting the server again.'
+                    $script:Status.ready = $false
+                    Set-Status 'Restarting' 'Restarting the game server' 90
+                    $server.Process.Dispose()
+                    $server = $null
+                    $restartServer = $true
+                } elseif ($planned -eq 'downtime') {
+                    Write-Log 'Scheduled downtime completed; game state saved.'
+                } else {
+                    throw "Server exited unexpectedly with code $($server.Process.ExitCode). See logs/server.log."
+                }
             }
         }
 
@@ -2036,69 +2135,6 @@ def _rmr_install_self_info():
 import uthread
 uthread.new(_rmr_install_self_info)
 
-def _rmr_install_alliance_attributes():
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        import listentry
-        import util
-        cls = sm.StartService('info').__class__
-        if getattr(cls, '_rmr_alliance_attributes_installed', False):
-            return
-        original = cls.GetWndData
-
-        def get_wnd_data(self, wnd, typeID, itemID, parentID=None):
-            if typeID != const.typeAlliance or not wnd.sr.isAlliance or wnd.sr.allianceinfo is None:
-                return original(self, wnd, typeID, itemID, parentID)
-            record = wnd.sr.allianceinfo
-            owner_fields = (('executorCorpID', 'Executor'),
-                            ('creatorCorpID', 'Created By Corporation'),
-                            ('creatorCharID', 'Created By'))
-            owner_ids = [getattr(record, key, 0) for key, label in owner_fields]
-            owner_ids = [owner for owner in owner_ids if owner and owner > 0]
-            if owner_ids:
-                cfg.eveowners.Prime(owner_ids)
-
-            # The stock builder assumes both founder IDs resolve. Give it
-            # only valid links so one missing owner cannot abort the whole tab.
-            view = util.KeyVal(header=[])
-            missing = []
-            for key, label in owner_fields:
-                owner = getattr(record, key, 0)
-                if not owner or owner <= 0 or cfg.eveowners.GetIfExists(owner) is None:
-                    missing.append((key, label))
-            skip = [key for key, label in missing]
-            for key in record.header:
-                if key not in skip:
-                    view.header.append(key)
-                    setattr(view, key, getattr(record, key))
-            wnd.sr.allianceinfo = view
-            try:
-                result = original(self, wnd, typeID, itemID, parentID)
-            finally:
-                wnd.sr.allianceinfo = record
-
-            attributes = wnd.sr.data['Attributes']['items']
-            for key, label in missing:
-                attributes.append(listentry.Get('LabelTextTop', {
-                    'line': 1, 'label': label, 'text': 'Unknown'}))
-            member_count = getattr(record, 'memberCount', None)
-            if member_count is not None:
-                attributes.append(listentry.Get('LabelTextTop', {
-                    'line': 1, 'label': 'Member Count', 'text': str(member_count)}))
-            return result
-
-        cls.GetWndData = get_wnd_data
-        cls._rmr_alliance_attributes_installed = True
-        _rmr_log('Alliance Attributes tab hook installed.')
-    except:
-        _rmr_log('Alliance Attributes hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-
-uthread.new(_rmr_install_alliance_attributes)
-
-
 def _rmr_install_alliance_logos():
     while not getattr(eve.session, 'charid', None):
         blue.pyos.synchro.Sleep(1000)
@@ -2347,10 +2383,25 @@ def _rmr_install_directional_scan(cmd_class):
         queue_scan(direction)
         return result
 
+    def rescan_open_window(window, expected):
+        # V with the scanner already open repeats the scan along the camera
+        # and refreshes the result list in place.
+        if window.destroyed or expected != context():
+            return
+        window.Maximize()
+        if window.sr.tabs.GetSelectedArgs() != 'system':
+            window.sr.tabs.SelectByIdx(0, False)
+        scan(window.sr.systemscanner)
+
     def directional_scan(self):
         if not eve.session.solarsystemid or not eve.session.shipid:
             return
         if _rmr_editable_focus(eve.LocalSvc('ui')) is not None:
+            return
+        window = eve.LocalSvc('window').GetWindow('scanner')
+        if window is not None and not window.destroyed:
+            armed[0] = None
+            uthread.new(rescan_open_window, window, context())
             return
         armed[0] = (context(), blue.os.GetTime() + 100000000)
 
@@ -2467,6 +2518,368 @@ def _rmr_install_shortcuts():
         sys.exc_clear()
 
 uthread.new(_rmr_install_shortcuts)
+
+def _rmr_install_grid_recovery():
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        import state
+        target = sm.StartService('target')
+        cls = target.__class__
+        if getattr(cls, '_rmr_grid_recovery', None):
+            return
+        original_clear = cls.DoBallClear
+
+        class GridRecovery:
+            __notifyevents__ = ['OnNewState']
+            active = None
+            park = None
+            reported = False
+
+            # This client sends OnNewState(park) with no hint.
+            def OnNewState(self, park, *args):
+                uthread.new(self.DedupeOverview, park)
+                if self.park is not park:
+                    return
+                active = self.active
+                self.park = None
+                self.active = None
+                uthread.new(self.RestoreLocks, park, active)
+
+            def DedupeOverview(self, park):
+                # A resynchronised grid (SetState) is added to the overview
+                # beside the rows already there: drop rows for balls that are
+                # gone, and every row but one per item.
+                try:
+                    blue.pyos.synchro.Sleep(750)
+                    if eve.LocalSvc('michelle').GetBallpark() is not park:
+                        return
+                    tactical = eve.LocalSvc('tactical')
+                    overview = getattr(getattr(tactical, 'sr', None), 'overview', None)
+                    if overview is None or overview.destroyed:
+                        return
+                    scroll = overview.sr.scroll
+                    balls = getattr(park, 'balls', None) or {}
+                    kept = {}
+                    stale = []
+                    for node in scroll.sr.entries[:]:
+                        item_id = getattr(node, 'itemID', None)
+                        if item_id is None:
+                            continue
+                        if item_id not in balls:
+                            stale.append(node)
+                            continue
+                        ball = getattr(node, 'ball', None)
+                        try:
+                            if callable(ball):
+                                ball = ball()
+                        except:
+                            sys.exc_clear()
+                        current = ball is None or ball is balls.get(item_id)
+                        if item_id not in kept:
+                            kept[item_id] = (node, current)
+                        elif current and not kept[item_id][1]:
+                            stale.append(kept[item_id][0])
+                            kept[item_id] = (node, current)
+                        else:
+                            stale.append(node)
+                    if stale:
+                        scroll.RemoveEntries(stale)
+                    if stale and not self.reported:
+                        self.reported = True
+                        _rmr_report('grid recovery: removed %d stale overview row(s) after a resync' % len(stale))
+                except:
+                    _rmr_report('grid recovery: overview cleanup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+                    sys.exc_clear()
+
+            def RestoreLocks(self, park, active):
+                try:
+                    if eve.LocalSvc('michelle').GetBallpark() is not park:
+                        return
+                    eve.LocalSvc('godma').GetStateManager().RefreshTargets()
+                    if active in target.GetTargets() and eve.LocalSvc('michelle').GetBallpark() is park:
+                        eve.LocalSvc('state').SetState(active, state.activeTarget, 1)
+                except:
+                    _rmr_log('Grid lock refresh failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+                    sys.exc_clear()
+
+        recovery = GridRecovery()
+
+        def clear_grid(self, solitem):
+            try:
+                park = eve.LocalSvc('michelle').GetBallpark()
+                # A reset of an already populated grid leaves old UI rows behind.
+                if park is not None and park.ego == eve.session.shipid and park.slimItems:
+                    recovery.park = park
+                    recovery.active = self.GetActiveTargetID()
+                    for target_id in list(self.targetsByID):
+                        self.ClearTarget(target_id)
+                    self.pendingTargets = []
+                    self.pendingTargeters = []
+                    self.targetedBy = []
+                    tactical = eve.LocalSvc('tactical')
+                    sr = getattr(tactical, 'sr', None)
+                    overview = getattr(sr, 'overview', None)
+                    if overview is not None and not overview.destroyed:
+                        scroll = overview.sr.scroll
+                        scroll.RemoveEntries(scroll.sr.entries[:])
+            except:
+                _rmr_log('Grid clear failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+                sys.exc_clear()
+            return original_clear(self, solitem)
+
+        cls.DoBallClear = clear_grid
+        sm.RegisterNotify(recovery)
+        cls._rmr_grid_recovery = recovery
+    except:
+        _rmr_log('Grid recovery setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+uthread.new(_rmr_install_grid_recovery)
+
+
+def _rmr_install_overview_dedupe():
+    # tactical.py adds an overview row for every ball in an AddBalls or
+    # SetState without looking for one already there, and DoBallRemove takes
+    # away only the first row it finds. A ball sent twice (or a grid
+    # resynchronised) therefore leaves a second row behind, with a stale
+    # distance, for as long as the pilot stays on grid. Keep one row per item.
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        cls = sm.StartService('tactical').__class__
+        if getattr(cls, '_rmr_overview_dedupe', False):
+            return
+        original_added = cls._DoBallsAdded
+        original_remove = cls.DoBallRemoveThread
+        counts = {'rows': 0}
+
+        def overview_scroll(self):
+            sr = getattr(self, 'sr', None)
+            overview = getattr(sr, 'overview', None)
+            if overview is None or getattr(overview, 'destroyed', 0):
+                return None
+            return getattr(overview.sr, 'scroll', None)
+
+        def drop_rows(self, item_ids):
+            scroll = overview_scroll(self)
+            if scroll is None or not item_ids:
+                return 0
+            rows = [e for e in scroll.sr.entries[:] if getattr(e, 'itemID', None) in item_ids]
+            if rows:
+                scroll.RemoveEntries(rows)
+            return len(rows)
+
+        def balls_added(self, lst):
+            try:
+                ids = {}
+                for each in lst:
+                    try:
+                        ids[each[1].itemID] = 1
+                    except:
+                        sys.exc_clear()
+                dropped = drop_rows(self, ids)
+                if dropped and not counts['rows']:
+                    _rmr_report('overview dedupe: replaced %d existing overview row(s) for re-added balls' % dropped)
+                counts['rows'] += dropped
+            except:
+                _rmr_log('Overview dedupe (add) failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+                sys.exc_clear()
+            return original_added(self, lst)
+
+        def ball_removed(self, ball, slimItem, terminal):
+            result = original_remove(self, ball, slimItem, terminal)
+            try:
+                if ball is not None:
+                    drop_rows(self, {ball.id: 1})
+            except:
+                _rmr_log('Overview dedupe (remove) failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+                sys.exc_clear()
+            return result
+
+        cls._DoBallsAdded = balls_added
+        cls.DoBallRemoveThread = ball_removed
+        cls._rmr_overview_dedupe = True
+        _rmr_report('overview dedupe: installed on %s' % cls.__name__)
+    except:
+        _rmr_report('overview dedupe: setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+
+uthread.new(_rmr_install_overview_dedupe)
+
+def _rmr_install_local_roster():
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    reported = {}
+
+    def report_once(key, message):
+        # Problems go to the server log once each, where they can be read.
+        if reported.get(key) != message:
+            reported[key] = message
+            try:
+                _rmr_report('local roster: ' + message)
+            except:
+                sys.exc_clear()
+                _rmr_log('local roster: ' + message)
+
+    try:
+        import listentry
+        import state
+        import uix
+        cls = listentry.ChatUser
+        if getattr(cls, '_rmr_local_roster', False):
+            return
+        original_load = cls.Load
+        current = [None, {}]
+
+        def local_channel():
+            return (('solarsystemid2', eve.session.solarsystemid2),)
+
+        def is_local(channel_id):
+            try:
+                return channel_id[0][0] == 'solarsystemid2'
+            except:
+                sys.exc_clear()
+                return False
+
+        def war_badge(entry):
+            import draw
+            flags = eve.LocalSvc('state')
+            flag_id = state.flagAtWarCanFight
+            props = flags.GetStateProps(flag_id)
+            badge = eve.rot.GetCopy('res:/UI/Component/flag.blue')
+            badge.children[0].rectLeft = (props[4] + 1) * 10
+            background = draw.Fill(badge, getInstance=0)
+            background.color.SetRGB(*flags.GetStateColor(flag_id))
+            badge.align = uix.UI_ALNONE
+            badge.state = uix.UI_DISABLED
+            badge.width = badge.height = 10
+            badge.left = entry.sr.picture.left + 22
+            badge.top = entry.sr.picture.top + 22
+            entry.children.insert(0, badge)
+            return badge
+
+        def client_at_war(node):
+            # The client's own war relationship, as its overview flags war
+            # targets: the pilot's alliance, else corporation.
+            try:
+                war = sm.StartService('war')
+                for owner in (getattr(node, 'allianceID', None), getattr(node, 'corpID', None)):
+                    if owner and war.GetRelationship(owner) == const.warRelationshipAtWarCanFight:
+                        return True
+            except:
+                report_once('client war', 'client war check failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+                sys.exc_clear()
+            return False
+
+        def load(self, node, *args):
+            result = original_load(self, node, *args)
+            try:
+                if self.destroyed or self.sr.node is not node:
+                    return result
+                owner = getattr(node, 'allianceID', None) or getattr(node, 'corpID', None)
+                badge = getattr(self.sr, 'rmrWarBadge', None)
+                # War targets are flagged wherever they are listed: by the
+                # client's own war data (as the overview flags them), else by
+                # the server's list of hostile wars.
+                enemy = client_at_war(node) or (owner is not None and owner in current[1])
+                if not enemy:
+                    if badge is not None and not badge.destroyed:
+                        badge.Close()
+                    self.sr.rmrWarBadge = None
+                elif badge is None or badge.destroyed:
+                    self.sr.rmrWarBadge = war_badge(self)
+            except:
+                report_once('badge', 'war badge failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+                sys.exc_clear()
+            return result
+
+        def find_channel(lsc):
+            channels = getattr(lsc, 'channels', None)
+            if not hasattr(channels, 'get'):
+                report_once('channels', 'no channel table on the LSC service (%s); its channel attributes: %s' % (
+                    type(channels).__name__, ', '.join([n for n in dir(lsc) if 'hannel' in n.lower()])))
+                return local_channel(), None
+            key = local_channel()
+            # The LSC channel table's get() wants a default as well.
+            try:
+                channel = channels.get(key, None)
+            except TypeError:
+                sys.exc_clear()
+                channel = None
+            if channel is None:
+                # The table keeps its channels in an 'items' dict, which hides
+                # the usual items() method.
+                table = getattr(channels, 'items', None)
+                if isinstance(table, dict):
+                    pairs = table.items()
+                else:
+                    pairs = channels.items()
+                for k, v in pairs:
+                    if is_local(k) and k[0][1] == eve.session.solarsystemid2:
+                        return k, v
+            return key, channel
+
+        def refresh():
+            # eve.LocalSvc returns a call proxy; the channel table lives on
+            # the service object itself.
+            lsc = sm.StartService('LSC')
+            channel_id, channel = find_channel(lsc)
+            # The war list comes with the roster, for this system's Local,
+            # whether or not the client's channel table could be read.
+            result = eve.RemoteSvc('LSC').GetLocalRoster(channel_id)
+            if result is None:
+                report_once('roster', 'the server gave no roster for %r' % (channel_id,))
+                return 5000
+            members, enemies = result
+            updated = members.Index('charID')
+            war_flags = dict([(owner, True) for owner in enemies])
+            war_changed = current != [channel_id, war_flags]
+            current[:] = [channel_id, war_flags]
+            if channel is None or lsc.channels.get(channel_id) is not channel:
+                if 'ok' not in reported:
+                    report_once('ok', 'war list only: %d war enemies (Local window not found)' % len(war_flags))
+                return 10000
+            for pilot_id in updated:
+                if pilot_id not in cfg.eveowners and updated[pilot_id].extra:
+                    cfg.eveowners.Hint(pilot_id, updated[pilot_id].extra)
+            channel.memberList = updated
+            try:
+                lsc._LargeScaleChat__SetEstimatedMemberCount(channel, len(updated))
+            except:
+                sys.exc_clear()
+            window = getattr(channel, 'window', None)
+            if window is not None and not window.destroyed:
+                entries = getattr(getattr(getattr(window, 'userlist', None), 'sr', None), 'entries', None)
+                if entries is not None:
+                    shown = dict([(node.charID, (node.corpID, node.allianceID)) for node in entries])
+                    expected = dict([(pilot_id, (updated[pilot_id].corpID, updated[pilot_id].allianceID)) for pilot_id in updated])
+                    if shown != expected or war_changed:
+                        window.InitUsers(0)
+                window.UpdateCaption()
+            if 'ok' not in reported:
+                report_once('ok', 'working: %d pilots in Local, %d war enemies' % (len(updated), len(war_flags)))
+            return 10000
+
+        cls.Load = load
+        cls._rmr_local_roster = True
+    except:
+        report_once('setup', 'setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+        return
+
+    while 1:
+        delay = 10000
+        if eve.session.charid and eve.session.solarsystemid2:
+            try:
+                delay = refresh()
+            except:
+                report_once('refresh', 'refresh failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+                sys.exc_clear()
+        blue.pyos.synchro.Sleep(delay)
+
+uthread.new(_rmr_install_local_roster)
 
 def _rmr_install_bookmark_warp_menu():
     while not getattr(eve.session, 'charid', None):
@@ -2845,7 +3258,8 @@ def _rmr_install_rush_job():
         if getattr(cls, '_rmr_rush_job_installed', False):
             return
         original = cls.ShowJobDetails
-        gm_role = 8  # ROLE_GML in the session protocol and the server's RushJob check.
+        # CCP, GM and BH carry role 8; ISD BH carries 2048. Matches the server's RUSH_JOB_ROLES.
+        gm_role = 8 | 2048
 
         def show_job_details(self, job):
             result = original(self, job)
@@ -2870,6 +3284,229 @@ def _rmr_install_rush_job():
 
 
 uthread.new(_rmr_install_rush_job)
+
+
+def _rmr_install_station_management():
+    # form.StationManagement.Startup calls dlg.Show() but the dialog's
+    # Show(self, show) has no default, so opening the window ends in a
+    # TypeError after it is built. Give 'show' its obvious default.
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        dialog = form.StationManagement.Startup.im_func.func_globals.get('StationManagementDialog')
+        if dialog is None or getattr(dialog, '_rmr_show_installed', False):
+            return
+        original = dialog.Show
+
+        def show(self, show=1):
+            return original(self, show)
+
+        dialog.Show = show
+        dialog._rmr_show_installed = True
+    except:
+        _rmr_log('Station management hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+
+
+uthread.new(_rmr_install_station_management)
+
+def _rmr_install_manufacturing_menu():
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        cls = form.Manufacturing
+        if getattr(cls, '_rmr_manufacturing_menu_installed', False):
+            return
+        original = cls.GetMenu
+
+        # menu.GetSingleMenu calls GetMenu() with no arguments when the
+        # window background is right-clicked; the client's own method needs one.
+        def get_menu(self, *args):
+            if not args:
+                return []
+            return original(self, *args)
+
+        cls.GetMenu = get_menu
+        cls._rmr_manufacturing_menu_installed = True
+    except:
+        _rmr_log('Manufacturing menu hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+
+uthread.new(_rmr_install_manufacturing_menu)
+
+
+def _rmr_report(message):
+    _rmr_log(message)
+    try:
+        eve.RemoteSvc('factory').RmrReport(str(message)[:2000])
+    except:
+        sys.exc_clear()
+
+
+class _RmrQuietFlag:
+    # Off when tested, and does nothing if called.
+    def __call__(self, *args, **kwargs):
+        return None
+
+    def __nonzero__(self):
+        return False
+
+
+def _rmr_install_tactical_logme():
+    # Right-clicking a location reaches tactical.GetDefaultGroups, which reads
+    # self.logme; the service never sets it, so every such menu failed.
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        cls = None
+        try:
+            cls = getattr(__import__('svc'), 'TacticalSvc', None)
+        except:
+            sys.exc_clear()
+        if cls is None:
+            cls = sm.StartService('tactical').__class__
+        if hasattr(cls, 'logme'):
+            _rmr_report('tactical logme: already defined on %s' % cls)
+        else:
+            cls.logme = _RmrQuietFlag()
+            _rmr_report('tactical logme: default installed on %s' % cls)
+    except:
+        _rmr_report('tactical logme hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+
+uthread.new(_rmr_install_tactical_logme)
+
+
+def _rmr_outpost_item(values):
+    # The platform the menu is for: a slim item (space) or an inventory row.
+    for value in values:
+        try:
+            typeID = getattr(value, 'typeID', None)
+            itemID = getattr(value, 'itemID', None)
+            if typeID and itemID and cfg.invtypes.Get(typeID).groupID == 307:
+                return itemID
+        except:
+            sys.exc_clear()
+    return None
+
+
+def _rmr_menu_item(values):
+    # The item a menu is for: a slim item (space) or an inventory row.
+    for value in values:
+        typeID = getattr(value, 'typeID', None)
+        itemID = getattr(value, 'itemID', None)
+        if typeID and itemID:
+            return itemID, typeID
+    return None, None
+
+
+def _rmr_slash_notify(command):
+    reply = eve.RemoteSvc('slash').SlashCmd(command)
+    try:
+        eve.Message('CustomNotify', {'notify': reply})
+    except:
+        sys.exc_clear()
+        _rmr_log(command + ': ' + str(reply))
+
+
+def _rmr_notify_text(text):
+    try:
+        eve.Message('CustomNotify', {'notify': text})
+    except:
+        sys.exc_clear()
+
+
+def _rmr_time_left(seconds):
+    seconds = max(0, int(seconds))
+    if seconds >= 3600:
+        return '%dh %02dm' % (seconds / 3600, seconds % 3600 / 60)
+    if seconds >= 60:
+        return '%dm %02ds' % (seconds / 60, seconds % 60)
+    return '%ds' % seconds
+
+
+def _rmr_structure_timer(itemID):
+    # (label, seconds left) of a structure's running timer, from its slim item.
+    try:
+        park = sm.StartService('michelle').GetBallpark()
+        slim = park and park.slimItems.get(itemID)
+        ends = slim and getattr(slim, 'rmrStepEnds', None)
+        if not ends:
+            return None, None
+        left = (ends - blue.os.GetTime()) / 10000000
+        if left <= 0:
+            return None, None
+        return getattr(slim, 'rmrStepName', None) or 'Timer', left
+    except:
+        sys.exc_clear()
+        return None, None
+
+
+def _rmr_outpost_mats(itemID):
+    reply = eve.RemoteSvc('slash').SlashCmd('/outpostmats %d' % itemID)
+    try:
+        eve.Message('CustomNotify', {'notify': reply})
+    except:
+        sys.exc_clear()
+        _rmr_log('Outpost materials: ' + str(reply))
+
+
+def _rmr_install_outpost_gm_menu():
+    # GM / WM Extras on an outpost construction platform: fill its resource
+    # hold with whatever Show Info's Material Requirements says is missing.
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        cls = sm.StartService('menu').__class__
+        if getattr(cls, '_rmr_outpost_menu_installed', False):
+            return
+        original = getattr(cls, 'GetGMMenu', None)
+        if original is None:
+            _rmr_report('outpost GM menu: the menu service has no GetGMMenu')
+            return
+
+        def get_gm_menu(self, *args, **kwargs):
+            menu = original(self, *args, **kwargs)
+            try:
+                values = list(args) + kwargs.values()
+                itemID, typeID = _rmr_menu_item(values)
+                if itemID is None or not menu:
+                    return menu
+                entries = []
+                step, left = _rmr_structure_timer(itemID)
+                if step:
+                    import time
+                    ends = time.strftime('%H:%M', time.gmtime(time.time() + left))
+                    label = '%s: %s left (%s EVE)' % (step, _rmr_time_left(left), ends)
+                    entries.append((label, _rmr_notify_text, (label,)))
+                    entries.append(('Rush %s' % step.lower(), _rmr_slash_notify, ('/rushanchor %d' % itemID,)))
+                if _rmr_outpost_item(values) is not None:
+                    entries.append(('Spawn outpost materials', _rmr_outpost_mats, (itemID,)))
+                if not entries:
+                    return menu
+                for item in menu:
+                    if (type(item) in (types.TupleType, types.ListType) and len(item) >= 2 and
+                            type(item[1]) is types.ListType and 'GM' in str(item[0]).upper()):
+                        item[1].append(None)
+                        item[1].extend(entries)
+                        return menu
+                menu.extend(entries)
+            except:
+                _rmr_report('outpost GM menu entry failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+                sys.exc_clear()
+            return menu
+
+        cls.GetGMMenu = get_gm_menu
+        cls._rmr_outpost_menu_installed = True
+        _rmr_report('outpost GM menu: installed on %s' % cls)
+    except:
+        _rmr_report('outpost GM menu hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+
+uthread.new(_rmr_install_outpost_gm_menu)
+
 
 '@
 
@@ -3164,7 +3801,7 @@ namespace Rmr {
     $footer.BackColor = [System.Drawing.Color]::Transparent
     $footer.ColumnCount = 5
     $footer.RowCount = 1
-    foreach ($width in @(22, 19, 17, 22, 20)) {
+    foreach ($width in @(25, 20, 16, 21, 18)) {
         $footer.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent', $width))) | Out-Null
     }
     $connectionLabel = New-Object System.Windows.Forms.Label
@@ -3231,23 +3868,81 @@ namespace Rmr {
         Attached = $false
         Ready = $false
         StopRequested = $false
-        CloseRequested = $false
         RestartDeadline = $null
+        CloseRequested = $false
         Exited = $false
         LastLogLength = -1L
         LastLogWrite = [DateTime]::MinValue
         LastStatus = ''
         WebPort = 18080
         ClientPath = ''
+        ServerOnly = ($env:RMR_NO_CLIENT -eq '1')
         PickerOpen = $false
         LastClientRequest = ''
         FirstRun = $firstRun
         Started = [DateTime]::UtcNow
         RunId = $env:RMR_RUN_ID
         StopPath = (Join-Path $Runtime 'stop.request')
+        RestartRequestPath = (Join-Path $Runtime 'restart.request')
         StatusPath = (Join-Path $Runtime 'status.json')
         LogPath = (Join-Path $Logs 'launcher.log')
     }
+
+    $lockPath = Join-Path $Runtime 'launcher.lock'
+    $workerLockAvailable = {
+        try {
+            $probe = [IO.File]::Open($lockPath, 'OpenOrCreate', 'ReadWrite', 'None')
+            $probe.Dispose()
+            return $true
+        } catch { return $false }
+    }.GetNewClosure()
+
+    $startWorker = {
+        param([bool]$Restart = $false)
+        if (-not (& $workerLockAvailable)) {
+            throw 'Another Red Moon Rising launcher is already running from this folder. Use its window to manage the server.'
+        }
+
+        # Read the current launcher from disk on each start.
+        $bootstrap = '[AppContext]::SetSwitch("Switch.System.IO.UseLegacyPathHandling",$false); [AppContext]::SetSwitch("Switch.System.IO.BlockLongPaths",$false); $self = $env:RMR_LAUNCHER; $source = [IO.File]::ReadAllText($self); $parts = $source -split ''(?m)^#==RMR_POWERSHELL==\r?$'', 2; if ($parts.Count -ne 2) { throw "Launcher payload is missing" }; & ([ScriptBlock]::Create($parts[1]))'
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
+        $runId = [Guid]::NewGuid().ToString('N')
+        $oldMode = $env:RMR_MODE
+        $oldLauncher = $env:RMR_LAUNCHER
+        $oldUiPid = $env:RMR_UI_PID
+        $oldRunId = $env:RMR_RUN_ID
+        $oldNoAutoClient = $env:RMR_NO_AUTO_CLIENT
+        $oldNoClient = $env:RMR_NO_CLIENT
+        try {
+            $env:RMR_MODE = 'worker'
+            $env:RMR_LAUNCHER = $Self
+            $env:RMR_UI_PID = [string]$PID
+            $env:RMR_RUN_ID = $runId
+            if ($Restart) { $env:RMR_NO_AUTO_CLIENT = '1' }
+            if ($state.ServerOnly) { $env:RMR_NO_CLIENT = '1' }
+            $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+            $worker = Start-Process -FilePath $powershell -ArgumentList @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded) -WorkingDirectory $Root -WindowStyle Hidden -PassThru -ErrorAction Stop
+        } finally {
+            $env:RMR_MODE = $oldMode
+            $env:RMR_LAUNCHER = $oldLauncher
+            $env:RMR_UI_PID = $oldUiPid
+            $env:RMR_RUN_ID = $oldRunId
+            $env:RMR_NO_AUTO_CLIENT = $oldNoAutoClient
+            $env:RMR_NO_CLIENT = $oldNoClient
+        }
+
+        if ($null -ne $state.Process) { $state.Process.Dispose() }
+        $state.Process = $worker
+        $state.RunId = $runId
+        $state.Attached = $false
+        $state.StopRequested = $false
+        $state.RestartDeadline = $null
+        $state.LastStatus = ''
+        $state.LastClientRequest = ''
+        $state.ClientPath = ''
+        $stopButton.Text = 'Stop server'
+        $stopButton.Enabled = $true
+    }.GetNewClosure()
 
     $setReadyState = {
         param([bool]$Ready, [string]$DisabledText = 'Preparing...')
@@ -3256,7 +3951,7 @@ namespace Rmr {
         $dashboardButton.Enabled = $state.Ready
         $restartButton.Enabled = $state.Ready
         if ($state.Ready) {
-            $clientButton.Text = if ($state.ClientPath) { 'Launch EVE' } else { 'No client selected' }
+            $clientButton.Text = 'Launch EVE'
             $clientButton.BackColor = $cyan
             $clientButton.ForeColor = $background
             $clientButton.FlatAppearance.BorderSize = 0
@@ -3282,17 +3977,20 @@ namespace Rmr {
         try {
             [System.IO.File]::WriteAllText($state.StopPath, $state.RunId, [System.Text.Encoding]::ASCII)
             $state.StopRequested = $true
-            if ($Restart) { $state.RestartDeadline = [DateTime]::UtcNow.AddMinutes(2) }
             & $setReadyState $false 'Stopping...'
             $stageLabel.Text = 'Stopping Red Moon Rising'
             $form.Text = 'Red Moon Rising | Stopping'
             $statusEyebrow.Text = 'SAFE SHUTDOWN'
             $messageLabel.Text = 'Finishing the current operation and shutting down the database. Please keep this window open.'
-            $setupHint.Text = if ($Restart) { 'The server will start again after shutdown.' } else { 'Your universe will be kept for the next launch.' }
+            $setupHint.Text = 'Your universe will be kept for the next launch.'
             $stopButton.Enabled = $false
             $stopButton.Text = 'Stopping...'
-            $dashboardButton.Enabled = $false
-            $clientButton.Enabled = $false
+            if ($Restart) {
+                $state.RestartDeadline = [DateTime]::UtcNow.AddSeconds(150)
+                $stageLabel.Text = 'Restarting Red Moon Rising'
+                $form.Text = 'Red Moon Rising | Restarting'
+                $setupHint.Text = 'The server will start again after shutdown completes.'
+            }
         } catch {
             $messageLabel.Text = 'Could not request shutdown: ' + $_.Exception.Message
         }
@@ -3316,11 +4014,11 @@ namespace Rmr {
         try { Start-Process explorer.exe -ArgumentList ('"{0}"' -f $Logs) | Out-Null }
         catch { $messageLabel.Text = 'Logs are saved in ' + $Logs }
     }.GetNewClosure())
-    $restartButton.Add_Click({
-        if ($state.Ready) { & $requestStop $true }
-    }.GetNewClosure())
     $stopButton.Add_Click({
         if ($state.Exited) { $form.Close() } else { & $requestStop }
+    }.GetNewClosure())
+    $restartButton.Add_Click({
+        if ($state.Ready) { & $requestStop $true }
     }.GetNewClosure())
     $form.Add_FormClosing({
         param($sender, $eventArgs)
@@ -3332,38 +4030,19 @@ namespace Rmr {
         }
     }.GetNewClosure())
 
-    $workerStopped = ${function:Test-RmrWorkerStopped}
-    $startWorker = {
-        param([bool]$Restart = $false)
-        # The worker owns stale-state cleanup after obtaining its exclusive lock.
-        # Environment variables avoid injecting a checkout path into executable code.
-        $bootstrap = '[AppContext]::SetSwitch("Switch.System.IO.UseLegacyPathHandling",$false); [AppContext]::SetSwitch("Switch.System.IO.BlockLongPaths",$false); $self = $env:RMR_LAUNCHER; $source = [IO.File]::ReadAllText($self); $parts = $source -split ''(?m)^#==RMR_POWERSHELL==\r?$'', 2; if ($parts.Count -ne 2) { throw "Launcher payload is missing" }; & ([ScriptBlock]::Create($parts[1]))'
-        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
-        $oldMode = $env:RMR_MODE
-        $oldLauncher = $env:RMR_LAUNCHER
-        $oldUiPid = $env:RMR_UI_PID
-        $oldRunId = $env:RMR_RUN_ID
-        $oldAutoClient = $env:RMR_NO_AUTO_CLIENT
-        try {
-            $env:RMR_MODE = 'worker'
-            $env:RMR_RUN_ID = $state.RunId
-            if ($Restart) { $env:RMR_NO_AUTO_CLIENT = '1' }
-            $env:RMR_LAUNCHER = $Self
-            $env:RMR_UI_PID = [string]$PID
-            $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-            $state.Process = Start-Process -FilePath $powershell -ArgumentList @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded) -WorkingDirectory $Root -WindowStyle Hidden -PassThru
-        } finally {
-            $env:RMR_MODE = $oldMode
-            $env:RMR_LAUNCHER = $oldLauncher
-            $env:RMR_UI_PID = $oldUiPid
-            $env:RMR_RUN_ID = $oldRunId
-            $env:RMR_NO_AUTO_CLIENT = $oldAutoClient
-        }
-    }.GetNewClosure()
-
     $timer = New-Object System.Windows.Forms.Timer
     $timer.Interval = 250
     $timer.Add_Tick({
+        # The web dashboard's Restart: exactly this window's Restart server button.
+        try {
+            if ([System.IO.File]::Exists($state.RestartRequestPath)) {
+                [System.IO.File]::Delete($state.RestartRequestPath)
+                if (-not $state.StopRequested -and -not $state.Exited -and -not $state.Attached) {
+                    & $requestStop $true
+                    $statusEyebrow.Text = 'DASHBOARD RESTART'
+                }
+            }
+        } catch { }
         # Open with sharing: worker output and atomic status updates must never block the UI.
         try {
             if ([System.IO.File]::Exists($state.StatusPath)) {
@@ -3381,6 +4060,21 @@ namespace Rmr {
                 }
                 if ($raw -and $raw -ne $state.LastStatus) {
                     $state.LastStatus = $raw
+                    if (-not $state.StopRequested -and $status.PSObject.Properties['restartRequested'] -and $status.restartRequested) {
+                        # Restart requested from the web dashboard.
+                        $state.StopRequested = $true
+                        $state.RestartDeadline = [DateTime]::UtcNow.AddSeconds(150)
+                        $statusEyebrow.Text = 'DASHBOARD RESTART'
+                        $form.Text = 'Red Moon Rising | Restarting'
+                        $setupHint.Text = 'The server will start again after shutdown completes.'
+                        $stopButton.Enabled = $false
+                        $stopButton.Text = 'Restarting...'
+                    }
+                    if ($state.StopRequested -and $null -ne $state.RestartDeadline) {
+                        $stageLabel.Text = 'Restarting Red Moon Rising'
+                        $messageLabel.Text = 'Saving the universe and stopping the database. The launcher then rebuilds any changed code and starts the server again.'
+                        $connectionLabel.Text = 'RESTARTING'
+                    }
                     if (-not $state.StopRequested) {
                         if ($status.stage) { $stageLabel.Text = [string]$status.stage }
                         if ($status.message) { $messageLabel.Text = [string]$status.message }
@@ -3425,7 +4119,8 @@ namespace Rmr {
                         $stageLabel.ForeColor = $cyan
                         $statusEyebrow.Text = 'SETUP COMPLETE'
                         $stageLabel.Text = 'READY TO LAUNCH'
-                        $messageLabel.Text = if ($state.ClientPath) { 'Your server is online. Click Launch EVE below to play.' } else { 'Your server is online. Open the dashboard to manage it.' }
+                        $messageLabel.Text = 'All setup is complete. Your server is online.'
+                        if ($state.ClientPath) { $messageLabel.Text += ' Click Launch EVE below to play.' }
                         $tooltip.SetToolTip($messageLabel, $messageLabel.Text)
                         $progressCaption.Text = 'READY TO LAUNCH'
                         $progressPercent.Text = 'READY'
@@ -3497,36 +4192,44 @@ namespace Rmr {
         if ($null -ne $state.Process -and -not $state.Exited) {
             $state.Process.Refresh()
             if ($state.Process.HasExited) {
-                if ($state.RestartDeadline -and [DateTime]::UtcNow -lt $state.RestartDeadline) {
-                    # An attached window tracks the game process, which exits
-                    # before its worker finishes shutting down PostgreSQL.
-                    if (-not (& $workerStopped $Runtime)) { return }
-                    $state.RestartDeadline = $null
+                $restartError = $null
+                if ($null -eq $state.RestartDeadline -and -not $state.StopRequested) {
+                    # The dashboard's Restart ends the worker with restartRequested;
+                    # treat it exactly like this window's Restart server button.
                     try {
-                        $previous = [IO.File]::ReadAllText($state.StatusPath) | ConvertFrom-Json
-                        if ($previous.runId -ne $state.RunId -or $previous.error -or -not $previous.stopped) {
-                            throw 'The previous session did not shut down cleanly.'
+                        $exitStatus = [IO.File]::ReadAllText($state.StatusPath) | ConvertFrom-Json
+                        if ([string]$exitStatus.runId -eq [string]$state.RunId -and
+                            $exitStatus.PSObject.Properties['restartRequested'] -and $exitStatus.restartRequested) {
+                            $state.StopRequested = $true
+                            $state.RestartDeadline = [DateTime]::UtcNow.AddSeconds(150)
                         }
-                        $state.Process.Dispose()
-                        $state.Process = $null
-                        $state.Attached = $false
-                        $state.StopRequested = $false
-                        $state.RunId = [Guid]::NewGuid().ToString('N')
-                        $state.LastStatus = ''
-                        $state.LastLogLength = -1L
-                        $state.LastClientRequest = ''
+                    } catch { }
+                }
+                if ($null -ne $state.RestartDeadline) {
+                    try {
+                        # An attached launcher watches the game process. The worker
+                        # keeps the lock until PostgreSQL and path cleanup finish.
+                        if (-not (& $workerLockAvailable)) {
+                            if ([DateTime]::UtcNow -lt $state.RestartDeadline) { return }
+                            throw 'Timed out waiting for the previous worker to finish shutting down.'
+                        }
+                        $finalStatus = [IO.File]::ReadAllText($state.StatusPath) | ConvertFrom-Json
+                        if ($finalStatus.runId -ne $state.RunId -or -not $finalStatus.stopped -or $finalStatus.error -or
+                            (-not $state.Attached -and $state.Process.ExitCode -ne 0)) {
+                            throw 'The previous worker did not shut down cleanly. Open the logs for details.'
+                        }
                         & $startWorker $true
-                        $stopButton.Enabled = $true
-                        $stopButton.Text = 'Stop server'
-                        $stageLabel.Text = 'Restarting Red Moon Rising'
-                        $messageLabel.Text = 'Starting a new server session.'
-                        $form.Text = 'Red Moon Rising | Restarting'
+                        & $setReadyState $false
+                        $statusEyebrow.Text = 'STARTING SERVER'
+                        $stageLabel.Text = 'Starting Red Moon Rising'
+                        $messageLabel.Text = 'Checking for changes and starting the server again.'
+                        $progressTrack.Value = 0
+                        $progressCaption.Text = 'OVERALL SETUP'
+                        $progressPercent.Text = '0%'
+                        $setupHint.Text = 'The launcher will stay open while the server starts.'
+                        $connectionLabel.Text = 'RESTARTING'
                         return
-                    } catch {
-                        $restartError = $_.Exception.Message
-                    }
-                } elseif ($state.RestartDeadline) {
-                    $restartError = 'Timed out waiting for shutdown.'
+                    } catch { $restartError = $_.Exception.Message }
                 }
                 $state.Exited = $true
                 & $setReadyState $false 'Server offline'
@@ -3541,8 +4244,12 @@ namespace Rmr {
                 $progressPercent.Text = 'OFFLINE'
                 $setupHint.Text = 'Close this window when you are ready.'
                 if ($restartError) {
-                    $stageLabel.Text = 'Could not restart Red Moon Rising'
+                    $form.Text = 'Red Moon Rising | Needs attention'
+                    $statusEyebrow.Text = 'A LITTLE ATTENTION NEEDED'
+                    $stageLabel.Text = 'Unable to restart Red Moon Rising'
+                    $stageLabel.ForeColor = [System.Drawing.Color]::FromArgb(255, 151, 130)
                     $messageLabel.Text = $restartError
+                    $connectionLabel.Text = 'OFFLINE'
                 } elseif ($state.Attached -or $state.Process.ExitCode -eq 0) {
                     $stageLabel.Text = 'Red Moon Rising stopped'
                     $messageLabel.Text = 'Your database is kept for next time. Run start.bat whenever you are ready.'
@@ -3577,6 +4284,7 @@ namespace Rmr {
                             $state.Process = $running
                             $state.Attached = $true
                             $state.RunId = [string]$online.runId
+                            $state.ServerOnly = -not [bool]$online.clientPath
                             $timer.Start()
                             if ($online.clientPath -and $env:RMR_NO_AUTO_CLIENT -ne '1') {
                                 $clientPath = [string]$online.clientPath
@@ -3593,10 +4301,6 @@ namespace Rmr {
                     }
                 }
             }
-            if (-not (& $workerStopped $Runtime)) {
-                throw 'Another Red Moon Rising launcher is already running from this folder. Use its window to manage the server.'
-            }
-
             & $startWorker
             $timer.Start()
         } catch {
@@ -3627,17 +4331,6 @@ if ($env:RMR_MODE -eq 'stop') {
     [IO.File]::WriteAllText($StopPath, 'stop', $Utf8)
     Write-Host 'Stop requested. The launcher will save and close its database.'
     exit 0
-}
-if ($env:RMR_RESTART -eq '1' -and -not (Test-RmrWorkerStopped $Runtime)) {
-    [IO.File]::WriteAllText($StopPath, 'stop', $Utf8)
-    Write-Host 'Restart requested. Waiting for the current server to save and stop...'
-    $deadline = [DateTime]::UtcNow.AddMinutes(2)
-    while (-not (Test-RmrWorkerStopped $Runtime)) {
-        if ([DateTime]::UtcNow -ge $deadline) { throw 'Timed out waiting for the current server to shut down.' }
-        Start-Sleep -Milliseconds 250
-    }
-    $previous = [IO.File]::ReadAllText($StatusPath) | ConvertFrom-Json
-    if ($previous.error -or -not $previous.stopped) { throw 'The previous session did not shut down cleanly. See logs/launcher.log.' }
 }
 if ($env:RMR_MODE -eq 'ui') {
     try { Start-LauncherUi }

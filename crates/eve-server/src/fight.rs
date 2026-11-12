@@ -716,7 +716,19 @@ fn deaths(park: &mut Park, now: i64, out: &mut Out) {
             if !capsule {
                 // About half of its fittings and cargo survive, for whoever
                 // killed it; the rest is on the killmail.
-                let (kept, gone) = split_loot(&ship.bot_loot, &mut park.rng);
+                let (mut kept, mut gone) = (Vec::new(), Vec::new());
+                for (i, &(t, n)) in ship.bot_loot.iter().enumerate() {
+                    let k = surviving(n, &mut park.rng);
+                    let fitted = i < ship.bot_fitted;
+                    if k > 0 {
+                        kept.push((t, k));
+                        loss.bot_items.push(crate::losses::BotItem { type_id: t, quantity: k, fitted, dropped: true });
+                    }
+                    if n - k > 0 {
+                        gone.push((t, n - k));
+                        loss.bot_items.push(crate::losses::BotItem { type_id: t, quantity: n - k, fitted, dropped: false });
+                    }
+                }
                 loss.items = gone;
                 if let Some((char_id, _)) = killer.filter(|(c, _)| *c != 0) {
                     let stash = if ship.bot_loot.is_empty() {
@@ -754,7 +766,10 @@ fn deaths(park: &mut Park, now: i64, out: &mut Out) {
             }
         } else if let Some(drone) = &ship.drone {
             info!("drone {id} of {} destroyed by {}", drone.owner, culprit(park, killer));
-            out.jobs.push(Job::DroneLost { client_id: Some(drone.client_id), drone_id: id });
+            // A bot's drones are not items: nothing to destroy in the database.
+            if drone.client_id != 0 {
+                out.jobs.push(Job::DroneLost { client_id: Some(drone.client_id), drone_id: id });
+            }
         } else {
             info!("{}'s ship {id} destroyed by {}", ship.pilot.name, culprit(park, killer));
             let capsule = ship.pilot.group_id == GROUP_CAPSULE;
@@ -766,18 +781,9 @@ fn deaths(park: &mut Park, now: i64, out: &mut Out) {
 
 /// A bot's fittings and cargo split between what survives (first) and what
 /// is destroyed: each module, and about half of each stack, by chance.
-fn split_loot(loot: &[(i64, i64)], rng: &mut crate::combat::Rng) -> (Vec<(i64, i64)>, Vec<(i64, i64)>) {
-    let (mut kept, mut gone) = (Vec::new(), Vec::new());
-    for &(t, n) in loot {
-        let k = if n <= 8 { (0..n).filter(|_| rng.unit() < 0.5).count() as i64 } else { ((n as f64) * rng.range(0.3, 0.7)).round() as i64 };
-        if k > 0 {
-            kept.push((t, k));
-        }
-        if n - k > 0 {
-            gone.push((t, n - k));
-        }
-    }
-    (kept, gone)
+/// How many of `n` of an item survive a bot ship's destruction.
+fn surviving(n: i64, rng: &mut crate::combat::Rng) -> i64 {
+    if n <= 8 { (0..n).filter(|_| rng.unit() < 0.5).count() as i64 } else { ((n as f64) * rng.range(0.3, 0.7)).round() as i64 }
 }
 
 /// Starbase structures shot to pieces: they go, with what they held; a tower

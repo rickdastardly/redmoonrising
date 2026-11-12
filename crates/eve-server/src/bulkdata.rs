@@ -6,6 +6,40 @@ use flate2::Compression;
 use tokio_postgres::error::SqlState;
 use std::io::Write;
 
+/// A product's base materials, keyed by the product: what Show Info lists
+/// and what reprocessing gives back (svc::reprocessing uses this too). In
+/// this data they are the product-keyed activity-6 rows consumed whole;
+/// skills (damage 0) and tools (fractional damage) are requirements, not
+/// materials. About 150 products (outpost platforms, station and T2
+/// components, crystals, boosters...) have no activity-6 rows; for those
+/// the materials their blueprint consumes stand in. A product with two
+/// blueprints uses the lower-numbered one, and the data's negative mineral
+/// rows are left out.
+macro_rules! ram_type_materials_fallback {
+    () => {
+        r#"
+        SELECT b."productTypeID" AS "typeID",m."requiredTypeID",m."quantity"
+          FROM (SELECT DISTINCT ON ("productTypeID") "productTypeID","blueprintTypeID"
+                  FROM "invBlueprintTypes" ORDER BY "productTypeID","blueprintTypeID") b
+          JOIN "TL2MaterialsForTypeWithActivity" m
+            ON m."typeID" = b."blueprintTypeID" AND m."activity" = 1
+           AND m."damagePerJob" = 1 AND m."quantity" > 0
+         WHERE NOT EXISTS (SELECT 1 FROM "TL2MaterialsForTypeWithActivity" own
+                            WHERE own."typeID" = b."productTypeID" AND own."activity" = 6)"#
+    };
+}
+
+pub const RAM_TYPE_MATERIALS_SQL: &str = concat!(
+    r#"
+    SELECT "typeID","requiredTypeID","quantity" FROM (
+        SELECT "typeID","requiredTypeID","quantity" FROM "TL2MaterialsForTypeWithActivity"
+         WHERE "activity" = 6 AND "damagePerJob" = 1
+        UNION ALL"#,
+    ram_type_materials_fallback!(),
+    r#"
+    ) materials ORDER BY "typeID","requiredTypeID""#
+);
+
 #[derive(Copy, Clone, PartialEq)]
 pub enum Shape {
     Tuple,
@@ -105,13 +139,8 @@ pub const SPECS: &[Spec] = &[
       r#"SELECT "activityID","activityName","iconNo","description","published" FROM "ramActivities""#),
     s("config.BulkData.ramcompletedstatuses", Shape::Tuple,
       r#"SELECT "completedStatusID","completedStatusName","completedStatusText" FROM "ramCompletedStatuses""#),
-    // A product's base materials, keyed by the product (cfg.py:592): what it is
-    // built from and what reprocessing gives back. In this data they are the
-    // product-keyed activity-6 rows consumed whole; skills (damage 0) and tools
-    // (fractional damage) are requirements, not materials.
-    s("config.BulkData.ramtypematerials", Shape::RowTuple,
-      r#"SELECT "typeID","requiredTypeID","quantity" FROM "TL2MaterialsForTypeWithActivity"
-          WHERE "activity" = 6 AND "damagePerJob" = 1 ORDER BY "typeID","requiredTypeID""#),
+    // A product's base materials, keyed by the product (cfg.py:592).
+    s("config.BulkData.ramtypematerials", Shape::RowTuple, RAM_TYPE_MATERIALS_SQL),
     // Extra requirements per (blueprint, activity); the client reads row.activity
     // (cfg.py:604).
     s("config.BulkData.ramtyperequirements", Shape::RowTuple,

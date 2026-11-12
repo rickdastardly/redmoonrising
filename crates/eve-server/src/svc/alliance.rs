@@ -257,7 +257,7 @@ async fn logo_image(ctx: &Ctx<'_>, alliance_id: i64) -> Refused<Value> {
     let Ok(id) = i32::try_from(alliance_id) else { return Ok(Value::None) };
     let row = ctx.db.query_opt(r#"SELECT "logoImage" FROM alliances WHERE "allianceID" = $1 AND "deleted" = 0"#, &[&id])
         .await.map_err(|e| db_failed("reading the alliance logo", e))?;
-    Ok(row.and_then(|r| r.get::<_, Option<Vec<u8>>>(0)).map_or(Value::None, |bytes| Value::Bytes(super::alliance_logo::remove_stored_matte(bytes))))
+    Ok(row.and_then(|r| r.get::<_, Option<Vec<u8>>>(0)).map_or(Value::None, Value::Bytes))
 }
 
 /// UpdateAlliance(description, url[, logoUrl]), by the executor's directors.
@@ -408,6 +408,61 @@ async fn apply(ctx: &Ctx<'_>, alliance_id: i64, note: &str) -> Refused<Value> {
     let corps = with(member_corps(ctx.db, alliance_id).await?, corp_id);
     tell(ctx.world, &corps, "OnAllianceApplicationChanged", application_event(alliance_id, corp_id, change(APPLICATION_HEADER, None, Some(&new))));
     Ok(Value::None)
+}
+
+/// For the bot simulation: a bot alliance answers a corporation's waiting
+/// application, as its executor's directors would. False if none waits.
+pub async fn answer_for_bots(db: &Client, world: &World, alliance_id: i64, corp_id: i64, accept: bool, note: &str) -> bool {
+    let Ok(Some(old)) = application(db, alliance_id, corp_id).await else { return false };
+    if application_state(&old) != APPLICATION_NEW {
+        return false;
+    }
+    let state = if accept { APPLICATION_ACCEPTED } else { APPLICATION_REJECTED };
+    let when = if accept { crate::bulkdata::filetime_now() } else { old[3].as_i64().unwrap_or(0) };
+    if let Err(e) = db
+        .execute(
+            r#"UPDATE "allianceApplications" SET "applicationText" = $3, "state" = $4, "applicationDateTime" = $5
+                WHERE "allianceID" = $1 AND "corporationID" = $2"#,
+            &[&(alliance_id as i32), &(corp_id as i32), &note, &state, &when],
+        )
+        .await
+    {
+        error!("answering corporation {corp_id}'s application to {alliance_id}: {}", crate::logging::chain(&e));
+        return false;
+    }
+    let new = vec![old[0].clone(), old[1].clone(), Value::text(note), Value::Long(when), Value::Int(state.into())];
+    info!("bot alliance {alliance_id} {} corporation {corp_id}'s application", if accept { "accepted" } else { "turned down" });
+    let corps = with(member_corps(db, alliance_id).await.unwrap_or_default(), corp_id);
+    tell(world, &corps, "OnAllianceApplicationChanged", application_event(alliance_id, corp_id, change(APPLICATION_HEADER, Some(&old), Some(&new))));
+    true
+}
+
+/// For the bot simulation: a bot corporation outside an alliance applies to
+/// join one, as a player corporation's directors would.
+pub async fn apply_for_bots(db: &Client, world: &World, alliance_id: i64, corp_id: i64, note: &str) -> bool {
+    if application(db, alliance_id, corp_id).await.ok().flatten().is_some() {
+        return false;
+    }
+    let now = crate::bulkdata::filetime_now();
+    if let Err(e) = db
+        .execute(
+            r#"INSERT INTO "allianceApplications"
+                   ("allianceID", "corporationID", "applicationText", "applicationDateTime", "state", "deleted")
+               VALUES ($1, $2, $3, $4, $5, 0)
+               ON CONFLICT ("allianceID", "corporationID") DO UPDATE
+                  SET "applicationText" = $3, "applicationDateTime" = $4, "state" = $5, "deleted" = 0"#,
+            &[&(alliance_id as i32), &(corp_id as i32), &note, &now, &APPLICATION_NEW],
+        )
+        .await
+    {
+        error!("bot corporation {corp_id} applying to {alliance_id}: {}", crate::logging::chain(&e));
+        return false;
+    }
+    let new = vec![Value::Int(alliance_id), Value::Int(corp_id), Value::text(note), Value::Long(now), Value::Int(APPLICATION_NEW.into())];
+    info!("bot corporation {corp_id} applied to join alliance {alliance_id}");
+    let corps = with(member_corps(db, alliance_id).await.unwrap_or_default(), corp_id);
+    tell(world, &corps, "OnAllianceApplicationChanged", application_event(alliance_id, corp_id, change(APPLICATION_HEADER, None, Some(&new))));
+    true
 }
 
 /// DeleteAllianceApplication(allianceID): the corporation withdraws (or

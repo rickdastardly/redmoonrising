@@ -35,10 +35,12 @@ const TYPE_CREDITS: i32 = 29;
 const TYPE_BOOKMARK: i32 = 51;
 
 /// The same materials config.BulkData.ramtypematerials gives the client.
-const MATERIALS_SQL: &str = r#"SELECT "typeID","requiredTypeID","quantity"
-                                 FROM "TL2MaterialsForTypeWithActivity"
-                                WHERE "activity" = 6 AND "damagePerJob" = 1
-                                  AND "typeID" = ANY($1)"#;
+fn materials_sql() -> String {
+    format!(
+        r#"SELECT "typeID","requiredTypeID","quantity" FROM ({}) materials WHERE "typeID" = ANY($1)"#,
+        crate::bulkdata::RAM_TYPE_MATERIALS_SQL
+    )
+}
 
 pub async fn reprocessing_svc(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
     let station = bound::parse(&call.service)
@@ -148,18 +150,19 @@ fn reprocessing_info(t: &Terms) -> Value {
 /// minerals, rookie ships, blueprints and reactions are neither.
 async fn options(ctx: &Ctx<'_>, types: &[i32]) -> Value {
     const HEADER: &[&str] = &["typeID", "isRecyclable", "isRefinable"];
-    let sql = r#"
+    let sql = format!(
+        r#"
         SELECT t."typeID", g."categoryID",
                t."typeID" <> ALL($2) AND t."groupID" <> ALL($3) AND g."categoryID" <> ALL($4)
-               AND EXISTS (SELECT 1 FROM "TL2MaterialsForTypeWithActivity" m
-                            WHERE m."typeID" = t."typeID" AND m."activity" = 6
-                              AND m."damagePerJob" = 1)
+               AND EXISTS (SELECT 1 FROM ({}) m WHERE m."typeID" = t."typeID")
           FROM "invTypes" t JOIN "invGroups" g ON g."groupID" = t."groupID"
-         WHERE t."typeID" = ANY($1)"#;
+         WHERE t."typeID" = ANY($1)"#,
+        crate::bulkdata::RAM_TYPE_MATERIALS_SQL
+    );
     let excluded_types = vec![TYPE_CREDITS, TYPE_BOOKMARK];
     let excluded_groups = vec![GROUP_MINERAL, GROUP_ROOKIESHIP];
     let excluded_categories = vec![CATEGORY_BLUEPRINT, CATEGORY_REACTION];
-    let rows = ctx.query(sql, &[&types, &excluded_types, &excluded_groups, &excluded_categories]).await;
+    let rows = ctx.query(&sql, &[&types, &excluded_types, &excluded_groups, &excluded_categories]).await;
     let out = rows
         .iter()
         .map(|r| {
@@ -230,7 +233,7 @@ async fn quotes(ctx: &Ctx<'_>, t: &Terms, station: i64, item_ids: &[i64]) -> Vec
     let items = ctx.query(sql, &[&ids, &(t.char_id as i32), &(station as i32), &active_ship]).await;
     let types: Vec<i32> = items.iter().filter_map(|r| int(r, 1)).map(|v| v as i32).collect();
     let mut materials: HashMap<i64, Vec<(i64, i64)>> = HashMap::new();
-    for r in ctx.query(MATERIALS_SQL, &[&types]).await {
+    for r in ctx.query(&materials_sql(), &[&types]).await {
         let (Some(product), Some(material), Some(qty)) = (int(&r, 0), int(&r, 1), int(&r, 2)) else { continue };
         materials.entry(product).or_default().push((material, qty));
     }

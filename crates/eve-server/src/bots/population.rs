@@ -134,9 +134,15 @@ async fn sources(db: &Client) -> Result<Sources, tokio_postgres::Error> {
         .map(|r| (int(r, 0).unwrap_or(0), int(r, 1).unwrap_or(0)))
         .collect();
     let mut hulls: HashMap<(i32, i64), Vec<i32>> = HashMap::new();
-    let sql = r#"SELECT "groupID", "raceID", "typeID" FROM "invTypes"
-                  WHERE "groupID" = ANY($1) AND "marketGroupID" IS NOT NULL AND "raceID" IS NOT NULL ORDER BY "typeID""#;
-    for r in db.query(sql, &[&vec![25i32, 26, 27, 28, 31, 419, 463]]).await? {
+    // Only what the market's Ships tab sells.
+    let sql = format!(
+        r#"WITH RECURSIVE {}
+           SELECT "groupID", "raceID", "typeID" FROM "invTypes"
+            WHERE "groupID" = ANY($1) AND "raceID" IS NOT NULL AND "published" = 1
+              AND "marketGroupID" IN (SELECT "marketGroupID" FROM ships_market) ORDER BY "typeID""#,
+        super::ships::SHIPS_MARKET
+    );
+    for r in db.query(sql.as_str(), &[&vec![25i32, 26, 27, 28, 31, 419, 463]]).await? {
         hulls.entry((int(&r, 0).unwrap_or(0) as i32, int(&r, 1).unwrap_or(0))).or_default().push(int(&r, 2).unwrap_or(0) as i32);
     }
     Ok(Sources { names, taken, faces, bloodlines, hulls })

@@ -8,7 +8,7 @@
 //! the kill log and mailed, in the old killmail form, to the victim and
 //! whoever landed the final blow.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use eve_marshal::Value;
 use tokio_postgres::{Client, GenericClient};
@@ -76,6 +76,19 @@ pub struct Loss {
     pub attackers: Vec<Attacker>,
     /// For a bot: the fittings and cargo destroyed with it, (type, quantity).
     pub items: Vec<(i64, i64)>,
+    /// For a bot: everything it carried, fitted or not, destroyed or dropped,
+    /// for the killmail's fitting.
+    pub bot_items: Vec<BotItem>,
+}
+
+/// One line of what a bot ship carried when it died.
+#[derive(Debug, Clone)]
+pub struct BotItem {
+    pub type_id: i64,
+    pub quantity: i64,
+    /// Fitted (or in the drone bay), rather than carried as cargo.
+    pub fitted: bool,
+    pub dropped: bool,
 }
 
 impl Loss {
@@ -101,14 +114,24 @@ impl Loss {
             final_blow,
             attackers,
             items: Vec::new(),
+            bot_items: Vec::new(),
         }
     }
 }
 
+/// The winner and loser of a fight, and bystanders, have their say in Local.
+async fn talk_about(server: &Server, db: &Client, loss: &Loss) {
+    let victim = who(db, loss.char_id).await.name;
+    let killer = match loss.final_blow {
+        Some(id) => Some(who(db, id).await.name).filter(|n| !n.is_empty()),
+        None => None,
+    };
+    let w = server.world.lock();
+    crate::bots::talk::ship_lost(&w, loss.system, loss.char_id, &victim, loss.final_blow, killer.as_deref(), loss.capsule);
+}
+
 pub async fn handle(server: &Server, db: &mut Client, loss: Loss) {
-    if let Some(bot) = loss.final_blow.filter(|id| server.world.lock().bot_index.contains_key(id)) {
-        crate::svc::chat::bot_good_fight(&server.world, loss.system, bot, "gf. That was a close one.");
-    }
+    talk_about(server, db, &loss).await;
     let report = report_text(db, &loss).await;
     let contents = if loss.capsule { Vec::new() } else {
         match db.query(r#"SELECT "itemID","typeID","flag","quantity" FROM entity WHERE "locationID"=$1 AND "itemID"<>$2"#,
@@ -128,15 +151,130 @@ pub async fn handle(server: &Server, db: &mut Client, loss: Loss) {
 /// A bot's ship destroyed: the kill log and the killmail, as for a player.
 /// The rest (a new ship, waking at home) is the bot simulation's.
 pub async fn bot_lost(server: &Server, db: &mut Client, loss: Loss) {
-    crate::svc::chat::bot_good_fight(&server.world, loss.system, loss.char_id, "gf. You caught me there.");
+    talk_about(server, db, &loss).await;
     let report = report_text(db, &loss).await;
     let mut destroyed = Vec::new();
     for (t, n) in &loss.items {
         let name = type_name(&*db, *t).await;
         destroyed.push(if *n > 1 { format!("{name}, Qty: {n}") } else { name });
     }
-    let items = loss.items.iter().map(|(kind, qty)| (*kind as i32, 5, *qty as i32, false)).collect();
+    let items = bot_kill_items(&*db, &loss.bot_items).await;
     record(server, db, &loss, report, destroyed, items).await;
+}
+
+const FLAG_CARGO: i32 = 5;
+const FLAG_DRONE_BAY: i32 = 87;
+const CATEGORY_MODULE: i32 = 7;
+const CATEGORY_DRONE: i32 = 18;
+
+/// A bot's items in the slots a player's would have: each fitted module in
+/// its own low (11-18), medium (19-26) or high (27-34) slot, drones in the
+/// drone bay, the rest (charges, cargo, modules past the racks) as cargo.
+async fn bot_kill_items(db: &impl GenericClient, items: &[BotItem]) -> Vec<KillItem> {
+    let types: Vec<i32> = items.iter().map(|i| i.type_id as i32).collect();
+    let mut kinds: HashMap<i32, (i32, Option<i32>)> = HashMap::new();
+    match db.query(
+        r#"SELECT t."typeID"::int, g."categoryID"::int,
+                  (SELECT min(e."effectID")::int FROM "dgmTypeEffects" e
+                    WHERE e."typeID" = t."typeID" AND e."effectID" IN (11, 12, 13))
+             FROM "invTypes" t JOIN "invGroups" g ON g."groupID" = t."groupID"
+            WHERE t."typeID" = ANY($1)"#,
+        &[&types],
+    ).await {
+        Ok(rows) => {
+            for r in rows {
+                kinds.insert(r.get(0), (r.get(1), r.get(2)));
+            }
+        }
+        Err(e) => warn!("reading bot kill item slots: {}", crate::logging::chain(&e)),
+    }
+    // The next free slot of each rack: low, medium, high.
+    let mut next = [11, 19, 27];
+    let last = [18, 26, 34];
+    let mut out = Vec::new();
+    for item in items {
+        let kind = item.type_id as i32;
+        let (category, slot_effect) = kinds.get(&kind).copied().unwrap_or((0, None));
+        let rack = match slot_effect {
+            Some(11) => Some(0),
+            Some(13) => Some(1),
+            Some(12) => Some(2),
+            _ => None,
+        };
+        if item.fitted && category == CATEGORY_DRONE {
+            out.push((kind, FLAG_DRONE_BAY, item.quantity as i32, item.dropped));
+            continue;
+        }
+        let mut left = item.quantity;
+        if let (true, CATEGORY_MODULE, Some(rack)) = (item.fitted, category, rack) {
+            while left > 0 && next[rack] <= last[rack] {
+                out.push((kind, next[rack], 1, item.dropped));
+                next[rack] += 1;
+                left -= 1;
+            }
+        }
+        if left > 0 {
+            out.push((kind, FLAG_CARGO, left as i32, item.dropped));
+        }
+    }
+    out
+}
+
+/// Older bot killmails recorded every item as cargo. Put their modules and
+/// drones into slots, once, in the background: a kill whose items are all
+/// cargo and include a module or drone is redone as `bot_kill_items` would.
+pub async fn reslot_bot_kills(db_url: String) {
+    let mut db = match crate::db::connect(&db_url).await {
+        Ok(db) => db,
+        Err(e) => { warn!("re-slotting bot killmails: {}", crate::logging::chain(&e)); return; }
+    };
+    let kills: Vec<i64> = match db.query(
+        r#"SELECT DISTINCT i."killID" FROM "killLogItems" i
+             JOIN "invTypes" t ON t."typeID" = i."typeID"
+             JOIN "invGroups" g ON g."groupID" = t."groupID"
+             JOIN "killLog" k ON k."killID" = i."killID"
+            WHERE i."flag" = 5 AND g."categoryID" IN (7, 18)
+              AND EXISTS (SELECT 1 FROM "bots" b WHERE b."characterID" = k."victimCharID")
+              AND NOT EXISTS (SELECT 1 FROM "killLogItems" j WHERE j."killID" = i."killID" AND j."flag" <> 5)"#,
+        &[],
+    ).await {
+        Ok(rows) => rows.iter().map(|r| r.get(0)).collect(),
+        Err(e) => { warn!("finding bot killmails to re-slot: {}", crate::logging::chain(&e)); return; }
+    };
+    if kills.is_empty() {
+        return;
+    }
+    let mut done = 0;
+    for kill in &kills {
+        let result = async {
+            let tx = db.transaction().await?;
+            let rows = tx.query(
+                r#"SELECT i."typeID"::int8, i."quantity"::int8, i."dropped", g."categoryID"::int
+                     FROM "killLogItems" i JOIN "invTypes" t ON t."typeID" = i."typeID"
+                     JOIN "invGroups" g ON g."groupID" = t."groupID"
+                    WHERE i."killID" = $1 ORDER BY i."typeID""#,
+                &[kill],
+            ).await?;
+            let items: Vec<BotItem> = rows.iter().map(|r| BotItem {
+                type_id: r.get(0),
+                quantity: r.get(1),
+                dropped: r.get(2),
+                fitted: matches!(r.get::<_, i32>(3), CATEGORY_MODULE | CATEGORY_DRONE),
+            }).collect();
+            let slotted = bot_kill_items(&tx, &items).await;
+            tx.execute(r#"DELETE FROM "killLogItems" WHERE "killID" = $1"#, &[kill]).await?;
+            for (kind, flag, quantity, dropped) in &slotted {
+                tx.execute(r#"INSERT INTO "killLogItems" ("killID","typeID","flag","quantity","dropped") VALUES ($1,$2,$3,$4,$5)"#,
+                    &[kill, kind, flag, quantity, dropped]).await?;
+            }
+            tx.commit().await
+        }.await;
+        match result {
+            Ok(()) => done += 1,
+            Err(e) => { warn!("re-slotting killmail {kill}: {}", crate::logging::chain(&e)); return; }
+        }
+    }
+    info!("killboard: put the fittings of {done} older bot killmails into their slots");
 }
 
 // ---- the ship -----------------------------------------------------------------------------

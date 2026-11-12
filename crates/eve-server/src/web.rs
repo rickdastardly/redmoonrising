@@ -29,6 +29,7 @@ use crate::conn::Server;
 const INDEX: &str = include_str!("../web/index.html");
 const STYLE: &str = include_str!("../web/style.css");
 const SCRIPT: &str = include_str!("../web/dist/app.js");
+const EVE_ICON: &[u8] = include_bytes!("../web/eve-icon.png");
 
 /// The most a request may be before it is turned away.
 const MAX_REQUEST: usize = 8 * 1024;
@@ -52,6 +53,7 @@ pub async fn ensure_storage(db: &tokio_postgres::Client) -> Result<(), tokio_pos
             message text NOT NULL,
             active boolean NOT NULL DEFAULT false
         );
+        ALTER TABLE "rmrDowntime" ADD COLUMN IF NOT EXISTS restart boolean NOT NULL DEFAULT false;
     "#).await
 }
 
@@ -61,9 +63,16 @@ fn unix_ms_now() -> i64 {
 
 /// Called by the main accept loop so bot and ship state follow the ordinary
 /// graceful shutdown path before the launcher closes the database.
-pub async fn take_due_downtime(db: &tokio_postgres::Client) -> Result<bool, tokio_postgres::Error> {
+/// Some(true) when the launcher should start the server again afterwards.
+pub async fn take_due_downtime(db: &tokio_postgres::Client) -> Result<Option<bool>, tokio_postgres::Error> {
     Ok(db.query_opt(r#"UPDATE "rmrDowntime" SET active = false
-        WHERE id = 1 AND active AND deadline_ms <= $1 RETURNING id"#, &[&unix_ms_now()]).await?.is_some())
+        WHERE id = 1 AND active AND deadline_ms <= $1 RETURNING restart"#, &[&unix_ms_now()]).await?
+        .map(|row| row.get::<_, bool>(0)))
+}
+
+/// A restart needs the launcher, which starts the server again; it sets this.
+fn restart_available() -> bool {
+    std::env::var_os("RMR_SHUTDOWN_FILE").is_some()
 }
 
 pub async fn notify_joined(server: &Server, client_id: i64) {
@@ -122,7 +131,7 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
     let mut parts = head.lines().next().unwrap_or("").split_whitespace();
     let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
     let path = target.split('?').next().unwrap_or("/");
-    let body = if method == "POST" && matches!(path, "/api/articles" | "/api/downtime") {
+    let body = if method == "POST" && matches!(path, "/api/articles" | "/api/articles/preview" | "/api/downtime" | "/api/seed" | "/api/bots") {
         let Some(len) = header(&head, "Content-Length").and_then(|n| n.parse::<usize>().ok()) else {
             return respond(&mut stream, 400, "application/json", br#"{"error":"Content-Length is required."}"#).await;
         };
@@ -134,15 +143,20 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
         }
         buf[head_end..head_end + len].to_vec()
     } else { Vec::new() };
-    if matches!(path, "/api/articles" | "/api/downtime") && method == "POST" {
+    if matches!(path, "/api/articles" | "/api/articles/preview" | "/api/downtime" | "/api/seed" | "/api/bots") && method == "POST" {
         let host = header(&head, "Host").unwrap_or("");
         if !local || !local_host(host, stream.local_addr()?.port()) ||
             header(&head, "X-RMR-Admin") != Some("1") ||
             header(&head, "Origin") != Some(format!("http://{host}").as_str()) {
             return respond(&mut stream, 403, "application/json", br#"{"error":"This control is available only on the server dashboard."}"#).await;
         }
-        let result = if path == "/api/articles" { publish_article(server, &body).await }
-            else { change_downtime(server, &body).await };
+        let result = match path {
+            "/api/articles" => publish_article(server, &body).await,
+            "/api/articles/preview" => preview_article(&body),
+            "/api/seed" => change_seeding(server, &body).await,
+            "/api/bots" => change_bots(server, &body).await,
+            _ => change_downtime(server, &body).await,
+        };
         let (status, reply) = match result {
             Ok(v) => (200, v),
             Err((status, message)) => (status, json!({"error": message})),
@@ -217,14 +231,16 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
             respond(&mut stream, 200, "text/html; charset=utf-8", page.as_bytes()).await
         }
         "/style.css" => respond(&mut stream, 200, "text/css; charset=utf-8", STYLE.as_bytes()).await,
-        "/eve-icon.png" => respond(&mut stream, 200, "image/png", include_bytes!("../web/eve-icon.png")).await,
         "/app.js" => respond(&mut stream, 200, "text/javascript; charset=utf-8", SCRIPT.as_bytes()).await,
+        "/eve-icon.png" => respond(&mut stream, 200, "image/png", EVE_ICON).await,
         api if api.starts_with("/api/") => {
             let body = match api {
                 "/api/summary" => Some(summary(server).await),
                 "/api/news" => Some(news(server)),
                 "/api/articles" => Some(articles(server).await),
                 "/api/downtime" => Some(downtime(server).await),
+                "/api/bots" => Some(Ok(bot_settings())),
+                "/api/health" => Some(Ok(crate::health::report())),
                 "/api/sieges" => Some(sieges(server)),
                 "/api/wars" => Some(wars(server).await),
                 "/api/players" => Some(players(server).await),
@@ -238,6 +254,13 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
                     Some(kills(server, page).await)
                 }
                 "/api/killboard" => Some(killboard(server).await),
+                "/api/stations" => {
+                    let query = target.split_once('?').map_or("", |(_, q)| q);
+                    let q = query.split('&').find_map(|kv| kv.strip_prefix("q=")).map(decode).unwrap_or_default();
+                    Some(stations(server, &q).await)
+                }
+                "/api/sovmap/static" => Some(sov_map_static(server).await),
+                "/api/sovmap" => Some(sov_map(server).await),
                 "/api/kill" => {
                     let query = target.split_once('?').map_or("", |(_, q)| q);
                     let id = query.split('&').find_map(|kv| kv.strip_prefix("id=")).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
@@ -247,6 +270,28 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
                     let query = target.split_once('?').map_or("", |(_, q)| q);
                     let id = query.split('&').find_map(|kv| kv.strip_prefix("id=")).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
                     Some(pilot_profile(server, id).await)
+                }
+                "/api/corporation" | "/api/alliance" => {
+                    let query = target.split_once('?').map_or("", |(_, q)| q);
+                    let id = query.split('&').find_map(|kv| kv.strip_prefix("id=")).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+                    let kind = if api == "/api/alliance" { Group::Alliance } else { Group::Corporation };
+                    Some(group_profile(server, kind, id).await)
+                }
+                "/api/group-kills" => {
+                    let query = target.split_once('?').map_or("", |(_, q)| q);
+                    let get = |name: &str| query.split('&').find_map(|kv| kv.strip_prefix(name)).map(decode).unwrap_or_default();
+                    let id = get("id=").parse::<i64>().unwrap_or(0);
+                    let page = get("page=").parse::<i64>().unwrap_or(0).clamp(0, 10_000);
+                    let kind = if get("kind=") == "alliance" { Group::Alliance } else { Group::Corporation };
+                    Some(group_kills(server, kind, id, &get("mode="), page).await)
+                }
+                "/api/pilot-kills" => {
+                    let query = target.split_once('?').map_or("", |(_, q)| q);
+                    let get = |name: &str| query.split('&').find_map(|kv| kv.strip_prefix(name)).map(decode).unwrap_or_default();
+                    let id = get("id=").parse::<i64>().unwrap_or(0);
+                    let page = get("page=").parse::<i64>().unwrap_or(0).clamp(0, 10_000);
+                    let mode = get("mode=");
+                    Some(pilot_kills(server, id, &mode, page).await)
                 }
                 "/api/pilot-search" => {
                     let query = target.split_once('?').map_or("", |(_, q)| q);
@@ -396,27 +441,181 @@ fn news(server: &Server) -> Answer {
 }
 
 async fn articles(server: &Server) -> Answer {
-    Ok(rows(&server.db.query(r#"SELECT id, title, body, published_ms AS time
-        FROM "rmrNewsArticles" ORDER BY id DESC LIMIT 100"#, &[]).await?))
+    let mut list = rows(&server.db.query(r#"SELECT id, title, body, published_ms AS time
+        FROM "rmrNewsArticles" ORDER BY id DESC LIMIT 100"#, &[]).await?);
+    if let Json::Array(items) = &mut list {
+        for item in items.iter_mut() {
+            let html = crate::news::render(item["body"].as_str().unwrap_or(""), crate::news::Target::Dashboard);
+            item["html"] = json!(html);
+        }
+    }
+    Ok(list)
 }
 
 async fn downtime(server: &Server) -> Answer {
-    let row = server.db.query_opt(r#"SELECT deadline_ms, message, active FROM "rmrDowntime" WHERE id = 1"#, &[]).await?;
+    let row = server.db.query_opt(r#"SELECT deadline_ms, message, active, restart FROM "rmrDowntime" WHERE id = 1"#, &[]).await?;
     Ok(match row {
         Some(row) => json!({"active": row.get::<_, bool>(2), "deadline": row.get::<_, i64>(0),
-            "message": row.get::<_, String>(1), "now": unix_ms_now()}),
-        None => json!({"active": false, "deadline": null, "message": "", "now": unix_ms_now()}),
+            "message": row.get::<_, String>(1), "restart": row.get::<_, bool>(3),
+            "restartAvailable": restart_available(), "now": unix_ms_now()}),
+        None => json!({"active": false, "deadline": null, "message": "", "restart": false,
+            "restartAvailable": restart_available(), "now": unix_ms_now()}),
     })
 }
 
 type EditResult = Result<Json, (u16, String)>;
 
+/// The most bots the dashboard will set; more makes a very long first start
+/// (each is created once) and a busier database.
+const MAX_BOTS: u64 = 1_000_000;
+
+/// The bot settings for the dashboard: how many play now, how many the
+/// config file asks for at the next start, and how they behave.
+fn bot_settings() -> Json {
+    json!({
+        "running": crate::bots::running_count(),
+        "configured": crate::config::bots_in_file().ok(),
+        "aggression": crate::bots::aggression().as_str(),
+        "chat": crate::bots::chatter().as_str(),
+        "trashTalk": crate::bots::trash_talk(),
+        "joinPlayerCorps": crate::bots::recruiting().as_str(),
+        "joinPlayerAlliances": crate::bots::alliance_applying().as_str(),
+        "acceptApplications": crate::bots::door().as_str(),
+        "onlineActivity": (crate::bots::activity_factor() * 100.0).round() / 100.0,
+        "shownPerSystem": crate::bots::shown_per_system(),
+        "piratesAttackPlayers": crate::bots::pirates_attack_players(),
+        "countOverridden": crate::config::overridden("RMR_BOTS"),
+        "aggressionOverridden": crate::config::overridden("RMR_BOTS_AGGRESSION"),
+        "restartAvailable": restart_available(),
+        "max": MAX_BOTS,
+        "activityRange": [crate::bots::ACTIVITY_RANGE.0, crate::bots::ACTIVITY_RANGE.1],
+        "shownRange": [crate::bots::SHOWN_RANGE.0, crate::bots::SHOWN_RANGE.1],
+    })
+}
+
+/// Saves one bots setting to the config file, so it outlasts a restart.
+fn save_bots_setting(key: &str, value: &str) -> Result<(), (u16, String)> {
+    crate::config::set_bots_setting(key, value).map_err(|e| (500, format!("The bots changed for now, but the setting was not saved: {e}")))
+}
+
+/// Changes the bots: the count (saved for the next start, optionally
+/// restarting now) and their behaviour (at once, and saved).
+async fn change_bots(server: &Server, body: &[u8]) -> EditResult {
+    use crate::bots::{Aggression, Chatter, Door, Rate};
+    let input: Json = serde_json::from_slice(body).map_err(|_| (400, "Invalid bot settings.".to_string()))?;
+    let mut said: Vec<String> = Vec::new();
+    let choice = |key: &str, choices: &str| (400, format!("{key}: choose {choices}."));
+    if let Some(word) = input["aggression"].as_str() {
+        let mode = Aggression::parse(word).ok_or_else(|| choice("Aggression", "calm, some aggressive or all aggressive"))?;
+        crate::bots::set_aggression(mode);
+        save_bots_setting("aggression", mode.as_str())?;
+        said.push(match mode {
+            Aggression::Calm => "All bots are calm: they attack no player unless shot first.",
+            Aggression::Usual => "Some bots are aggressive: pirates outside high-sec, angered sides and hunters attack players.",
+            Aggression::All => "All bots are aggressive: they attack every player who is not their friend.",
+        }.to_string());
+    }
+    if let Some(word) = input["chat"].as_str() {
+        let c = Chatter::parse(word).ok_or_else(|| choice("Local chat", "off, quiet, normal or chatty"))?;
+        crate::bots::set_chatter(c);
+        save_bots_setting("chat", c.as_str())?;
+        said.push(format!("Local chat: {}.", c.as_str()));
+    }
+    if let Some(on) = input["trashTalk"].as_bool() {
+        crate::bots::set_trash_talk(on);
+        save_bots_setting("trashTalk", if on { "true" } else { "false" })?;
+        said.push(if on { "Bots trash talk and troll." } else { "Bots keep it polite." }.to_string());
+    }
+    if let Some(word) = input["joinPlayerCorps"].as_str() {
+        let r = Rate::parse(word).ok_or_else(|| choice("Applications to player corporations", "off, low, normal or high"))?;
+        crate::bots::set_recruiting(r);
+        save_bots_setting("joinPlayerCorps", r.as_str())?;
+        said.push(format!("Bots apply to player corporations: {}.", r.as_str()));
+    }
+    if let Some(word) = input["joinPlayerAlliances"].as_str() {
+        let r = Rate::parse(word).ok_or_else(|| choice("Applications to player alliances", "off, low, normal or high"))?;
+        crate::bots::set_alliance_applying(r);
+        save_bots_setting("joinPlayerAlliances", r.as_str())?;
+        said.push(format!("Bot corporations apply to player alliances: {}.", r.as_str()));
+    }
+    if let Some(word) = input["acceptApplications"].as_str() {
+        let d = Door::parse(word).ok_or_else(|| choice("Answering applications", "closed, selective or open"))?;
+        crate::bots::set_door(d);
+        save_bots_setting("acceptApplications", d.as_str())?;
+        said.push(format!("Bot corporations and alliances are {} to applications.", d.as_str()));
+    }
+    if let Some(f) = input["onlineActivity"].as_f64() {
+        let (lo, hi) = crate::bots::ACTIVITY_RANGE;
+        if !(lo..=hi).contains(&f) {
+            return Err((400, format!("Online activity must be from {lo} to {hi} times normal.")));
+        }
+        crate::bots::set_activity_factor(f);
+        save_bots_setting("onlineActivity", &format!("{f}"))?;
+        said.push(format!("Online activity: {f}x normal. Bots log on or off over the next few minutes."));
+    }
+    if let Some(n) = input["shownPerSystem"].as_u64() {
+        let (lo, hi) = crate::bots::SHOWN_RANGE;
+        if !(lo as u64..=hi as u64).contains(&n) {
+            return Err((400, format!("Bot ships shown per system must be from {lo} to {hi}.")));
+        }
+        crate::bots::set_shown_per_system(n as usize);
+        save_bots_setting("shownPerSystem", &n.to_string())?;
+        said.push(format!("Up to {n} bot ships shown per system."));
+    }
+    if let Some(on) = input["piratesAttackPlayers"].as_bool() {
+        crate::bots::set_pirates_attack_players(on);
+        save_bots_setting("piratesAttackPlayers", if on { "true" } else { "false" })?;
+        said.push(if on { "Pirates attack players outside high-sec." } else { "Pirates leave players alone unless angered." }.to_string());
+    }
+    let restart = input["restart"].as_bool().unwrap_or(false);
+    if !input["count"].is_null() {
+        let count = input["count"].as_u64().filter(|n| *n <= MAX_BOTS)
+            .ok_or_else(|| (400, format!("Enter a whole number of bots from 0 to {MAX_BOTS}.")))?;
+        crate::config::set_bots_setting("count", &count.to_string())
+            .map_err(|e| (500, format!("Could not save the bot count: {e}")))?;
+        info!(count, "dashboard set the bot count");
+        said.push(if restart {
+            format!("Bot count set to {count}.")
+        } else {
+            format!("Bot count set to {count}; it takes effect when the server restarts.")
+        });
+        if crate::config::overridden("RMR_BOTS") {
+            said.push("Note: the RMR_BOTS environment variable overrides this setting.".into());
+        }
+    }
+    if restart {
+        if !restart_available() {
+            return Err((400, "Restarting needs the RMR launcher (Start.bat), which starts the server again.".into()));
+        }
+        change_downtime(server, br#"{"action":"restart-now"}"#).await?;
+        said.push("Restarting the server now.".into());
+    }
+    if said.is_empty() {
+        return Err((400, "Nothing to change.".into()));
+    }
+    info!(changes = %said.join(" "), "dashboard changed the bots");
+    Ok(json!({"ok": said.join(" "), "settings": bot_settings()}))
+}
+
+/// Article bodies, formatting tags included.
+const ARTICLE_MAX_CHARS: usize = 30_000;
+
+/// How an article body will look, for the dashboard's preview.
+fn preview_article(body: &[u8]) -> EditResult {
+    let input: Json = serde_json::from_slice(body).map_err(|_| (400, "Invalid article data.".to_string()))?;
+    let text = input["body"].as_str().unwrap_or("");
+    if text.chars().count() > ARTICLE_MAX_CHARS {
+        return Err((400, "Articles can be up to 30,000 characters.".into()));
+    }
+    Ok(json!({"html": crate::news::render(text.trim(), crate::news::Target::Dashboard)}))
+}
+
 async fn publish_article(server: &Server, body: &[u8]) -> EditResult {
     let input: Json = serde_json::from_slice(body).map_err(|_| (400, "Invalid article data.".to_string()))?;
     let title = input["title"].as_str().unwrap_or("").trim();
     let text = input["body"].as_str().unwrap_or("").trim();
-    if title.is_empty() || title.chars().count() > 140 || text.is_empty() || text.chars().count() > 8_000 {
-        return Err((400, "Enter a title (up to 140 characters) and article (up to 8,000 characters).".into()));
+    if title.is_empty() || title.chars().count() > 140 || text.is_empty() || text.chars().count() > ARTICLE_MAX_CHARS {
+        return Err((400, "Enter a title (up to 140 characters) and article (up to 30,000 characters).".into()));
     }
     let row = server.db.query_one(r#"INSERT INTO "rmrNewsArticles" (title, body, published_ms)
         VALUES ($1, $2, $3) RETURNING id"#, &[&title, &text, &unix_ms_now()]).await
@@ -438,46 +637,116 @@ async fn change_downtime(server: &Server, body: &[u8]) -> EditResult {
         }
         return Ok(json!({"ok": if removed.is_some() { "Downtime cancelled." } else { "No downtime was scheduled." }}));
     }
-    if action != "schedule" && action != "now" {
-        return Err((400, "Choose a five-minute countdown, immediate shutdown, or cancel.".into()));
+    let (countdown, restart) = match action {
+        "schedule" => (true, false),
+        "now" => (false, false),
+        "restart" => (true, true),
+        "restart-now" => (false, true),
+        _ => return Err((400, "Choose a countdown, an immediate shutdown or restart, or cancel.".into())),
+    };
+    if restart && !restart_available() {
+        return Err((400, "Restarting needs the RMR launcher (Start.bat), which starts the server again.".into()));
     }
     let message = input["message"].as_str().unwrap_or("").trim();
     if message.chars().count() > 500 {
         return Err((400, "Downtime announcement must be under 500 characters.".into()));
     }
-    let message = if message.is_empty() { "The server is going down for maintenance." } else { message };
-    let deadline = unix_ms_now() + if action == "schedule" { 300_000 } else { 0 };
-    server.db.execute(r#"INSERT INTO "rmrDowntime" (id, deadline_ms, message, active)
-        VALUES (1, $1, $2, true) ON CONFLICT (id) DO UPDATE SET
-        deadline_ms = EXCLUDED.deadline_ms, message = EXCLUDED.message, active = true"#,
-        &[&deadline, &message]).await
+    let message = match (message.is_empty(), restart) {
+        (false, _) => message,
+        (true, true) => "The server is restarting. It will be back in a few minutes.",
+        (true, false) => "The server is going down for maintenance.",
+    };
+    let deadline = unix_ms_now() + if countdown { 300_000 } else { 0 };
+    server.db.execute(r#"INSERT INTO "rmrDowntime" (id, deadline_ms, message, active, restart)
+        VALUES (1, $1, $2, true, $3) ON CONFLICT (id) DO UPDATE SET
+        deadline_ms = EXCLUDED.deadline_ms, message = EXCLUDED.message, active = true, restart = EXCLUDED.restart"#,
+        &[&deadline, &message, &restart]).await
         .map_err(|e| { warn!("scheduling downtime: {}", crate::logging::chain(&e)); (500, "Could not schedule downtime.".into()) })?;
     let w = server.world.lock();
     w.notify(&w.all_clients(), "OnClusterShutdownInitiated", Value::Tuple(vec![
         Value::text(message), Value::Long(filetime_at_ms(deadline)),
     ]));
     info!(deadline, action, "dashboard scheduled downtime");
-    Ok(json!({"ok": if action == "schedule" { "Five-minute downtime countdown started." } else { "Shutting down the server." }, "deadline": deadline}))
+    let ok = match action {
+        "schedule" => "Five-minute downtime countdown started.",
+        "restart" => "Five-minute restart countdown started. The server will save, stop and start again.",
+        "restart-now" => "Restarting the server. It will save, stop and start again.",
+        _ => "Shutting down the server.",
+    };
+    Ok(json!({"ok": ok, "deadline": deadline}))
 }
 
-fn escape_html(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
-        .replace('"', "&quot;").replace('\'', "&#39;")
+/// Stations for the market-seeding picker: with no search, the seeded
+/// stations and every player-owned station (outposts); otherwise up to 40
+/// stations whose name, system or region matches.
+async fn stations(server: &Server, q: &str) -> Answer {
+    let seeded = crate::market_seed::seeded_ids(&server.db).await?;
+    let q = q.trim();
+    let pattern = format!("%{}%", q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
+    let sql = r#"SELECT s."stationID" AS id, COALESCE(s."stationName", '') AS name,
+                        COALESCE(m."solarSystemName", '') AS system, COALESCE(r."regionName", '') AS region,
+                        round(COALESCE(m."security", 0)::numeric, 1)::float8 AS security,
+                        COALESCE(co."corporationName", '') AS owner,
+                        (s."corporationID" >= $3) AS "playerOwned",
+                        (s."stationID" = ANY($1::int[])) AS seeded,
+                        (SELECT count(*) FROM market_orders o WHERE o."stationID" = s."stationID"
+                            AND o."bid" = 0 AND o."orderState" = 0 AND o."volRemaining" > 0) AS "sellOrders"
+                   FROM "staStations" s
+                   LEFT JOIN "mapSolarSystems" m ON m."solarSystemID" = s."solarSystemID"
+                   LEFT JOIN "mapRegions" r ON r."regionID" = s."regionID"
+                   LEFT JOIN "corporation" co ON co."corporationID" = s."corporationID"
+                  WHERE CASE WHEN $2 = '%%' THEN s."stationID" = ANY($1::int[]) OR s."corporationID" >= $3
+                                             OR s."stationID" >= 61000000
+                             ELSE s."stationName" ILIKE $2 OR m."solarSystemName" ILIKE $2 OR r."regionName" ILIKE $2 END
+                  ORDER BY (s."stationID" = ANY($1::int[])) DESC, (s."corporationID" >= $3) DESC, s."stationName"
+                  LIMIT 40"#;
+    Ok(rows(&server.db.query(sql, &[&seeded, &pattern, &crate::market_seed::FIRST_PLAYER]).await?))
 }
 
+async fn change_seeding(server: &Server, body: &[u8]) -> EditResult {
+    let input: Json = serde_json::from_slice(body).map_err(|_| (400, "Invalid seeding request.".to_string()))?;
+    let station = input["stationID"].as_i64().filter(|id| (60_000_000..64_000_000).contains(id))
+        .ok_or((400, "Pick a station to seed.".to_string()))? as i32;
+    let name: Option<String> = server.db.query_opt(r#"SELECT COALESCE("stationName", '') FROM "staStations" WHERE "stationID" = $1"#, &[&station]).await
+        .map_err(|e| { warn!("seeding lookup: {}", crate::logging::chain(&e)); (500, "Could not look up the station.".to_string()) })?
+        .map(|r| r.get(0));
+    let Some(name) = name else { return Err((404, "That station does not exist.".into())) };
+    match input["action"].as_str().unwrap_or("seed") {
+        "seed" => {
+            let (added, topped) = crate::market_seed::seed_station(&server.db, station).await
+                .map_err(|e| { warn!("seeding station {station}: {}", crate::logging::chain(&e)); (500, "Could not seed the station market.".to_string()) })?;
+            Ok(json!({"ok": format!("{name}: market seeded ({added} new NPC sell orders, {topped} restocked). It is restocked at every server start."),
+                "added": added, "restocked": topped}))
+        }
+        "unseed" => {
+            let removed = crate::market_seed::unseed_station(&server.db, station).await
+                .map_err(|e| { warn!("unseeding station {station}: {}", crate::logging::chain(&e)); (500, "Could not stop seeding the station.".to_string()) })?;
+            Ok(json!({"ok": format!("{name}: no longer seeded ({removed} NPC sell orders removed)."), "removed": removed}))
+        }
+        _ => Err((400, "Choose seed or unseed.".into())),
+    }
+}
+
+/// Text for the EVE client's browser, which knows the named entities for
+/// markup characters but not numeric ones such as &#39;.
+fn client_text(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+/// The character selection news panel: patch-notes style, newest first.
 async fn client_news(server: &Server) -> Result<String, tokio_postgres::Error> {
     let articles = server.db.query(r#"SELECT title, body,
-        to_char(to_timestamp(published_ms / 1000.0) AT TIME ZONE 'UTC', 'DD Mon YYYY HH24:MI "UTC"') AS published
+        to_char(to_timestamp(published_ms / 1000.0) AT TIME ZONE 'UTC', 'FMDD FMMonth YYYY') AS published
         FROM "rmrNewsArticles"
         ORDER BY id DESC LIMIT 25"#, &[]).await?;
-    let mut html = String::from("<html><body bgcolor=\"#101820\" text=\"#e6edf4\" link=\"#9bd0ff\"><font face=\"Tahoma,Arial\" size=\"2\"><h2>Red Moon Rising News</h2>");
+    let mut html = String::from("<html><body bgcolor=\"#101820\" text=\"#d8dee4\" link=\"#9bd0ff\"><font face=\"Tahoma,Arial\" size=\"4\"><h1><font color=\"#ffffff\">Red Moon Rising updates</font></h1><hr>");
     if articles.is_empty() { html.push_str("<p>No news articles have been published yet.</p>"); }
     for row in articles {
         let title: String = row.get(0);
         let body: String = row.get(1);
         let at: String = row.get(2);
-        html.push_str(&format!("<hr><h3>{}</h3><small>{}</small><p>{}</p>",
-            escape_html(&title), at, escape_html(&body).replace('\n', "<br>")));
+        html.push_str(&format!("<h2><font color=\"{}\">{}</font></h2><font color=\"#8c949c\" size=\"3\">{}</font><br><br>{}<br><br>",
+            crate::news::CLIENT_TITLE, client_text(&title), at, crate::news::render(&body, crate::news::Target::Client)));
     }
     html.push_str("</font></body></html>");
     Ok(html)
@@ -570,6 +839,7 @@ async fn alliances(server: &Server) -> Answer {
 
 async fn corporations(server: &Server) -> Answer {
     let sql = r#"SELECT co."corporationID" AS id, co."corporationName" AS name, co."tickerName" AS ticker, co."memberCount" AS members,
+                        NULLIF(co."allianceID", 0) AS "allianceID",
                         a."shortName" AS alliance, EXISTS (SELECT 1 FROM "botGroups" g WHERE g."ownerID" = co."corporationID") AS bots
                    FROM "corporation" co
                    LEFT JOIN alliances a ON a."allianceID" = co."allianceID"
@@ -688,21 +958,120 @@ async fn killboard(server: &Server) -> Answer {
             WHERE p."finalBlow" = 1
             GROUP BY p."ownerID", c."characterName", co."tickerName"
     ORDER BY kills DESC, name LIMIT 25"#, &[]).await?);
-    let featured_sql = format!(r#"SELECT k."killID" AS id, {time} AS time,
+    // The most valuable losses of the week, as zKillboard's top rows: ships
+    // (category 6) and structures (category 23), ranked by hull base price.
+    let featured_sql = |category: i32| format!(r#"SELECT k."killID" AS id, {time} AS time,
         k."victimCharID" AS "victimID", COALESCE(c."characterName", 'Unknown pilot') AS victim,
+        COALESCE(co."corporationName", '') AS "victimCorporation",
         COALESCE(t."typeName", 'Unknown ship') AS ship, k."victimShipTypeID" AS "shipTypeID",
         COALESCE(s."solarSystemName", 'Unknown system') AS system,
-        COALESCE(t."basePrice", 0)::float8 AS "hullValue"
+        COALESCE(t."basePrice", 0)::float8 AS "hullValue", {value} AS "totalValue"
         FROM "killLog" k
         LEFT JOIN "character_" c ON c."characterID" = k."victimCharID"
+        LEFT JOIN "corporation" co ON co."corporationID" = k."victimCorpID"
         LEFT JOIN "invTypes" t ON t."typeID" = k."victimShipTypeID"
+        LEFT JOIN "invGroups" g ON g."groupID" = t."groupID"
         LEFT JOIN "mapSolarSystems" s ON s."solarSystemID" = k."solarSystemID"
-        WHERE k."killTime" > $1 AND COALESCE(t."basePrice", 0) > 0
-        ORDER BY t."basePrice" DESC, k."killID" DESC LIMIT 6"#, time = ms(r#"k."killTime""#));
-    let featured = rows(&server.db.query(&featured_sql, &[&week]).await?);
+        WHERE k."killTime" > $1 AND COALESCE(t."basePrice", 0) > 0 AND g."categoryID" = {category}
+        ORDER BY t."basePrice" DESC, k."killID" DESC LIMIT 6"#, time = ms(r#"k."killTime""#), value = KILL_VALUE);
+    let featured = rows(&server.db.query(&featured_sql(6), &[&week]).await?);
+    let structures = rows(&server.db.query(&featured_sql(23), &[&week]).await?);
+    let activity = server.db.query_one(r#"WITH recent AS (
+            SELECT "killID", "victimCharID", "victimCorpID", NULLIF("victimAllianceID", 0) AS "victimAllianceID",
+                   "victimShipTypeID", "solarSystemID" FROM "killLog" WHERE "killTime" > $1),
+          people AS (
+            SELECT p."ownerID" AS who, p."corporationID" AS corp, NULLIF(p."allianceID", 0) AS alliance, p."shipTypeID" AS ship
+              FROM "killLogParticipants" p JOIN recent r ON r."killID" = p."killID" WHERE p."ownerID" > 0
+            UNION ALL
+            SELECT "victimCharID", "victimCorpID", "victimAllianceID", "victimShipTypeID" FROM recent)
+        SELECT (SELECT count(DISTINCT who) FROM people) AS characters,
+               (SELECT count(DISTINCT corp) FROM people) AS corporations,
+               (SELECT count(DISTINCT alliance) FROM people) AS alliances,
+               (SELECT count(DISTINCT ship) FROM people) AS ships,
+               (SELECT count(DISTINCT "solarSystemID") FROM recent) AS systems,
+               (SELECT count(DISTINCT s."regionID") FROM recent r JOIN "mapSolarSystems" s ON s."solarSystemID" = r."solarSystemID") AS regions,
+               (SELECT count(*) FROM recent) AS kills"#, &[&week]).await?;
+    let top = |kind: &str| -> String {
+        let (id, name, ticker, join) = match kind {
+            "corporation" => (r#"p."corporationID""#, r#"co."corporationName""#, r#"co."tickerName""#,
+                r#"LEFT JOIN "corporation" co ON co."corporationID" = p."corporationID""#),
+            "alliance" => (r#"NULLIF(p."allianceID", 0)"#, r#"a."allianceName""#, r#"a."shortName""#,
+                r#"LEFT JOIN alliances a ON a."allianceID" = p."allianceID""#),
+            _ => (r#"p."ownerID""#, r#"c."characterName""#, r#"''"#,
+                r#"LEFT JOIN "character_" c ON c."characterID" = p."ownerID""#),
+        };
+        format!(r#"SELECT {id} AS id, COALESCE({name}, 'Unknown') AS name, COALESCE({ticker}, '') AS ticker,
+                          count(DISTINCT p."killID")::int AS kills
+                     FROM "killLogParticipants" p JOIN "killLog" k ON k."killID" = p."killID" {join}
+                    WHERE k."killTime" > $1 AND p."ownerID" > 0 AND {id} IS NOT NULL
+                    GROUP BY 1, 2, 3 ORDER BY kills DESC, name LIMIT 10"#)
+    };
+    let top_characters = rows(&server.db.query(&top("character"), &[&week]).await?);
+    let top_corporations = rows(&server.db.query(&top("corporation"), &[&week]).await?);
+    let top_alliances = rows(&server.db.query(&top("alliance"), &[&week]).await?);
+    let count = |name: &str| activity.get::<_, i64>(name);
     Ok(json!({ "total": total, "day": counts.get::<_, i64>("day"), "week": counts.get::<_, i64>("week"),
         "pods": counts.get::<_, i64>("pods"), "sides": sides, "ships": ships,
-        "pilots": pilots, "featured": featured }))
+        "pilots": pilots, "featured": featured, "structures": structures,
+        "activity": { "characters": count("characters"), "corporations": count("corporations"),
+            "alliances": count("alliances"), "ships": count("ships"), "systems": count("systems"),
+            "regions": count("regions"), "kills": count("kills") },
+        "topCharacters": top_characters, "topCorporations": top_corporations, "topAlliances": top_alliances }))
+}
+
+/// What the sovereignty map draws but never changes: k-space systems as
+/// [id, name, regionID, x, z, security] in light years from the galaxy's
+/// centre, each stargate link once as [from, to], and the region names.
+async fn sov_map_static(server: &Server) -> Answer {
+    const LIGHT_YEAR: f64 = 9.460_730_472_580_8e15;
+    let systems = server.db.query(r#"SELECT "solarSystemID", COALESCE("solarSystemName", ''), "regionID",
+            COALESCE(x, 0)::float8, COALESCE(z, 0)::float8, COALESCE("security", 0)::float8
+          FROM "mapSolarSystems" WHERE "regionID" < 11000000 ORDER BY "solarSystemID""#, &[]).await?;
+    let round = |v: f64, places: i32| (v * 10f64.powi(places)).round() / 10f64.powi(places);
+    let systems: Vec<Json> = systems.iter().map(|r| json!([
+        r.get::<_, i32>(0), r.get::<_, String>(1), r.get::<_, Option<i32>>(2).unwrap_or(0),
+        round(r.get::<_, f64>(3) / LIGHT_YEAR, 3), round(r.get::<_, f64>(4) / LIGHT_YEAR, 3),
+        round(r.get::<_, f64>(5), 2),
+    ])).collect();
+    let jumps = server.db.query(r#"SELECT "fromSolarSystemID", "toSolarSystemID" FROM "mapSolarSystemJumps"
+          WHERE "fromSolarSystemID" < "toSolarSystemID" AND "fromRegionID" < 11000000 AND "toRegionID" < 11000000"#, &[]).await?;
+    let jumps: Vec<Json> = jumps.iter().map(|r| json!([r.get::<_, i32>(0), r.get::<_, i32>(1)])).collect();
+    let regions = server.db.query(r#"SELECT "regionID", COALESCE("regionName", '') FROM "mapRegions" WHERE "regionID" < 11000000"#, &[]).await?;
+    let regions: Vec<Json> = regions.iter().map(|r| json!([r.get::<_, i32>(0), r.get::<_, String>(1)])).collect();
+    Ok(json!({ "systems": systems, "jumps": jumps, "regions": regions }))
+}
+
+/// Who holds what, refreshed as sovereignty resolves: each held system as
+/// [systemID, allianceID, held since (ms)], the holding alliances, the latest
+/// changes of hands and the sieges under way.
+async fn sov_map(server: &Server) -> Answer {
+    let since = ms(r#""sovereigntySince""#);
+    let held = server.db.query(&format!(r#"SELECT "solarSystemID", "allianceID", {since}
+          FROM "mapSolarSystems" WHERE "allianceID" IS NOT NULL AND "regionID" < 11000000"#), &[]).await?;
+    let systems: Vec<Json> = held.iter().map(|r| json!([
+        r.get::<_, i32>(0), r.get::<_, i32>(1), r.get::<_, Option<i64>>(2),
+    ])).collect();
+    let alliances = rows(&server.db.query(r#"SELECT a."allianceID" AS id, a."allianceName" AS name, a."shortName" AS ticker,
+            count(*)::int AS systems,
+            EXISTS (SELECT 1 FROM "botGroups" g WHERE g."ownerID" = a."allianceID") AS bots,
+            (SELECT COALESCE(sum(co."memberCount"), 0)::int FROM "corporation" co
+              WHERE co."allianceID" = a."allianceID" AND co."deleted" = 0) AS pilots
+          FROM "mapSolarSystems" s JOIN alliances a ON a."allianceID" = s."allianceID"
+         WHERE s."regionID" < 11000000
+         GROUP BY a."allianceID", a."allianceName", a."shortName"
+         ORDER BY systems DESC, name"#, &[]).await?);
+    let recent = rows(&server.db.query(&format!(r#"SELECT s."solarSystemID" AS id, s."solarSystemName" AS system,
+            r."regionName" AS region, a."allianceName" AS alliance, a."shortName" AS ticker, {since} AS since
+          FROM "mapSolarSystems" s JOIN alliances a ON a."allianceID" = s."allianceID"
+          JOIN "mapRegions" r ON r."regionID" = s."regionID"
+         WHERE s."sovereigntySince" IS NOT NULL
+         ORDER BY s."sovereigntySince" DESC, s."solarSystemName" LIMIT 15"#), &[]).await?);
+    let sieges = server.world.lock().bot_stats.sieges.clone();
+    let sieges: Vec<Json> = sieges.iter().map(|s| json!({
+        "system": s.system, "attacker": s.attacker, "defender": s.defender,
+        "starts": s.starts / 10_000 - UNIX_EPOCH_MS, "fighting": s.fleets.is_some(),
+    })).collect();
+    Ok(json!({ "systems": systems, "alliances": alliances, "recent": recent, "sieges": sieges, "now": unix_ms_now() }))
 }
 
 async fn kill_detail(server: &Server, id: i64) -> Answer {
@@ -717,7 +1086,8 @@ async fn kill_detail(server: &Server, id: i64) -> Answer {
            COALESCE(s."solarSystemName", 'Unknown system') AS system,
            COALESCE(s."security", 0)::float8 AS security,
            COALESCE(r."regionName", '') AS region,
-           k."totalDamage" AS damage, k."isPodKill" = 1 AS pod
+           k."totalDamage" AS damage, k."isPodKill" = 1 AS pod,
+           k."victimCorpID" AS "victimCorpID", NULLIF(k."victimAllianceID", 0) AS "victimAllianceID"
       FROM "killLog" k
       LEFT JOIN "character_" vc ON vc."characterID" = k."victimCharID"
       LEFT JOIN "corporation" vco ON vco."corporationID" = k."victimCorpID"
@@ -731,19 +1101,22 @@ async fn kill_detail(server: &Server, id: i64) -> Answer {
         return Ok(json!({ "error": "Kill not found" }));
     };
     let participants = rows(&server.db.query(
-        r#"SELECT p."ownerID" AS id, COALESCE(c."characterName", 'Unknown pilot') AS pilot,
+        r#"SELECT p."ownerID" AS id, COALESCE(c."characterName", npc."typeName", 'Unknown pilot') AS pilot,
+                  p."ownerID" < 0 AS npc,
                   COALESCE(co."corporationName", '') AS corporation,
                   COALESCE(a."allianceName", '') AS alliance,
                   COALESCE(ship."typeName", '') AS ship, p."shipTypeID" AS "shipTypeID",
                   CASE WHEN COALESCE(p."weaponTypeID", 0) <= 0 THEN 'Unknown weapon'
                        ELSE COALESCE(weapon."typeName", 'Unknown weapon') END AS weapon,
-                  p."damageDone" AS damage, p."finalBlow" = 1 AS "finalBlow"
+                  p."damageDone" AS damage, p."finalBlow" = 1 AS "finalBlow",
+                  p."corporationID" AS "corporationID", NULLIF(p."allianceID", 0) AS "allianceID"
              FROM "killLogParticipants" p
              LEFT JOIN "character_" c ON c."characterID" = p."ownerID"
              LEFT JOIN "corporation" co ON co."corporationID" = p."corporationID"
              LEFT JOIN alliances a ON a."allianceID" = p."allianceID"
              LEFT JOIN "invTypes" ship ON ship."typeID" = p."shipTypeID"
              LEFT JOIN "invTypes" weapon ON weapon."typeID" = p."weaponTypeID"
+             LEFT JOIN "invTypes" npc ON npc."typeID" = -p."ownerID"
             WHERE p."killID" = $1 ORDER BY p."finalBlow" DESC, p."damageDone" DESC"#, &[&id]).await?);
     let items = rows(&server.db.query(r#"SELECT i."typeID" AS "typeID", t."typeName" AS name,
                  i."flag" AS flag, i."quantity" AS quantity, i."dropped" AS dropped,
@@ -753,23 +1126,68 @@ async fn kill_detail(server: &Server, id: i64) -> Answer {
     Ok(json!({ "kill": rows(&[kill]).as_array().and_then(|a| a.first()).cloned(), "participants": participants, "items": items }))
 }
 
-async fn kills(server: &Server, page: i64) -> Answer {
-    let sql = format!(
-        r#"SELECT k."killID" AS id, {time} AS time, k."victimCharID" AS "victimID", vc."characterName" AS victim, vco."corporationName" AS "victimCorporation",
+/// A kill's estimated value: the hull's base price and its recorded fitting
+/// and cargo at base prices (`k` is the killLog alias).
+const KILL_VALUE: &str = r#"(COALESCE(t."basePrice", 0) + COALESCE((SELECT sum(it."basePrice" * i."quantity")
+        FROM "killLogItems" i JOIN "invTypes" it ON it."typeID" = i."typeID"
+       WHERE i."killID" = k."killID"), 0))::float8"#;
+
+/// The killboard's kill rows (zKillboard's list): newest first, 30 a page.
+/// `filter` is a condition on `k` (the killLog row); `$1` is the offset and
+/// any further parameters are the filter's.
+fn kill_rows_sql(filter: &str) -> String {
+    format!(
+        r#"SELECT k."killID" AS id, {time} AS time, k."victimCharID" AS "victimID", vc."characterName" AS victim,
+                  vco."corporationName" AS "victimCorporation", vco."tickerName" AS "victimCorpTicker",
+                  va."allianceName" AS "victimAlliance", va."shortName" AS "victimAllianceTicker",
                   t."typeName" AS ship, k."victimShipTypeID" AS "shipTypeID", COALESCE(g."groupName", '') AS "shipClass",
-                  COALESCE(t."basePrice",0)::float8 AS "hullValue",
-                  s."solarSystemName" AS system, k."finalBlowID" AS "finalBlowID", fc."characterName" AS "finalBlow", k."isPodKill" = 1 AS pod
+                  COALESCE(t."basePrice",0)::float8 AS "hullValue", {value} AS "totalValue",
+                  s."solarSystemName" AS system, COALESCE(s."security", 0)::float8 AS security, r."regionName" AS region,
+                  k."finalBlowID" AS "finalBlowID",
+                  COALESCE(fc."characterName", nt."typeName") AS "finalBlow", k."finalBlowID" < 0 AS "finalBlowNpc",
+                  fco."corporationName" AS "finalBlowCorporation", fco."tickerName" AS "finalBlowCorpTicker",
+                  fa."allianceName" AS "finalBlowAlliance", fa."shortName" AS "finalBlowAllianceTicker",
+                  (SELECT count(*) FROM "killLogParticipants" p WHERE p."killID" = k."killID")::int AS involved,
+                  k."isPodKill" = 1 AS pod,
+                  k."victimCorpID" AS "victimCorpID", NULLIF(k."victimAllianceID", 0) AS "victimAllianceID",
+                  fp."corporationID" AS "finalBlowCorpID", NULLIF(fp."allianceID", 0) AS "finalBlowAllianceID"
              FROM "killLog" k
              LEFT JOIN "character_" vc ON vc."characterID" = k."victimCharID"
              LEFT JOIN "corporation" vco ON vco."corporationID" = k."victimCorpID"
+             LEFT JOIN alliances va ON va."allianceID" = NULLIF(k."victimAllianceID", 0)
              LEFT JOIN "invTypes" t ON t."typeID" = k."victimShipTypeID"
              LEFT JOIN "invGroups" g ON g."groupID" = t."groupID"
              LEFT JOIN "mapSolarSystems" s ON s."solarSystemID" = k."solarSystemID"
+             LEFT JOIN "mapRegions" r ON r."regionID" = s."regionID"
              LEFT JOIN "character_" fc ON fc."characterID" = k."finalBlowID"
+             LEFT JOIN "invTypes" nt ON nt."typeID" = -k."finalBlowID"
+             LEFT JOIN LATERAL (SELECT p."corporationID", p."allianceID" FROM "killLogParticipants" p
+                                 WHERE p."killID" = k."killID" AND p."finalBlow" = 1 LIMIT 1) fp ON true
+             LEFT JOIN "corporation" fco ON fco."corporationID" = fp."corporationID"
+             LEFT JOIN alliances fa ON fa."allianceID" = NULLIF(fp."allianceID", 0)
+            WHERE {filter}
             ORDER BY k."killID" DESC LIMIT 30 OFFSET $1"#,
-        time = ms(r#"k."killTime""#)
-    );
+        time = ms(r#"k."killTime""#),
+        value = KILL_VALUE,
+    )
+}
+
+async fn kills(server: &Server, page: i64) -> Answer {
+    let sql = kill_rows_sql("true");
     Ok(rows(&server.db.query(sql.as_str(), &[&(page * 30)]).await?))
+}
+
+/// A pilot's kills, losses or both ("all"), a page at a time.
+async fn pilot_kills(server: &Server, id: i64, mode: &str, page: i64) -> Answer {
+    if id <= 0 || id > i32::MAX as i64 { return Ok(json!([])); }
+    let involved = r#"EXISTS (SELECT 1 FROM "killLogParticipants" p2 WHERE p2."killID" = k."killID" AND p2."ownerID" = $2)"#;
+    let filter = match mode {
+        "kills" => format!(r#"{involved} AND k."victimCharID" IS DISTINCT FROM $2"#),
+        "losses" => r#"k."victimCharID" = $2"#.to_string(),
+        _ => format!(r#"(k."victimCharID" = $2 OR {involved})"#),
+    };
+    let sql = kill_rows_sql(&filter);
+    Ok(rows(&server.db.query(sql.as_str(), &[&(page * 30), &(id as i32)]).await?))
 }
 
 async fn pilot_search(server: &Server, query: &str) -> Answer {
@@ -787,45 +1205,215 @@ async fn pilot_search(server: &Server, query: &str) -> Answer {
 
 async fn pilot_profile(server: &Server, id: i64) -> Answer {
     if id <= 0 || id > i32::MAX as i64 { return Ok(json!({"error": "Invalid pilot ID"})); }
-    let Some(pilot) = server.db.query_opt(r#"SELECT c."characterID" AS id,
+    let pid = id as i32;
+    let sql = format!(r#"SELECT c."characterID" AS id,
         c."characterName" AS name, COALESCE(co."corporationName", '') AS corporation,
         COALESCE(co."tickerName", '') AS ticker, COALESCE(a."allianceName", '') AS alliance,
-        COALESCE(c."securityRating", 0)::float8 AS security
+        COALESCE(a."shortName", '') AS "allianceTicker",
+        c."corporationID" AS "corporationID", NULLIF(co."allianceID", 0) AS "allianceID",
+        COALESCE(c."securityRating", 0)::float8 AS security,
+        CASE WHEN c."createDateTime" > 0 THEN {born} END AS birthday,
+        EXISTS (SELECT 1 FROM "bots" b WHERE b."characterID" = c."characterID") AS bot
         FROM "character_" c LEFT JOIN "corporation" co ON co."corporationID" = c."corporationID"
         LEFT JOIN alliances a ON a."allianceID" = co."allianceID"
-        WHERE c."characterID" = $1"#, &[&(id as i32)]).await? else {
+        WHERE c."characterID" = $1"#, born = ms(r#"c."createDateTime""#));
+    let Some(pilot) = server.db.query_opt(sql.as_str(), &[&pid]).await? else {
         return Ok(json!({"error": "Pilot not found"}));
     };
-    let counts = server.db.query_one(r#"SELECT
-        (SELECT count(DISTINCT "killID") FROM "killLogParticipants" WHERE "ownerID" = $1) AS kills,
-        (SELECT count(*) FROM "killLog" WHERE "victimCharID" = $1) AS losses,
-        (SELECT count(*) FROM "killLogParticipants" WHERE "ownerID" = $1 AND "finalBlow" = 1) AS "finalBlows""#,
-        &[&(id as i32)]).await?;
-    let recent_sql = format!(r#"SELECT k."killID" AS id, {time} AS time,
-        k."victimCharID" AS "victimID", COALESCE(vc."characterName", 'Unknown pilot') AS victim,
+    // Ships destroyed and lost, their value, final blows and solo kills.
+    let stats_sql = format!(r#"WITH mine AS (
+            SELECT k."killID", k."victimCharID", k."isPodKill", {value} AS value,
+                   (SELECT count(*) FROM "killLogParticipants" p WHERE p."killID" = k."killID") AS involved
+              FROM "killLog" k LEFT JOIN "invTypes" t ON t."typeID" = k."victimShipTypeID"
+             WHERE k."victimCharID" = $1
+                OR EXISTS (SELECT 1 FROM "killLogParticipants" p WHERE p."killID" = k."killID" AND p."ownerID" = $1))
+        SELECT count(*) FILTER (WHERE "victimCharID" IS DISTINCT FROM $1)::int8,
+               count(*) FILTER (WHERE "victimCharID" = $1)::int8,
+               COALESCE(sum(value) FILTER (WHERE "victimCharID" IS DISTINCT FROM $1), 0)::float8,
+               COALESCE(sum(value) FILTER (WHERE "victimCharID" = $1), 0)::float8,
+               count(*) FILTER (WHERE "victimCharID" IS DISTINCT FROM $1 AND involved = 1)::int8,
+               COALESCE(avg(involved) FILTER (WHERE "victimCharID" IS DISTINCT FROM $1), 0)::float8,
+               (SELECT count(*) FROM "killLogParticipants" WHERE "ownerID" = $1 AND "finalBlow" = 1)::int8,
+               count(*) FILTER (WHERE "victimCharID" IS DISTINCT FROM $1 AND "isPodKill" = 1)::int8
+          FROM mine"#, value = KILL_VALUE);
+    let st = server.db.query_one(stats_sql.as_str(), &[&pid]).await?;
+    let top_sql = format!(r#"SELECT k."killID" AS id, {time} AS time, k."victimCharID" AS "victimID",
+        COALESCE(vc."characterName", 'Unknown pilot') AS victim, COALESCE(vco."corporationName", '') AS "victimCorporation",
         COALESCE(t."typeName", 'Unknown ship') AS ship, k."victimShipTypeID" AS "shipTypeID",
-        COALESCE(s."solarSystemName", '') AS system,
-        k."victimCharID" = $1 AS loss
+        COALESCE(s."solarSystemName", '') AS system, COALESCE(t."basePrice", 0)::float8 AS "hullValue", {value} AS "totalValue"
         FROM "killLog" k LEFT JOIN "character_" vc ON vc."characterID" = k."victimCharID"
+        LEFT JOIN "corporation" vco ON vco."corporationID" = k."victimCorpID"
         LEFT JOIN "invTypes" t ON t."typeID" = k."victimShipTypeID"
         LEFT JOIN "mapSolarSystems" s ON s."solarSystemID" = k."solarSystemID"
-        WHERE k."victimCharID" = $1 OR EXISTS
-          (SELECT 1 FROM "killLogParticipants" p WHERE p."killID" = k."killID" AND p."ownerID" = $1)
-        ORDER BY k."killID" DESC LIMIT 40"#, time = ms(r#"k."killTime""#));
-    let recent = rows(&server.db.query(&recent_sql, &[&(id as i32)]).await?);
+        WHERE k."victimCharID" IS DISTINCT FROM $1
+          AND EXISTS (SELECT 1 FROM "killLogParticipants" p WHERE p."killID" = k."killID" AND p."ownerID" = $1)
+        ORDER BY "totalValue" DESC, k."killID" DESC LIMIT 6"#, time = ms(r#"k."killTime""#), value = KILL_VALUE);
+    let top = rows(&server.db.query(top_sql.as_str(), &[&pid]).await?);
+    // When the pilot fights: kills and losses of the last 90 days by weekday and hour.
+    let since90 = crate::bulkdata::filetime_now() - 90 * 86_400 * 10_000_000;
+    let since7 = crate::bulkdata::filetime_now() - 7 * 86_400 * 10_000_000;
+    let activity = server.db.query(&format!(r#"SELECT extract(isodow FROM to_timestamp({t} / 1000.0) AT TIME ZONE 'UTC')::int AS day,
+               extract(hour FROM to_timestamp({t} / 1000.0) AT TIME ZONE 'UTC')::int AS hour, count(*)::int AS n
+          FROM "killLog" k
+         WHERE k."killTime" >= $2 AND (k."victimCharID" = $1
+            OR EXISTS (SELECT 1 FROM "killLogParticipants" p WHERE p."killID" = k."killID" AND p."ownerID" = $1))
+         GROUP BY 1, 2"#, t = ms(r#"k."killTime""#)), &[&pid, &since90]).await?;
+    let activity: Vec<Json> = activity.iter().map(|r| json!([r.get::<_, i32>(0), r.get::<_, i32>(1), r.get::<_, i32>(2)])).collect();
+    let week = server.db.query_one(r#"SELECT count(DISTINCT p."shipTypeID")::int8, count(DISTINCT k."solarSystemID")::int8,
+            count(DISTINCT s."regionID")::int8, count(DISTINCT k."killID")::int8
+          FROM "killLogParticipants" p JOIN "killLog" k ON k."killID" = p."killID"
+          LEFT JOIN "mapSolarSystems" s ON s."solarSystemID" = k."solarSystemID"
+         WHERE p."ownerID" = $1 AND k."killTime" >= $2"#, &[&pid, &since7]).await?;
     let ships = rows(&server.db.query(r#"SELECT t."typeName" AS ship, p."shipTypeID" AS "typeID",
         count(DISTINCT p."killID")::int AS kills FROM "killLogParticipants" p
         JOIN "invTypes" t ON t."typeID" = p."shipTypeID" WHERE p."ownerID" = $1
-        GROUP BY p."shipTypeID", t."typeName" ORDER BY kills DESC LIMIT 8"#,
-        &[&(id as i32)]).await?);
+        GROUP BY p."shipTypeID", t."typeName" ORDER BY kills DESC LIMIT 8"#, &[&pid]).await?);
+    let systems = rows(&server.db.query(r#"SELECT s."solarSystemName" AS name, COALESCE(s."security", 0)::float8 AS security,
+        count(DISTINCT k."killID")::int AS kills FROM "killLogParticipants" p
+        JOIN "killLog" k ON k."killID" = p."killID" JOIN "mapSolarSystems" s ON s."solarSystemID" = k."solarSystemID"
+        WHERE p."ownerID" = $1 GROUP BY s."solarSystemName", s."security" ORDER BY kills DESC LIMIT 5"#, &[&pid]).await?);
+    let together = rows(&server.db.query(r#"SELECT o."ownerID" AS id, COALESCE(c."characterName", '') AS name,
+        count(DISTINCT o."killID")::int AS kills FROM "killLogParticipants" p
+        JOIN "killLogParticipants" o ON o."killID" = p."killID" AND o."ownerID" <> p."ownerID" AND o."ownerID" > 0
+        JOIN "character_" c ON c."characterID" = o."ownerID"
+        WHERE p."ownerID" = $1 GROUP BY o."ownerID", c."characterName" ORDER BY kills DESC LIMIT 5"#, &[&pid]).await?);
     Ok(json!({"pilot": rows(&[pilot]).as_array().and_then(|a| a.first()).cloned(),
-        "kills": counts.get::<_, i64>(0), "losses": counts.get::<_, i64>(1),
-        "finalBlows": counts.get::<_, i64>(2), "recent": recent, "ships": ships}))
+        "destroyed": st.get::<_, i64>(0), "lost": st.get::<_, i64>(1),
+        "iskDestroyed": st.get::<_, f64>(2), "iskLost": st.get::<_, f64>(3),
+        "soloKills": st.get::<_, i64>(4), "avgInvolved": st.get::<_, f64>(5),
+        "finalBlows": st.get::<_, i64>(6), "podKills": st.get::<_, i64>(7),
+        "topKills": top, "activity": activity,
+        "week": {"ships": week.get::<_, i64>(0), "systems": week.get::<_, i64>(1), "regions": week.get::<_, i64>(2), "kills": week.get::<_, i64>(3)},
+        "ships": ships, "systems": systems, "together": together}))
+}
+
+/// A corporation or an alliance, for its killboard page.
+#[derive(Clone, Copy, PartialEq)]
+enum Group {
+    Corporation,
+    Alliance,
+}
+
+impl Group {
+    /// The killLog column naming the victim's group, and the participants'.
+    fn columns(self) -> (&'static str, &'static str) {
+        match self {
+            Group::Corporation => (r#"k."victimCorpID""#, r#""corporationID""#),
+            Group::Alliance => (r#"k."victimAllianceID""#, r#""allianceID""#),
+        }
+    }
+
+    /// (kills, losses, either) as conditions on `k`, with the group's ID as `$n`.
+    fn filters(self, n: usize) -> (String, String, String) {
+        let (victim, member) = self.columns();
+        let involved = format!(r#"EXISTS (SELECT 1 FROM "killLogParticipants" gp WHERE gp."killID" = k."killID" AND gp.{member} = ${n})"#);
+        let loss = format!("{victim} = ${n}");
+        (format!("{involved} AND {victim} IS DISTINCT FROM ${n}"), loss.clone(), format!("({loss} OR {involved})"))
+    }
+}
+
+async fn group_kills(server: &Server, kind: Group, id: i64, mode: &str, page: i64) -> Answer {
+    if id <= 0 || id > i32::MAX as i64 { return Ok(json!([])); }
+    let (kills, losses, all) = kind.filters(2);
+    let filter = match mode { "kills" => kills, "losses" => losses, _ => all };
+    let sql = kill_rows_sql(&filter);
+    Ok(rows(&server.db.query(sql.as_str(), &[&(page * 30), &(id as i32)]).await?))
+}
+
+/// A corporation's or alliance's killboard page: who they are, ships and ISK
+/// destroyed and lost, their best kills, when they fight, their top pilots.
+async fn group_profile(server: &Server, kind: Group, id: i64) -> Answer {
+    if id <= 0 || id > i32::MAX as i64 { return Ok(json!({"error": "Invalid ID"})); }
+    let gid = id as i32;
+    let info = match kind {
+        Group::Corporation => server.db.query_opt(r#"SELECT co."corporationID" AS id, co."corporationName" AS name,
+                co."tickerName" AS ticker, co."memberCount" AS members, COALESCE(co."description", '') AS description,
+                co."ceoID" AS "ceoID", COALESCE(ceo."characterName", '') AS ceo,
+                NULLIF(co."allianceID", 0) AS "allianceID", COALESCE(a."allianceName", '') AS alliance,
+                COALESCE(a."shortName", '') AS "allianceTicker",
+                EXISTS (SELECT 1 FROM "crpNPCCorporations" n WHERE n."corporationID" = co."corporationID") AS npc,
+                (SELECT count(*) FROM "staStations" st WHERE st."corporationID" = co."corporationID" AND st."stationID" >= 61000000)::int AS outposts
+              FROM "corporation" co
+              LEFT JOIN "character_" ceo ON ceo."characterID" = co."ceoID"
+              LEFT JOIN alliances a ON a."allianceID" = co."allianceID"
+             WHERE co."corporationID" = $1"#, &[&gid]).await?,
+        Group::Alliance => server.db.query_opt(&format!(r#"SELECT a."allianceID" AS id, a."allianceName" AS name,
+                a."shortName" AS ticker, COALESCE(a."description", '') AS description,
+                a."executorCorpID" AS "executorID", COALESCE(ex."corporationName", '') AS executor,
+                (SELECT COALESCE(sum(c."memberCount"), 0) FROM "corporation" c WHERE c."allianceID" = a."allianceID" AND c."deleted" = 0)::int8 AS members,
+                (SELECT count(*) FROM "corporation" c WHERE c."allianceID" = a."allianceID" AND c."deleted" = 0)::int8 AS corporations,
+                (SELECT count(*) FROM "mapSolarSystems" s WHERE s."allianceID" = a."allianceID")::int8 AS systems,
+                CASE WHEN a."startDate" > 0 THEN {founded} END AS founded
+              FROM alliances a LEFT JOIN "corporation" ex ON ex."corporationID" = a."executorCorpID"
+             WHERE a."allianceID" = $1"#, founded = ms(r#"a."startDate""#)), &[&gid]).await?,
+    };
+    let Some(info) = info else { return Ok(json!({"error": "Not found"})) };
+    let (kills, losses, all) = kind.filters(1);
+    let (_, member) = kind.columns();
+    let stats_sql = format!(r#"WITH mine AS (
+            SELECT k."killID", COALESCE({losses}, false) AS lost, k."isPodKill", {value} AS value,
+                   (SELECT count(*) FROM "killLogParticipants" p WHERE p."killID" = k."killID") AS involved
+              FROM "killLog" k LEFT JOIN "invTypes" t ON t."typeID" = k."victimShipTypeID"
+             WHERE {all})
+        SELECT count(*) FILTER (WHERE NOT lost)::int8, count(*) FILTER (WHERE lost)::int8,
+               COALESCE(sum(value) FILTER (WHERE NOT lost), 0)::float8, COALESCE(sum(value) FILTER (WHERE lost), 0)::float8,
+               count(*) FILTER (WHERE NOT lost AND involved = 1)::int8,
+               COALESCE(avg(involved) FILTER (WHERE NOT lost), 0)::float8
+          FROM mine"#, value = KILL_VALUE);
+    let st = server.db.query_one(stats_sql.as_str(), &[&gid]).await?;
+    let top_sql = format!(r#"SELECT k."killID" AS id, {time} AS time, k."victimCharID" AS "victimID",
+        COALESCE(vc."characterName", 'Unknown pilot') AS victim, COALESCE(vco."corporationName", '') AS "victimCorporation",
+        COALESCE(t."typeName", 'Unknown ship') AS ship, k."victimShipTypeID" AS "shipTypeID",
+        COALESCE(s."solarSystemName", '') AS system, COALESCE(t."basePrice", 0)::float8 AS "hullValue", {value} AS "totalValue"
+        FROM "killLog" k LEFT JOIN "character_" vc ON vc."characterID" = k."victimCharID"
+        LEFT JOIN "corporation" vco ON vco."corporationID" = k."victimCorpID"
+        LEFT JOIN "invTypes" t ON t."typeID" = k."victimShipTypeID"
+        LEFT JOIN "mapSolarSystems" s ON s."solarSystemID" = k."solarSystemID"
+        WHERE {kills} ORDER BY "totalValue" DESC, k."killID" DESC LIMIT 6"#, time = ms(r#"k."killTime""#), value = KILL_VALUE);
+    let top = rows(&server.db.query(top_sql.as_str(), &[&gid]).await?);
+    let since90 = crate::bulkdata::filetime_now() - 90 * 86_400 * 10_000_000;
+    let since7 = crate::bulkdata::filetime_now() - 7 * 86_400 * 10_000_000;
+    let activity = server.db.query(&format!(r#"SELECT extract(isodow FROM to_timestamp({t} / 1000.0) AT TIME ZONE 'UTC')::int,
+               extract(hour FROM to_timestamp({t} / 1000.0) AT TIME ZONE 'UTC')::int, count(*)::int
+          FROM "killLog" k WHERE k."killTime" >= $2 AND {all} GROUP BY 1, 2"#, t = ms(r#"k."killTime""#)), &[&gid, &since90]).await?;
+    let activity: Vec<Json> = activity.iter().map(|r| json!([r.get::<_, i32>(0), r.get::<_, i32>(1), r.get::<_, i32>(2)])).collect();
+    let week = server.db.query_one(&format!(r#"SELECT count(DISTINCT p."shipTypeID")::int8, count(DISTINCT k."solarSystemID")::int8,
+            count(DISTINCT s."regionID")::int8, count(DISTINCT k."killID")::int8, count(DISTINCT p."ownerID")::int8
+          FROM "killLogParticipants" p JOIN "killLog" k ON k."killID" = p."killID"
+          LEFT JOIN "mapSolarSystems" s ON s."solarSystemID" = k."solarSystemID"
+         WHERE p.{member} = $1 AND k."killTime" >= $2"#), &[&gid, &since7]).await?;
+    let pilots = rows(&server.db.query(&format!(r#"SELECT p."ownerID" AS id, COALESCE(c."characterName", '') AS name,
+        count(DISTINCT p."killID")::int AS kills FROM "killLogParticipants" p
+        JOIN "character_" c ON c."characterID" = p."ownerID"
+        WHERE p.{member} = $1 AND p."ownerID" > 0 GROUP BY p."ownerID", c."characterName" ORDER BY kills DESC LIMIT 8"#), &[&gid]).await?);
+    let ships = rows(&server.db.query(&format!(r#"SELECT t."typeName" AS ship, p."shipTypeID" AS "typeID",
+        count(DISTINCT p."killID")::int AS kills FROM "killLogParticipants" p
+        JOIN "invTypes" t ON t."typeID" = p."shipTypeID" WHERE p.{member} = $1
+        GROUP BY p."shipTypeID", t."typeName" ORDER BY kills DESC LIMIT 8"#), &[&gid]).await?);
+    let systems = rows(&server.db.query(&format!(r#"SELECT s."solarSystemName" AS name, COALESCE(s."security", 0)::float8 AS security,
+        count(DISTINCT k."killID")::int AS kills FROM "killLogParticipants" p
+        JOIN "killLog" k ON k."killID" = p."killID" JOIN "mapSolarSystems" s ON s."solarSystemID" = k."solarSystemID"
+        WHERE p.{member} = $1 GROUP BY s."solarSystemName", s."security" ORDER BY kills DESC LIMIT 5"#), &[&gid]).await?);
+    let corporations = match kind {
+        Group::Alliance => rows(&server.db.query(r#"SELECT c."corporationID" AS id, c."corporationName" AS name,
+            c."tickerName" AS ticker, c."memberCount" AS members FROM "corporation" c
+            WHERE c."allianceID" = $1 AND c."deleted" = 0 ORDER BY c."memberCount" DESC LIMIT 12"#, &[&gid]).await?),
+        Group::Corporation => json!([]),
+    };
+    Ok(json!({"info": rows(&[info]).as_array().and_then(|a| a.first()).cloned(),
+        "kind": if kind == Group::Alliance { "alliance" } else { "corporation" },
+        "destroyed": st.get::<_, i64>(0), "lost": st.get::<_, i64>(1),
+        "iskDestroyed": st.get::<_, f64>(2), "iskLost": st.get::<_, f64>(3),
+        "soloKills": st.get::<_, i64>(4), "avgInvolved": st.get::<_, f64>(5),
+        "topKills": top, "activity": activity,
+        "week": {"ships": week.get::<_, i64>(0), "systems": week.get::<_, i64>(1), "regions": week.get::<_, i64>(2),
+                 "kills": week.get::<_, i64>(3), "pilots": week.get::<_, i64>(4)},
+        "pilots": pilots, "ships": ships, "systems": systems, "corporations": corporations}))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{escape_html, filetime_at_ms, header, local_host};
+    use super::{client_text, filetime_at_ms, header, local_host};
 
     #[test]
     fn native_shutdown_timer_uses_windows_filetime() {
@@ -835,7 +1423,7 @@ mod tests {
 
     #[test]
     fn published_news_cannot_inject_markup_into_character_select() {
-        assert_eq!(escape_html("<script>alert('x')</script>"), "&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;");
+        assert_eq!(client_text("<script>alert(\"x\")</script> & Sol's"), "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; Sol's");
     }
 
     #[test]

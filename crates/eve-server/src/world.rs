@@ -76,6 +76,8 @@ pub struct Presence {
 struct Client {
     tx: UnboundedSender<Push>,
     presence: Option<Presence>,
+    /// Online status last sent for each of this pilot's saved buddies.
+    contacts: HashMap<i64, bool>,
     /// The system whose ballpark the client has been sent (SetState). Until
     /// then it has no ballpark, and a destiny update would fail in michelle.
     sees: Option<i64>,
@@ -110,6 +112,8 @@ pub struct WorldState {
     pub bot_local: HashMap<i64, Vec<u32>>,
     /// Every bot's character, to its index in the bot population.
     pub bot_index: HashMap<i64, u32>,
+    /// Login state from the same population snapshot as Local, by bot index.
+    bot_online: Vec<bool>,
     /// Offers to hire a bot (gang invitations to one): (player, bot), for
     /// the simulation to answer.
     pub hire_requests: Vec<(i64, i64)>,
@@ -148,6 +152,8 @@ pub struct LocalBot {
     pub alliance_id: Option<i64>,
     pub name: String,
     pub type_id: i64,
+    /// What the bot does (behaviour::Role), for how it talks.
+    pub role: u8,
 }
 
 /// The bot population at its last save.
@@ -186,17 +192,21 @@ impl WorldState {
     /// Registers a connection; notifications for it arrive on the receiver.
     pub fn connect(&mut self, client_id: i64) -> UnboundedReceiver<Push> {
         let (tx, rx) = unbounded_channel();
-        self.clients.insert(client_id, Client { tx, presence: None, sees: None });
+        self.clients.insert(client_id, Client { tx, presence: None, contacts: HashMap::new(), sees: None });
         rx
     }
 
     /// Forgets a connection and its chat memberships; returns each channel it
     /// was in with the members left, for the caller to announce the departure.
     pub fn disconnect(&mut self, client_id: i64) -> Vec<(Value, Vec<i64>)> {
-        if let Some(char_id) = self.clients.get(&client_id).and_then(|c| c.presence).map(|p| p.char_id) {
+        let char_id = self.presence_of_client(client_id).map(|p| p.char_id);
+        if let Some(char_id) = char_id {
             crate::svc::gang::logged_off(self, char_id);
         }
         self.clients.remove(&client_id);
+        if let Some(char_id) = char_id {
+            self.refresh_contact(char_id);
+        }
         let mut left = Vec::new();
         for channel in self.channels.values_mut() {
             if channel.members.remove(&client_id) {
@@ -208,12 +218,19 @@ impl WorldState {
     }
 
     pub fn set_presence(&mut self, client_id: i64, presence: Option<Presence>) {
-        if let Some(c) = self.clients.get_mut(&client_id) {
-            // Docked or gone elsewhere, its ballpark is gone with it.
-            if presence.is_none_or(|p| p.docked || Some(p.solar_system_id) != c.sees) {
-                c.sees = None;
+        let Some(c) = self.clients.get_mut(&client_id) else { return };
+        let before = c.presence.map(|p| p.char_id);
+        let after = presence.map(|p| p.char_id);
+        // Docked or gone elsewhere, its ballpark is gone with it.
+        if presence.is_none_or(|p| p.docked || Some(p.solar_system_id) != c.sees) {
+            c.sees = None;
+        }
+        c.presence = presence;
+        if before != after {
+            c.contacts.clear();
+            for char_id in before.into_iter().chain(after) {
+                self.refresh_contact(char_id);
             }
-            c.presence = presence;
         }
     }
 
@@ -244,6 +261,14 @@ impl WorldState {
         self.clients.values().filter_map(|c| c.presence).collect()
     }
 
+    /// One entry per connected character in Local, whether docked or in space.
+    pub fn local_players(&self, system: i64) -> HashMap<i64, Presence> {
+        self.clients.values().filter_map(|c| c.presence)
+            .filter(|p| p.solar_system_id == system)
+            .map(|p| (p.char_id, p))
+            .collect()
+    }
+
     /// Characters in the game: players logged in, and the bots online.
     pub fn online_count(&self) -> i64 {
         let players = self.clients.values().filter(|c| c.presence.is_some()).count() as i64;
@@ -268,6 +293,56 @@ impl WorldState {
 
     pub fn is_online(&self, char_id: i64) -> bool {
         self.clients.values().any(|c| c.presence.is_some_and(|p| p.char_id == char_id))
+    }
+
+    pub fn contact_is_online(&self, char_id: i64) -> bool {
+        self.is_online(char_id) || self.bot_index.get(&char_id)
+            .and_then(|&index| self.bot_online.get(index as usize)).copied().unwrap_or(false)
+    }
+
+    /// Prime the client and subscribe to updates in the same world snapshot.
+    pub fn watch_contacts(&mut self, client_id: i64, contacts: impl Iterator<Item = i64>) -> HashMap<i64, bool> {
+        let contacts: HashMap<_, _> = contacts.map(|id| (id, self.contact_is_online(id))).collect();
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            client.contacts.clone_from(&contacts);
+        }
+        contacts
+    }
+
+    pub fn set_contact_watch(&mut self, owner_id: i64, contact_id: i64, watch: bool) {
+        let online = self.contact_is_online(contact_id);
+        for client in self.clients.values_mut().filter(|c| c.presence.is_some_and(|p| p.char_id == owner_id)) {
+            if watch {
+                if let std::collections::hash_map::Entry::Vacant(entry) = client.contacts.entry(contact_id) {
+                    entry.insert(online);
+                    let _ = client.tx.send(contact_notification(contact_id, online));
+                }
+            } else {
+                client.contacts.remove(&contact_id);
+            }
+        }
+    }
+
+    fn refresh_contact(&mut self, char_id: i64) {
+        let online = self.contact_is_online(char_id);
+        for client in self.clients.values_mut() {
+            if let Some(known) = client.contacts.get_mut(&char_id) {
+                send_contact_change(&client.tx, char_id, known, online);
+            }
+        }
+    }
+
+    pub fn set_bot_online(&mut self, online: Vec<bool>) {
+        self.bot_online = online;
+        let logged_in: HashSet<_> = self.clients.values().filter_map(|c| c.presence.map(|p| p.char_id)).collect();
+        for client in self.clients.values_mut() {
+            for (&char_id, known) in &mut client.contacts {
+                if let Some(&index) = self.bot_index.get(&char_id) {
+                    let online = logged_in.contains(&char_id) || self.bot_online.get(index as usize).copied().unwrap_or(false);
+                    send_contact_change(&client.tx, char_id, known, online);
+                }
+            }
+        }
     }
 
     /// Whether `char_id` is online and undocked.
@@ -303,6 +378,12 @@ impl WorldState {
             .filter(|(_, c)| c.presence.is_some_and(|p| p.corp_id == corp_id))
             .map(|(id, _)| *id)
             .collect()
+    }
+
+    /// Clients docked at the named station.
+    pub fn clients_at_station(&self, station_id: i64) -> Vec<i64> {
+        self.clients.iter().filter(|(_, c)| c.presence.is_some_and(|p| p.station_id == Some(station_id)))
+            .map(|(id, _)| *id).collect()
     }
 
     /// Clients whose character is in space in `solar_system_id` and that
@@ -404,7 +485,8 @@ impl WorldState {
 
 /// The solar system of a Local channel, `[('solarsystemid2', id)]`.
 pub fn local_system(channel_id: &Value) -> Option<i64> {
-    let pair = channel_id.seq()?.first()?.seq()?;
+    let [local] = channel_id.seq()? else { return None };
+    let pair = local.seq()?;
     match pair {
         [Value::Unicode(key), id] if key == "solarsystemid2" => id.as_i64(),
         [key, id] if key.as_bytes() == Some(b"solarsystemid2".as_slice()) => id.as_i64(),
@@ -415,7 +497,22 @@ pub fn local_system(channel_id: &Value) -> Option<i64> {
 /// A chat channel's identity as a map key. Channel IDs are ints for ordinary
 /// channels and tuples like `(('solarsystemid2', 30002780),)` for local chat.
 fn channel_key(channel_id: &Value) -> String {
+    if let Some(system) = local_system(channel_id) {
+        return format!("local:{system}");
+    }
     format!("{channel_id:?}")
+}
+
+fn send_contact_change(tx: &UnboundedSender<Push>, char_id: i64, known: &mut bool, online: bool) {
+    if *known != online {
+        *known = online;
+        let _ = tx.send(contact_notification(char_id, online));
+    }
+}
+
+fn contact_notification(char_id: i64, online: bool) -> Push {
+    let event = if online { "OnContactLoggedOn" } else { "OnContactLoggedOff" };
+    Push::Notify(Notification { event, args: Value::Tuple(vec![Value::Int(char_id)]) })
 }
 
 #[cfg(test)]
@@ -440,7 +537,25 @@ mod tests {
         let mut w = world.lock();
         let _a = w.connect(1);
         w.join_channel(&local, 1);
+        let same_local = Value::Tuple(vec![Value::Tuple(vec![Value::Unicode("solarsystemid2".into()), Value::Int(30002780)])]);
+        assert_eq!(w.channel_members(&same_local), vec![1]);
         assert_eq!(w.local_channels().into_iter().map(|(s, _, m)| (s, m)).collect::<Vec<_>>(), vec![(30002780, vec![1])]);
+    }
+
+    #[test]
+    fn local_roster_includes_docked_pilots_before_their_chat_opens() {
+        let world = World::default();
+        let mut w = world.lock();
+        let _clients: Vec<_> = (1..=5).map(|id| w.connect(id)).collect();
+        w.set_presence(1, presence(140000001, true));
+        w.set_presence(2, presence(140000002, false));
+        w.set_presence(3, presence(140000001, true));
+        w.set_presence(4, presence(140000004, true).map(|p| Presence { solar_system_id: 30000142, ..p }));
+
+        let local = w.local_players(30002780);
+        assert_eq!(local.len(), 2);
+        assert!(local[&140000001].docked);
+        assert!(!local[&140000002].docked);
     }
 
     #[test]
@@ -471,6 +586,60 @@ mod tests {
         w.disconnect(1);
         assert!(!w.is_online(140000001));
         assert!(w.counts().0.is_empty());
+    }
+
+    fn expect_contact(rx: &mut UnboundedReceiver<Push>, event: &str, char_id: i64) {
+        let Push::Notify(note) = rx.try_recv().expect("contact update") else { panic!("a notification") };
+        assert_eq!(note.event, event);
+        assert_eq!(note.args, Value::Tuple(vec![Value::Int(char_id)]));
+    }
+
+    #[test]
+    fn a_buddy_tracks_player_logins_without_a_reciprocal_add() {
+        let mut world = WorldState::default();
+        let mut watcher = world.connect(1);
+        let mut buddy = world.connect(2);
+        let _duplicate = world.connect(3);
+        world.set_presence(1, presence(140000001, true));
+        let target = 140000002;
+        assert_eq!(world.watch_contacts(1, [target].into_iter()).get(&target), Some(&false));
+
+        world.set_presence(2, presence(target, false));
+        expect_contact(&mut watcher, "OnContactLoggedOn", target);
+        world.set_presence(2, presence(target, true));
+        world.set_presence(3, presence(target, true));
+        world.disconnect(3);
+        assert!(watcher.try_recv().is_err());
+        assert!(buddy.try_recv().is_err());
+        world.disconnect(2);
+        expect_contact(&mut watcher, "OnContactLoggedOff", target);
+    }
+
+    #[test]
+    fn a_bot_buddy_tracks_the_population_snapshot_until_removed() {
+        let mut world = WorldState::default();
+        let mut watcher = world.connect(1);
+        let mut other = world.connect(2);
+        let owner = 140000001;
+        let bot = 140000002;
+        world.set_presence(1, presence(owner, true));
+        world.set_presence(2, presence(140000003, false));
+        world.bot_index.insert(bot, 0);
+        world.set_bot_online(vec![true]);
+        world.set_contact_watch(owner, bot, true);
+        expect_contact(&mut watcher, "OnContactLoggedOn", bot);
+        assert!(world.contact_is_online(bot));
+        assert_eq!(world.watch_contacts(1, [bot].into_iter()).get(&bot), Some(&true));
+
+        world.set_bot_online(vec![true]);
+        assert!(watcher.try_recv().is_err());
+        world.set_bot_online(vec![false]);
+        expect_contact(&mut watcher, "OnContactLoggedOff", bot);
+        assert!(!world.contact_is_online(bot));
+        assert!(other.try_recv().is_err());
+        world.set_contact_watch(owner, bot, false);
+        world.set_bot_online(vec![true]);
+        assert!(watcher.try_recv().is_err());
     }
 
     #[test]

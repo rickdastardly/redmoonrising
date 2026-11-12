@@ -4,9 +4,9 @@
 //! sovereignty, which claiming towers win for their alliance. The park side
 //! of a structure is pos.rs.
 //!
-//! A control tower anchors near a moon, one to a moon; everything else
-//! anchors within reach of an online tower of the same owner and draws on
-//! its CPU and power grid. An online tower burns its fuel every
+//! A control tower anchors near a moon, one to a moon. Mobile warp disruptors
+//! anchor independently. Other structures anchor within reach of an online
+//! tower of the same owner and draw on its CPU and power grid. A tower burns fuel every
 //! posControlTowerPeriod: the online resources in full, power and CPU fuel
 //! in proportion to what its structures draw, a quarter less where its
 //! alliance holds sovereignty (moonmining.ShowFuel). Short of online fuel it
@@ -38,8 +38,8 @@ use crate::world::World;
 const EFFECT_ONLINE: i64 = 901;
 const EFFECT_ANCHOR: i64 = 1022;
 const EFFECT_UNANCHOR: i64 = 1023;
-const EFFECT_DEPLOYABLE_ANCHOR: i64 = 649;
-const EFFECT_DEPLOYABLE_UNANCHOR: i64 = 650;
+const EFFECT_ANCHOR_DEPLOYABLE: i64 = 649;
+const EFFECT_UNANCHOR_DEPLOYABLE: i64 = 650;
 const ATTR_POWER: i32 = 30;
 const ATTR_CPU: i32 = 50;
 const ATTR_POWER_OUTPUT: i32 = 11;
@@ -75,6 +75,9 @@ const LAUNCH_CLEARANCE: f64 = 500.0;
 /// Fuel burnt where the owner's alliance holds sovereignty.
 const SOVEREIGN_FUEL: f64 = 0.75;
 const TICKS_PER_MS: i64 = 10_000;
+/// Staff who may anchor an outpost platform without sovereignty: CCP, GM and
+/// BH carry role 8, ISD BH 2048 (config::staff_role).
+const OUTPOST_STAFF_ROLES: i64 = 8 | 2_048;
 const TICKS_PER_SECOND: i64 = 10_000_000;
 const DEFAULT_PERIOD_MS: i64 = 3_600_000;
 
@@ -88,9 +91,15 @@ pub async fn launch(ctx: &Ctx<'_>, ids: &[i64], owner: Option<i64>) -> Option<Ou
         let sql = r#"SELECT e."itemID" FROM entity e
                        JOIN "invTypes" t ON t."typeID" = e."typeID"
                        JOIN "invGroups" g ON g."groupID" = t."groupID"
-                      WHERE e."itemID" = ANY($1) AND (g."categoryID" = $2 OR t."groupID" = $3)"#;
+                      WHERE e."itemID" = ANY($1) AND (g."categoryID" = $2 OR g."groupID" = ANY($3))"#;
         let wanted: Vec<i32> = ids.iter().map(|i| *i as i32).collect();
-        ctx.query(sql, &[&wanted, &pos::CATEGORY_STRUCTURE, &(pos::GROUP_MOBILE_WARP_DISRUPTOR as i32)]).await.iter().filter_map(|r| int(r, 0)).collect()
+        match ctx.db.query(sql, &[&wanted, &pos::CATEGORY_STRUCTURE, &&pos::LOOSE_STRUCTURE_GROUPS[..]]).await {
+            Ok(rows) => rows.iter().filter_map(|r| int(r, 0)).collect(),
+            Err(e) => {
+                error!("checking items to launch: {}", crate::logging::chain(&e));
+                return Some(Outcome::custom("The items could not be launched."));
+            }
+        }
     };
     if structures.is_empty() {
         return None;
@@ -153,6 +162,9 @@ async fn launch_structures(ctx: &Ctx<'_>, ids: Vec<i64>, owner: Option<i64>) -> 
             return Outcome::custom("The structure could not be launched.");
         }
     };
+    if launched.is_empty() {
+        return Outcome::custom("Those structures are not in your cargo hold.");
+    }
     items::notify(ctx.world, ctx.client_id, events);
     // Read back through the loader, for the names, owners and delays.
     let fresh = match pos::load(ctx.db, system).await {
@@ -212,11 +224,14 @@ async fn anchor(ctx: &Ctx<'_>, id: i64, mut at: Vec3) -> Refused<Value> {
         return Err(access_denied("you may not anchor that structure from here"));
     }
     let security = (system_security(ctx.db, system).await * 10.0).round() / 10.0;
-    if s.is_mobile_disruptor() && security > 0.0 {
-        return Err(Outcome::custom("Mobile warp disruptors can only be anchored in null-security space."));
+    if s.is_warp_disruptor() && security > 0.0 {
+        return Err(message_with("CantAnchorConcordRestriction01", &[("security", Value::Double(security))]));
     }
     if security >= CONCORD_ANCHOR_LIMIT {
         return Err(message("CantAnchorConcordRestriction"));
+    }
+    if s.is_platform() {
+        check_outpost_site(ctx, &s, system, security).await?;
     }
     let attrs = type_attributes(ctx.db, &[s.type_id], &[ATTR_ANCHORING_SECURITY_MAX, ATTR_ANCHORING_SOVEREIGNTY, ATTR_MOON_ANCHOR_DISTANCE]).await;
     if let Some(max) = attrs.get(&(s.type_id, ATTR_ANCHORING_SECURITY_MAX)) {
@@ -255,7 +270,7 @@ async fn anchor(ctx: &Ctx<'_>, id: i64, mut at: Vec3) -> Refused<Value> {
         let moon = moon_for(ctx, system, at, ship_pos, moon_range)?;
         at = tower_anchor_point(&moon, at, ship_pos, s.radius, moon_range);
         (None, Some(moon))
-    } else if s.is_mobile_disruptor() {
+    } else if s.is_deployable() {
         (None, None)
     } else {
         (Some(tower_for(ctx, system, &s, at, now).await?), None)
@@ -299,12 +314,19 @@ async fn anchor(ctx: &Ctx<'_>, id: i64, mut at: Vec3) -> Refused<Value> {
         s.tower = tower;
         s.pos = at;
         let mut out = vec![entry(tick, "SetBallPosition", vec![Value::Int(id), Value::Double(at.x), Value::Double(at.y), Value::Double(at.z)])];
-        if !s.is_mobile_disruptor() {
+        if !s.is_warp_disruptor() {
             out.extend(pos::free_entries(tick, id, false));
         }
         out
     });
     info!("anchoring {} ({id}) in {system}{}", s.name, tower.map(|t| format!(" at tower {t}")).unwrap_or_default());
+    // Anchoring ends at stamp + anchoringDelay (timer_start scales the stamp).
+    let ends = stamp + s.delays[0];
+    let text = format!(
+        "Anchoring {}: {} to go, finishing at {} EVE.",
+        s.name, pos::duration_text((ends - now) / 10_000_000), pos::eve_clock(ends)
+    );
+    ctx.world.lock().notify(&[ctx.client_id], "OnRemoteMessage", pos::custom_notify(&text));
     Ok(Value::None)
 }
 
@@ -342,6 +364,81 @@ async fn check_empire_anchor(ctx: &Ctx<'_>, tower: &Structure, system: i64, secu
     }
     if !status.get::<_, bool>(1) {
         return Err(Outcome::custom(format!("Carry a {name} in your cargo hold to anchor here.")));
+    }
+    Ok(())
+}
+
+/// /rushanchor [structureID]: the structure's current timed step (anchoring,
+/// onlining, unanchoring) finishes now; the next heartbeat completes it. With
+/// no ID, the nearest structure with a timer running.
+pub async fn rush(ctx: &Ctx<'_>, wanted: Option<i64>) -> Result<String, String> {
+    let (Some(ship), Some(system)) = (ctx.session.ship_id, ctx.session.solar_system_id) else {
+        return Err("You must be in space beside the structure.".into());
+    };
+    let now = crate::bulkdata::filetime_now();
+    let (id, name, step, old, new) = {
+        let world = ctx.world.lock();
+        let park = world.parks.get(&system).ok_or("You are not in space.")?;
+        let found = match wanted {
+            Some(id) => park.structures.get(&id),
+            None => park.structures.values().filter(|s| s.busy(now)).min_by(|a, b| {
+                let d = |s: &Structure| park.surface_distance(ship, s.id).unwrap_or(f64::MAX);
+                d(a).total_cmp(&d(b))
+            }),
+        };
+        let s = found.ok_or("No structure here has a timer running.")?;
+        let old = s.stamp.filter(|_| s.busy(now)).ok_or(format!("{} has no timer running.", s.name))?;
+        (s.id, s.name.clone(), s.step_name(), old, now - s.step_delay())
+    };
+    let changed = ctx.db.execute(
+        r#"UPDATE "posStructures" SET "stateTimestamp" = $2 WHERE "itemID" = $1 AND "stateTimestamp" = $3"#,
+        &[&(id as i32), &new, &old],
+    ).await.map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err(format!("{name}'s timer changed meanwhile; try again."));
+    }
+    if let Some(s) = ctx.world.lock().parks.get_mut(&system).and_then(|p| p.structures.get_mut(&id)) {
+        if s.stamp == Some(old) {
+            s.stamp = Some(new);
+        }
+    }
+    Ok(format!("{step} of {name} ({id}) rushed; it completes within a second."))
+}
+
+/// An outpost platform anchors in null-sec, in a system with no outpost yet
+/// (NPC stations do not count) and no other platform anchored or anchoring,
+/// where its owner's alliance holds sovereignty.
+/// Staff (GM, BH, ISD BH, CCP) may anchor one in unclaimed null-sec too.
+async fn check_outpost_site(ctx: &Ctx<'_>, s: &Structure, system: i64, security: f64) -> Refused<()> {
+    if security > 0.0 {
+        return Err(Outcome::custom("Outposts can only be built in null-security space."));
+    }
+    let outpost = ctx.query_one(
+        r#"SELECT COALESCE("stationName", '') FROM "staStations"
+            WHERE "solarSystemID" = $1 AND "stationID" BETWEEN $2 AND $3 LIMIT 1"#,
+        &[&(system as i32), &crate::svc::outpost::OUTPOST_ID_MIN, &crate::svc::outpost::OUTPOST_ID_MAX],
+    ).await;
+    if let Some(row) = outpost {
+        return Err(Outcome::custom(format!(
+            "This system already has an outpost ({}). Only one outpost can be built in a system.",
+            row.get::<_, String>(0)
+        )));
+    }
+    let other = ctx.world.lock().parks.get(&system).is_some_and(|park| {
+        park.structures.values().any(|o| o.id != s.id && o.is_platform() && o.state == state::ANCHORED)
+    });
+    if other {
+        return Err(Outcome::custom("Another outpost platform is already anchored in this system."));
+    }
+    let sovereign = ctx.query_one(
+        r#"SELECT 1 FROM "mapSolarSystems" WHERE "solarSystemID" = $1 AND "allianceID" = $2"#,
+        &[&(system as i32), &s.alliance_id.map(|id| id as i32)],
+    ).await.is_some();
+    if !sovereign {
+        if ctx.session.role & OUTPOST_STAFF_ROLES == 0 {
+            return Err(Outcome::custom("Your alliance must hold sovereignty in this system to build an outpost here."));
+        }
+        info!("staff anchoring outpost platform {} in {system} without sovereignty", s.id);
     }
     Ok(())
 }
@@ -421,24 +518,20 @@ async fn tower_for(ctx: &Ctx<'_>, system: i64, s: &Structure, at: Vec3, now: i64
     Ok(tower.id)
 }
 
-/// dogmaIM Activate/Deactivate of a structure's onlineForStructures and
-/// anchorLiftForStructures; None for anything that is not a structure.
+/// dogmaIM Activate/Deactivate of starbase and deployable anchoring effects.
 pub async fn dogma_im(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
     let id = call.arg_id(0);
     let effect = call.arg_i64(1)?;
     if !matches!(call.method.as_str(), "Activate" | "Deactivate")
-        || !matches!(effect, EFFECT_ONLINE | EFFECT_ANCHOR | EFFECT_UNANCHOR | EFFECT_DEPLOYABLE_ANCHOR | EFFECT_DEPLOYABLE_UNANCHOR) {
+        || !matches!(effect, EFFECT_ONLINE | EFFECT_ANCHOR | EFFECT_UNANCHOR | EFFECT_ANCHOR_DEPLOYABLE | EFFECT_UNANCHOR_DEPLOYABLE) {
         return None;
     }
     let s = seen(ctx, id)?.s;
-    if !s.is_mobile_disruptor() && matches!(effect, EFFECT_DEPLOYABLE_ANCHOR | EFFECT_DEPLOYABLE_UNANCHOR) {
-        return None;
-    }
-    let result = match (call.method.as_str(), effect) {
-        ("Activate", EFFECT_DEPLOYABLE_ANCHOR | EFFECT_ANCHOR) => anchor(ctx, id, s.pos).await,
-        ("Activate", EFFECT_DEPLOYABLE_UNANCHOR | EFFECT_UNANCHOR) => unanchor(ctx, id).await,
-        ("Activate", EFFECT_ONLINE) => online(ctx, id).await,
-        ("Deactivate", EFFECT_ONLINE) => offline(ctx, id).await,
+    let result = match (call.method.as_str(), effect, s.is_deployable()) {
+        ("Activate", EFFECT_ANCHOR_DEPLOYABLE, true) | ("Activate", EFFECT_ANCHOR, false) => anchor(ctx, id, s.pos).await,
+        ("Activate", EFFECT_UNANCHOR_DEPLOYABLE, true) | ("Activate", EFFECT_UNANCHOR, false) => unanchor(ctx, id).await,
+        ("Activate", EFFECT_ONLINE, false) => online(ctx, id).await,
+        ("Deactivate", EFFECT_ONLINE, false) => offline(ctx, id).await,
         _ => Ok(Value::None),
     };
     Some(result.map_or_else(|refusal| refusal, Outcome::Value))
@@ -577,8 +670,7 @@ async fn unanchor(ctx: &Ctx<'_>, id: i64) -> Refused<Value> {
     if holding {
         return Err(message_with("CantUnanchorContainerNotEmpty", &[("structure", Value::text(&s.name))]));
     }
-    let delay = s.delays[if s.is_mobile_disruptor() { 0 } else { 2 }];
-    let stamp = pos::timer_start(now, delay);
+    let stamp = pos::timer_start(now, s.delays[2]);
     set_state(ctx, system, id, state::UNANCHORED, Some(stamp)).await?;
     info!("unanchoring {} ({id}) in {system}", s.name);
     Ok(Value::None)
@@ -664,10 +756,8 @@ async fn set_state(ctx: &Ctx<'_>, system: i64, id: i64, new: i16, stamp: Option<
     update(ctx.world, system, id, |s, tick| {
         s.state = new;
         s.stamp = stamp;
-        if s.is_mobile_disruptor() && new == state::UNANCHORED {
-            let mut entries = pos::free_entries(tick, id, true);
-            entries.push(pos::disruptor_effect(tick, id, false));
-            return entries;
+        if s.is_warp_disruptor() && new == state::UNANCHORED {
+            return pos::disruptor_field_entries(tick, id, false);
         }
         Vec::new()
     });

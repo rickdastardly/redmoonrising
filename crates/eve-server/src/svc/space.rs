@@ -10,7 +10,7 @@ use eve_marshal::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::{debug, warn};
 
-use crate::ballpark::{Celestial, Command, Park, Ship, Vec3};
+use crate::ballpark::{Celestial, Command, Park, Ship, Vec3, LOCAL_GRID_RANGE};
 use crate::destiny::{self, flags, mode, Ball};
 use crate::services::{Call, Ctx, Outcome};
 use crate::svc::rows::{float, int, key_val, rowset, text};
@@ -28,8 +28,6 @@ const CELESTIAL_GROUPS: [i32; 6] = [6, 7, 8, 9, 10, 15];
 const DEFAULT_WARP_RANGE: f64 = 15_000.0;
 /// The menu's "approach" with no range (menusvc.py:1598 `range or 50`).
 const DEFAULT_FOLLOW_RANGE: f64 = 50.0;
-/// Ship overview visibility is limited to one million metres around each pilot.
-const SHIP_OVERVIEW_RANGE: f64 = 1_000_000.0;
 /// 14.1 AU in metres. The legacy scanner's input displays kilometres.
 const MAX_SCAN_RANGE: f64 = 2_109_329_976_870.0;
 /// A zero-range station warp otherwise stops at the exact collision boundary.
@@ -262,6 +260,13 @@ pub fn broadcast(world: &WorldState, solar_system_id: i64, only: Option<i64>, en
 }
 
 fn ship_ball(ship: &Ship) -> Ball {
+    // Snapshots encode a STOP ball before replaying the course. Keep its
+    // temporary velocity at sublight speed so it cannot drift at AU/s.
+    let velocity = if ship.in_warp() && ship.vel.len() > ship.stats.max_velocity {
+        ship.vel.unit() * ship.stats.max_velocity
+    } else {
+        ship.vel
+    };
     Ball {
         id: ship.id,
         mode: mode::STOP,
@@ -273,7 +278,7 @@ fn ship_ball(ship: &Ship) -> Ball {
         alliance_id: ship.pilot.alliance_id.unwrap_or(-1) as i32,
         harmonic: ship.harmonic,
         max_velocity: ship.stats.max_velocity,
-        velocity: ship.vel.tuple(),
+        velocity: velocity.tuple(),
         agility: ship.stats.agility,
         speed_fraction: ship.speed_fraction,
         name: ship.pilot.name.clone(),
@@ -492,11 +497,11 @@ fn within_overview_range(park: &Park, viewer: i64, target: i64) -> bool {
     park.ships
         .get(&viewer)
         .zip(park.ships.get(&target))
-        .is_some_and(|(viewer, target)| !crate::drones::in_transit(target) && (viewer.pos - target.pos).len() <= SHIP_OVERVIEW_RANGE)
+        .is_some_and(|(viewer, target)| !crate::drones::in_transit(target) && (viewer.pos - target.pos).len() <= LOCAL_GRID_RANGE)
 }
 
 fn within_overview_range_at(park: &Park, viewer: i64, at: Vec3) -> bool {
-    park.ships.get(&viewer).is_some_and(|ship| (ship.pos - at).len() <= SHIP_OVERVIEW_RANGE)
+    park.ships.get(&viewer).is_some_and(|ship| (ship.pos - at).len() <= LOCAL_GRID_RANGE)
 }
 
 fn object_positions(park: &Park) -> BTreeMap<i64, Vec3> {
@@ -674,6 +679,16 @@ pub fn add_ball_entries(park: &Park, ship_id: i64) -> Vec<Value> {
     let mut entries = vec![entry(park.tick, "AddBalls", vec![chunk])];
     entries.extend(course_entries(ship, park.tick));
     entries
+}
+
+/// AddBalls for a celestial that appears while pilots are in the system (a
+/// new outpost), with its owner as SetState would give it.
+pub fn celestial_add_entry(park: &Park, id: i64, owner: i64) -> Option<Value> {
+    let c = park.celestials.iter().find(|c| c.id == id)?;
+    let ball = Ball::celestial(c.id, c.radius, c.pos.tuple(), &c.name, c.massive());
+    let blob = destiny::encode(destiny::stamp(park.tick), &[ball]);
+    let chunk = Value::Tuple(vec![Value::Bytes(blob), Value::List(vec![celestial_slim(c, &[(id, owner)])]), Value::Dict(Vec::new())]);
+    Some(entry(park.tick, "AddBalls", vec![chunk]))
 }
 
 pub fn remove_ball_entries(tick: i64, ship_id: i64) -> Vec<Value> {
@@ -904,20 +919,27 @@ fn steer(ctx: &Ctx<'_>, system: i64, ship_id: i64, order: Order, method: &str) -
     };
     park.advance(destiny::tick_now());
     let tick = park.tick;
+    let warp_order = matches!(order, Order::Command(Command::Warp { .. }));
     match park.ships.get(&ship_id) {
         None => return Outcome::Unknown(format!("beyonce::{method}: ship {ship_id} is not in space")),
         // destiny ignores course changes mid-warp; so does the server.
         Some(ship) if ship.in_warp() => return Outcome::Value(Value::None),
-        Some(ship)
-            if matches!(order, Order::Command(Command::Warp { .. }))
-                && (park.inside_warp_bubble(ship.pos)
-                    || ship.fight.as_ref().is_some_and(|f| f.afflictions.scrambled >= 1.0)) =>
-        {
-            return Outcome::UserError { msg: "WarpScrambled".into(), args: Vec::new() };
+        Some(ship) if warp_order => {
+            if let Some(disruptor) = park.warp_disruptor_at(ship.pos) {
+                return Outcome::UserError {
+                    msg: "WarpDisrupted".into(),
+                    args: vec![
+                        ("range".into(), Value::Int(disruptor.disruption_radius as i64)),
+                        ("object".into(), Value::text(&disruptor.name)),
+                    ],
+                };
+            }
+            if ship.fight.as_ref().is_some_and(|f| f.afflictions.scrambled >= 1.0) {
+                return Outcome::UserError { msg: "WarpScrambled".into(), args: Vec::new() };
+            }
         }
         Some(_) => {}
     }
-    let warp_order = matches!(order, Order::Command(Command::Warp { .. }));
     let (entries, what) = match order {
         Order::SpeedFraction(f) => {
             park.set_speed_fraction(ship_id, f);
@@ -1174,6 +1196,25 @@ pub fn is_station(park: &Park, id: i64) -> bool {
 mod tests {
     use super::*;
     use crate::ballpark::{Pilot, ShipStats};
+
+    #[test]
+    fn a_grid_snapshot_never_sends_a_stopped_ship_with_warp_velocity() {
+        let mut park = Park::new(30_000_001, Vec::new(), 0);
+        let stats = ShipStats::new(37.0, 1_100_000.0, 3.1, 320.0, 2.0);
+        let pilot = Pilot { type_id: 587, group_id: 25, name: "Rifter".into(), char_id: 140_000_001,
+            corp_id: 1_000_002, alliance_id: None, security: 0.0, bounty: 0.0 };
+        let ship = Ship::new(1, 7, stats, pilot, Vec3::ZERO, Vec3::ZERO);
+        park.ships.insert(1, ship);
+        park.command(1, Command::Warp { target: Vec3::new(5.0e12, 0.0, 0.0), range: 0.0 });
+        park.advance(20);
+        let ship = &park.ships[&1];
+        assert!(ship.in_warp());
+        assert!(ship.vel.len() > stats.max_velocity);
+        let ball = ship_ball(ship);
+        assert_eq!(ball.mode, mode::STOP);
+        assert_eq!(ball.flags, flags::SHIP_IN_WARP);
+        assert_eq!(ball.velocity, (stats.max_velocity, 0.0, 0.0));
+    }
 
     #[test]
     fn moon_warps_land_at_the_surface_offset_for_zero_or_default_range() {

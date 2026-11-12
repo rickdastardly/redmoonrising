@@ -10,6 +10,7 @@ use crate::world::{local_system, LocalBot, WorldState};
 const OWNER_SYSTEM: i32 = 1;
 
 const CHTMODE_LISTENER: i64 = 1;
+pub(super) const CHTMODE_SPEAKER: i32 = 2;
 const CHTMODE_CONVERSATIONALIST: i64 = 3;
 const CHTMODE_CREATOR: i64 = 15;
 const CHTMODE_NOTSPECIFIED: i64 = -1;
@@ -39,6 +40,7 @@ pub async fn lsc(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         "JoinChannels" => join_channels(ctx, call.args.first()).await,
         "GetChannels" => get_channels(ctx).await,
         "GetMembers" => get_members(ctx, call.args.first()).await,
+        "GetLocalRoster" => get_local_roster(ctx, call.args.first()).await,
         // LeaveChannels(channelIDs, unsubscribe) / LeaveChannel(channelID, unsubscribe)
         "LeaveChannels" => {
             for channel in call.args.first().and_then(|v| v.seq()).unwrap_or(&[]) {
@@ -61,24 +63,8 @@ pub async fn lsc(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
                 if members.contains(&ctx.client_id) {
                     announce(&world, &members, channel, "SendMessage", &who(ctx.session), vec![message.clone()]);
                     if let Some(system) = local_system(channel) {
-                        let bots = world.bot_local.get(&system).map(Vec::as_slice).unwrap_or(&[]);
-                        if !bots.is_empty() {
-                            let said = message.as_string().unwrap_or_default();
-                            let choice = said.bytes().fold(ctx.session.char_id.unwrap_or(0) as usize, |n, b| n.wrapping_add(b as usize)) % bots.len();
-                            if let Some(bot) = world.bot_roster.get(bots[choice] as usize) {
-                                let answer = local_reply(&said, &ctx.session.char_name, system, &world, bot.char_id);
-                                announce_counted(&world, &members, members.len() + bots.len(), channel,
-                                    "SendMessage", &bot_who(bot), vec![Value::text(answer)]);
-                            }
-                            if bots.len() > 1 {
-                                let other = (choice + 1) % bots.len();
-                                if let Some(bot) = world.bot_roster.get(bots[other] as usize) {
-                                    let second = if said.contains('?') { "I'm curious what they say back." } else { "Now local's getting interesting." };
-                                    announce_counted(&world, &members, members.len() + bots.len(), channel,
-                                        "SendMessage", &bot_who(bot), vec![Value::text(second)]);
-                                }
-                            }
-                        }
+                        let said = message.as_string().unwrap_or_default();
+                        crate::bots::talk::player_said(&world, system, ctx.session.char_id.unwrap_or(0), &ctx.session.char_name, &said);
                     }
                 } else {
                     warn!("SendMessage to a channel the speaker has not joined");
@@ -128,7 +114,7 @@ pub async fn lsc(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
             Value::None
         }
         // (channelID, accessor, mode, untilWhen=None, reason=None). On the caller's
-        // own mailbox (channelID = charID) this is how contacts are blocked.
+        // own mailbox (channelID = charID) this also adds, removes or blocks buddies.
         "AccessControl" => access_control(ctx, call).await,
 
         "GetMessageDetails" => message_details(ctx, call.arg_id(0), call.arg_id(1)).await,
@@ -140,44 +126,6 @@ pub async fn lsc(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         _ => return None,
     };
     Some(Outcome::Value(value))
-}
-
-fn local_reply(message: &str, pilot: &str, system: i64, world: &WorldState, bot_id: i64) -> String {
-    let lower = message.to_ascii_lowercase();
-    let present = world.bot_local.get(&system).map_or(0, Vec::len);
-    let park = world.parks.get(&system);
-    let in_space = park.map_or(0, |p| p.ships.values().filter(|s| s.is_pilot()).count());
-    let belt = park.and_then(|p| p.celestials.iter().find(|c| c.group_id == 9)).map(|c| c.name.as_str());
-    let bot_ship = park.and_then(|p| p.ships.values().find(|s| s.pilot.char_id == bot_id)).map(|s| s.pilot.name.as_str());
-    if lower.contains("mission") && (lower.contains("where") || lower.contains("warp") || lower.contains("location")) {
-        "Your Journal has the mission bookmark. Right-click in space and look under the agent's mission to warp there.".to_string()
-    } else if lower.contains("how many") || lower.contains("anyone here") || lower.contains("who's here") {
-        format!("{present} of us in local, {in_space} pilots visible in space right now, {pilot}.")
-    } else if lower.contains("where") || lower.contains("belt") {
-        match belt {
-            Some(name) => format!("Try {name}. I can see {in_space} pilots in space, so watch your scan."),
-            None => format!("I can see {in_space} pilots in space. Check the map for the nearest belt."),
-        }
-    } else if lower.contains("what") && lower.contains("fly") || lower.contains("your ship") {
-        match bot_ship { Some(name) => format!("I'm in a {name}. What are you flying, {pilot}?"), None => "I'm docked at the moment. What are you flying?".to_string() }
-    } else if lower.contains("fight") || lower.contains("kill") || lower.contains("pvp") {
-        format!("{pilot}, say where you want the fight. I'll bring a ship.")
-    } else if lower.contains("hello") || lower.contains("o7") || lower.starts_with("hi") {
-        format!("o7 {pilot}. You travelling or looking for trouble?")
-    } else if lower.ends_with('?') {
-        format!("I'm not sure about that one, {pilot}. What part are you asking about?")
-    } else {
-        let topic = message.split_whitespace().take(5).collect::<Vec<_>>().join(" ");
-        format!("{topic} — go on, {pilot}. I'm listening.")
-    }
-}
-
-pub fn bot_good_fight(world: &crate::world::World, system: i64, bot_id: i64, line: &str) {
-    let world = world.lock();
-    let Some(bot) = world.bot_index.get(&bot_id).and_then(|index| world.bot_roster.get(*index as usize)) else { return };
-    let Some((_, channel, members)) = world.local_channels().into_iter().find(|(at, _, members)| *at == system && !members.is_empty()) else { return };
-    let count = members.len() + world.bot_local.get(&system).map_or(0, Vec::len);
-    announce_counted(&world, &members, count, &channel, "SendMessage", &bot_who(bot), vec![Value::text(line)]);
 }
 
 async fn get_my_messages(ctx: &Ctx<'_>) -> Value {
@@ -422,18 +370,29 @@ async fn join_channels(ctx: &Ctx<'_>, arg: Option<&Value>) -> Value {
     let me = self_member(ctx).await;
     let mut out = Vec::with_capacity(requested.len());
     for channel_id in &requested {
+        // Register for live Local events before taking its initial roster.
+        // Otherwise pilots that arrive during the snapshot can be missed.
+        if local_system(channel_id).is_some() {
+            register_join(ctx, channel_id);
+            out.push(join_one(ctx, channel_id, me.as_ref()).await);
+            continue;
+        }
         let result = join_one(ctx, channel_id, me.as_ref()).await;
         let ok = matches!(&result, Value::Tuple(t) if t.get(1) == Some(&Value::Int(1)));
         if ok {
-            let mut world = ctx.world.lock();
-            let members = world.join_channel(channel_id, ctx.client_id);
-            let others: Vec<i64> = members.iter().copied().filter(|c| *c != ctx.client_id).collect();
-            let who = who(ctx.session);
-            announce_counted(&world, &others, members.len(), channel_id, "JoinChannel", &who, Vec::new());
+            register_join(ctx, channel_id);
         }
         out.push(result);
     }
     Value::List(out)
+}
+
+fn register_join(ctx: &Ctx<'_>, channel: &Value) {
+    let mut world = ctx.world.lock();
+    let members = world.join_channel(channel, ctx.client_id);
+    let others: Vec<i64> = members.iter().copied().filter(|c| *c != ctx.client_id).collect();
+    let count = channel_population(&world, channel, members.len());
+    announce_counted(&world, &others, count, channel, "JoinChannel", &who(ctx.session), Vec::new());
 }
 
 fn leave(ctx: &Ctx<'_>, channel: &Value) {
@@ -476,7 +435,13 @@ pub fn announce(
     who: &Value,
     args: Vec<Value>,
 ) {
-    announce_counted(world, members, members.len(), channel, method, who, args);
+    announce_counted(world, members, channel_population(world, channel, members.len()), channel, method, who, args);
+}
+
+pub(crate) fn channel_population(world: &WorldState, channel: &Value, members: usize) -> usize {
+    local_system(channel).map_or(members, |system| {
+        world.local_players(system).len() + world.bot_local.get(&system).map_or(0, Vec::len)
+    })
 }
 
 pub fn announce_counted(
@@ -513,7 +478,7 @@ async fn join_one(ctx: &Ctx<'_>, channel_id: &Value, me: Option<&Vec<Value>>) ->
     }
 
     if channel_id.seq().is_some() {
-        let members = local_members(ctx, channel_id, me).await;
+        let members = local_members(ctx, channel_id, me).await.unwrap_or_else(|| rowset(MEMBER_HEADER, Vec::new()));
         return joined(id_value, Value::None, rowset(ACL_HEADER, Vec::new()), members);
     }
 
@@ -644,12 +609,28 @@ async fn get_members(ctx: &Ctx<'_>, arg: Option<&Value>) -> Value {
     let me = self_member(ctx).await;
     match arg.and_then(|v| v.as_i64()) {
         Some(id) => members_for(ctx, id, me.as_ref()).await,
-        None if arg.is_some_and(|v| v.seq().is_some()) => local_members(ctx, arg.expect("checked"), me.as_ref()).await,
+        None if arg.is_some_and(|v| v.seq().is_some()) => {
+            local_members(ctx, arg.expect("checked"), me.as_ref()).await.unwrap_or(Value::None)
+        }
         None => {
             let lines = me.map(|m| vec![Value::List(m)]).unwrap_or_default();
             rowset(MEMBER_HEADER, lines)
         }
     }
+}
+
+/// A fresh Local roster and the caller's currently hostile war opponents.
+async fn get_local_roster(ctx: &Ctx<'_>, arg: Option<&Value>) -> Value {
+    let Some(channel) = arg else { return Value::None };
+    let Some(system) = local_system(channel) else { return Value::None };
+    if Some(system) != ctx.session.solar_system_id2 || ctx.session.char_id.is_none() {
+        return Value::None;
+    }
+    let me = self_member(ctx).await;
+    let Some(members) = local_members(ctx, channel, me.as_ref()).await else { return Value::None };
+    let side = ctx.session.alliance_id.filter(|id| *id != 0).or(ctx.session.corp_id);
+    let enemies = side.map(crate::svc::war::enemies_of).unwrap_or_default();
+    Value::Tuple(vec![members, Value::List(enemies.into_iter().map(Value::Int).collect())])
 }
 
 async fn members_for(ctx: &Ctx<'_>, channel_id: i64, me: Option<&Vec<Value>>) -> Value {
@@ -692,20 +673,19 @@ async fn members_for(ctx: &Ctx<'_>, channel_id: i64, me: Option<&Vec<Value>>) ->
 }
 
 /// Who is in a Local channel (or another channel named by its session
-/// attributes): the players with it open, the caller, and in Local the bots
-/// online in that system.
-async fn local_members(ctx: &Ctx<'_>, channel_id: &Value, me: Option<&Vec<Value>>) -> Value {
+/// attributes). Local includes all connected pilots and online bots in the
+/// system, including characters docked or still opening their chat window.
+async fn local_members(ctx: &Ctx<'_>, channel_id: &Value, me: Option<&Vec<Value>>) -> Option<Value> {
     let my_id = ctx.session.char_id.unwrap_or(0);
     let (players, bots): (Vec<(i64, i64)>, Vec<LocalBot>) = {
         let world = ctx.world.lock();
-        let players = world
-            .channel_members(channel_id)
-            .iter()
-            .filter_map(|c| world.presence_of_client(*c))
-            .map(|p| (p.char_id, p.role))
-            .filter(|(c, _)| *c != my_id)
-            .collect();
-        let bots = local_system(channel_id)
+        let system = local_system(channel_id);
+        let presences = match system {
+            Some(system) => world.local_players(system).into_values().collect::<Vec<_>>(),
+            None => world.channel_members(channel_id).iter().filter_map(|c| world.presence_of_client(*c)).collect(),
+        };
+        let players = presences.into_iter().filter(|p| p.char_id != my_id).map(|p| (p.char_id, p.role)).collect();
+        let bots = system
             .and_then(|s| world.bot_local.get(&s))
             .map(|list| list.iter().filter_map(|i| world.bot_roster.get(*i as usize).cloned()).collect())
             .unwrap_or_default();
@@ -725,13 +705,16 @@ async fn local_members(ctx: &Ctx<'_>, channel_id: &Value, me: Option<&Vec<Value>
                     lines.push(member_line(id, int(r, 1), nonzero(int(r, 2)), role, text(r, 3).unwrap_or_default(), int(r, 4).unwrap_or(0)));
                 }
             }
-            Err(e) => error!("Local members: {err}", err = crate::logging::chain(&e)),
+            Err(e) => {
+                error!("Local members: {err}", err = crate::logging::chain(&e));
+                return None;
+            }
         }
     }
     for b in bots.into_iter().filter(|b| b.char_id != my_id) {
         lines.push(member_line(b.char_id, Some(b.corp_id), b.alliance_id, ROLE_LOGIN | ROLE_PLAYER, b.name, b.type_id));
     }
-    rowset(MEMBER_HEADER, lines)
+    Some(rowset(MEMBER_HEADER, lines))
 }
 
 fn member_line(char_id: i64, corp_id: Option<i64>, alliance_id: Option<i64>, role: i64, name: String, type_id: i64) -> Value {
@@ -954,12 +937,13 @@ async fn configure(ctx: &Ctx<'_>, call: &Call) -> Value {
 async fn access_control(ctx: &Ctx<'_>, call: &Call) -> Value {
     let channel_id = call.arg_id(0) as i32;
     let accessor = call.arg_id(1) as i32;
-    let mode = call.arg_i64(2).unwrap_or(CHTMODE_NOTSPECIFIED) as i32;
+    let mut mode = call.arg_i64(2).unwrap_or(CHTMODE_NOTSPECIFIED) as i32;
     let until = call.arg_i64(3);
     let reason = call.arg_text(4);
     let char_id = me(ctx);
 
-    let allowed = channel_id == char_id || {
+    let personal = ctx.session.char_id == Some(i64::from(channel_id));
+    let allowed = personal || {
         let sql = format!(r#"SELECT 1 FROM "channels" WHERE "channelID" = $1 AND ({OPERATOR_TEST})"#);
         ctx.query_one(&sql, &[&channel_id, &char_id]).await.is_some()
     };
@@ -968,12 +952,27 @@ async fn access_control(ctx: &Ctx<'_>, call: &Call) -> Value {
         return Value::None;
     }
     let clear = r#"DELETE FROM "channelMods" WHERE "channelID" = $1 AND "accessor" = $2"#;
-    ctx.execute(clear, &[&channel_id, &accessor]).await;
+    if !ctx.execute(clear, &[&channel_id, &accessor]).await {
+        return Value::None;
+    }
     if i64::from(mode) != CHTMODE_NOTSPECIFIED {
         let sql = r#"INSERT INTO "channelMods" ("channelID","accessor","mode","untilWhen","reason","admin")
                      VALUES ($1, $2, $3, $4, $5,
                              (SELECT "characterName" FROM "character_" WHERE "characterID" = $6))"#;
-        ctx.execute(sql, &[&channel_id, &accessor, &mode, &until, &reason, &char_id]).await;
+        if !ctx.execute(sql, &[&channel_id, &accessor, &mode, &until, &reason, &char_id]).await {
+            mode = CHTMODE_NOTSPECIFIED as i32;
+        }
+    }
+    if personal && accessor > 0 && accessor != char_id {
+        let mut world = ctx.world.lock();
+        let channel = Value::Int(i64::from(channel_id));
+        let members = world.channel_members(&channel);
+        announce(&world, &members, &channel, "AccessControl", &who(ctx.session), vec![
+            Value::Int(i64::from(accessor)), Value::Int(i64::from(mode)),
+            until.map_or(Value::None, Value::Long), reason.map_or(Value::None, Value::text),
+            Value::text(ctx.session.char_name.clone()), Value::None,
+        ]);
+        world.set_contact_watch(i64::from(char_id), i64::from(accessor), mode >= CHTMODE_SPEAKER);
     }
     Value::None
 }

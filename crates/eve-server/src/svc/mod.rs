@@ -34,6 +34,7 @@ pub mod notes;
 pub mod onlinestatus;
 pub mod pvptrade;
 pub mod petition;
+pub mod outpost;
 pub mod ram;
 pub mod repair;
 pub mod reprocessing;

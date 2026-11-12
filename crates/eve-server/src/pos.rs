@@ -43,7 +43,10 @@ pub mod state {
 pub const CATEGORY_STRUCTURE: i32 = 23;
 pub const GROUP_CONTROL_TOWER: i64 = 365;
 pub const GROUP_MOBILE_WARP_DISRUPTOR: i64 = 361;
-const ATTR_WARP_SCRAMBLE_RANGE: i32 = 103;
+/// Outpost construction platforms: anchored and loaded, they build an outpost (svc::outpost).
+pub const GROUP_CONSTRUCTION_PLATFORM: i64 = 307;
+/// The groups outside the structure category that live in space as structures.
+pub const LOOSE_STRUCTURE_GROUPS: [i32; 2] = [GROUP_MOBILE_WARP_DISRUPTOR as i32, GROUP_CONSTRUCTION_PLATFORM as i32];
 const TYPE_FORCE_FIELD: i64 = 16103;
 const ATTR_SHIELD_RADIUS: i32 = 680;
 const ATTR_ANCHORING_DELAY: i32 = 556;
@@ -54,6 +57,35 @@ const TICKS_PER_MS: i64 = 10_000;
 const IMMOVABLE: f64 = 1.0e34;
 
 static SPEEDUP: OnceLock<f64> = OnceLock::new();
+/// The last anchoring reminder (seconds left) each platform's owners got.
+static REMINDED: std::sync::Mutex<Vec<(i64, i64)>> = std::sync::Mutex::new(Vec::new());
+/// When an anchoring platform's owners hear how long is left, in seconds.
+const ANCHOR_REMINDERS: [i64; 10] = [3000, 2400, 1800, 1200, 600, 300, 120, 60, 30, 10];
+
+/// An OnRemoteMessage CustomNotify, a line of text in the client.
+pub fn custom_notify(text: &str) -> Value {
+    Value::Tuple(vec![
+        Value::bytes("CustomNotify"),
+        Value::Dict(vec![(Value::bytes("notify"), Value::text(text))]),
+    ])
+}
+
+/// A FILETIME as EVE (UTC) clock time, HH:MM.
+pub fn eve_clock(filetime: i64) -> String {
+    let unix = filetime / 10_000_000 - 11_644_473_600;
+    let day = unix.rem_euclid(86_400);
+    format!("{:02}:{:02}", day / 3600, day % 3600 / 60)
+}
+
+/// Seconds as "1h 05m", "4m 30s" or "12s".
+pub fn duration_text(seconds: i64) -> String {
+    let s = seconds.max(0);
+    match (s / 3600, s % 3600 / 60, s % 60) {
+        (0, 0, sec) => format!("{sec}s"),
+        (0, m, sec) => format!("{m}m {sec:02}s"),
+        (h, m, _) => format!("{h}h {m:02}m"),
+    }
+}
 
 /// How many times faster than the client's timers starbase steps run.
 pub fn set_speedup(speedup: f64) {
@@ -82,13 +114,12 @@ pub struct Structure {
     pub state: i16,
     /// FILETIME the current timed step began; None once it is over.
     pub stamp: Option<i64>,
-    /// For a structure other than a tower: the tower it is anchored to.
+    /// For a tower-dependent structure: the tower it is anchored to.
     pub tower: Option<i64>,
     /// anchoringDelay, onliningDelay, unanchoringDelay, in FILETIME ticks.
     pub delays: [i64; 3],
     pub vitals: Vitals,
     pub signature: f64,
-    pub warp_disruption_radius: f64,
     /// (character, ship) that last hurt it.
     pub last_attacker: Option<(i64, i64)>,
     /// Reinforcement was asked for since the shield last stood above a
@@ -104,6 +135,8 @@ pub struct Structure {
     pub field: Option<Field>,
     /// For a tower: whom its defences engage.
     pub sentry: crate::guard::Sentry,
+    /// The mobile warp disruptor's dogma range, separate from its hull radius.
+    pub disruption_radius: f64,
     /// For a gun, missile or EW battery: what it is doing.
     pub guard: Option<crate::guard::Guard>,
 }
@@ -170,20 +203,33 @@ impl Structure {
         self.group_id == GROUP_CONTROL_TOWER
     }
 
-    pub fn is_mobile_disruptor(&self) -> bool {
+    pub fn is_warp_disruptor(&self) -> bool {
         self.group_id == GROUP_MOBILE_WARP_DISRUPTOR
     }
 
-    pub fn warp_bubble(&self, now: i64) -> Option<f64> {
-        (self.is_mobile_disruptor() && self.fully_anchored(now) && !self.destroyed()
-            && self.warp_disruption_radius > 0.0).then_some(self.warp_disruption_radius)
+    pub fn is_platform(&self) -> bool {
+        self.group_id == GROUP_CONSTRUCTION_PLATFORM
+    }
+
+    /// Anchored with anchorDrop/anchorLift (dogma effects 649/650) rather
+    /// than the starbase effects, and needing no control tower.
+    pub fn is_deployable(&self) -> bool {
+        self.is_warp_disruptor() || self.is_platform()
+    }
+
+    pub fn active_disruption_radius(&self) -> Option<f64> {
+        (self.is_warp_disruptor() && self.fixed() && self.disruption_radius > 0.0)
+            .then_some(self.disruption_radius)
+    }
+
+    pub fn disrupts_warp_at(&self, point: Vec3) -> bool {
+        self.active_disruption_radius().is_some_and(|radius| (point - self.pos).len_sq() < radius.powi(2))
     }
 
     fn delay(&self) -> i64 {
         match self.state {
             state::ANCHORED => self.delays[0],
             state::ONLINING => self.delays[1],
-            state::UNANCHORED if self.is_mobile_disruptor() => self.delays[0],
             state::UNANCHORED => self.delays[2],
             _ => 0,
         }
@@ -225,7 +271,8 @@ impl Structure {
     /// Fixed in space: anything but a structure done unanchoring. Ships
     /// bounce off it, on both sides.
     pub fn fixed(&self) -> bool {
-        if self.is_mobile_disruptor() {
+        // The old client uses isFree to hide a mobile disruptor's field.
+        if self.is_warp_disruptor() {
             return self.state == state::ANCHORED && self.stamp.is_none();
         }
         !(self.state == state::UNANCHORED && self.stamp.is_none())
@@ -256,7 +303,27 @@ impl Structure {
             ("posTimestamp", self.stamp.map_or(Value::None, Value::Long)),
             ("controlTowerID", Value::int_or_none(self.tower)),
             ("incapacitated", Value::Int(0)),
+            // For the RMR client hooks: when the current timed step ends and
+            // what it is, so a GM menu can show the time left.
+            ("rmrStepEnds", self.stamp.map_or(Value::None, |s| Value::Long(s + self.delay()))),
+            ("rmrStepName", Value::text(self.step_name())),
         ])
+    }
+
+    /// What the current timed step is called, for players.
+    pub fn step_name(&self) -> &'static str {
+        match self.state {
+            state::ANCHORED => "Anchoring",
+            state::ONLINING => "Onlining",
+            state::UNANCHORED => "Unanchoring",
+            state::REINFORCED => "Reinforced",
+            _ => "Timer",
+        }
+    }
+
+    /// The length of the current timed step, in FILETIME ticks.
+    pub fn step_delay(&self) -> i64 {
+        self.delay()
     }
 
     /// Free and passable while it floats; fixed and solid once anchored.
@@ -295,14 +362,15 @@ pub fn free_entries(tick: i64, id: i64, free: bool) -> Vec<Value> {
     ]
 }
 
-/// The legacy client toggles a disruptor's cloud when the anchor effect ends.
-pub fn disruptor_effect(tick: i64, id: i64, anchored: bool) -> Value {
-    let guid = if anchored { "effects.AnchorDrop" } else { "effects.AnchorLift" };
-    entry(tick, "OnSpecialFX", vec![
-        Value::Int(id), Value::None, Value::None, Value::None, Value::None,
-        Value::List(Vec::new()), Value::bytes(guid), Value::Int(0), Value::Int(1), Value::Int(0),
-        Value::Int(1),
-    ])
+/// The native anchoring effect updates the bubble model's field visibility.
+pub fn disruptor_field_entries(tick: i64, id: i64, active: bool) -> Vec<Value> {
+    let mut entries = free_entries(tick, id, !active);
+    let effect = if active { "effects.AnchorDrop" } else { "effects.AnchorLift" };
+    entries.push(entry(tick, "OnSpecialFX", vec![
+        Value::Int(id), Value::None, Value::None, Value::None, Value::None, Value::List(Vec::new()),
+        Value::bytes(effect), Value::Int(0), Value::Int(1), Value::Int(0), Value::Int(100),
+    ]));
+    entries
 }
 
 /// AddBalls for one structure.
@@ -333,8 +401,8 @@ pub async fn load(db: &impl GenericClient, solar_system_id: i64) -> Result<Vec<S
                  LEFT JOIN "corporation" co ON co."corporationID" = e."ownerID"
                  LEFT JOIN "character_" ch ON ch."characterID" = e."ownerID"
                  LEFT JOIN "corporation" cc ON cc."corporationID" = ch."corporationID"
-                WHERE e."locationID" = $1 AND (g."categoryID" = $2 OR t."groupID" = $3)"#,
-            &[&(solar_system_id as i32), &CATEGORY_STRUCTURE, &(GROUP_MOBILE_WARP_DISRUPTOR as i32)],
+                WHERE e."locationID" = $1 AND (g."categoryID" = $2 OR g."groupID" = ANY($3))"#,
+            &[&(solar_system_id as i32), &CATEGORY_STRUCTURE, &&LOOSE_STRUCTURE_GROUPS[..]],
         )
         .await?;
     let types: Vec<i32> = rows.iter().filter_map(|r| int(r, 1)).map(|t| t as i32).collect();
@@ -345,10 +413,16 @@ pub async fn load(db: &impl GenericClient, solar_system_id: i64) -> Result<Vec<S
         .iter()
         .map(|r| {
             let type_id = int(r, 1).unwrap_or(0);
+            let group_id = int(r, 2).unwrap_or(0);
+            let mut delays = delays.get(&type_id).copied().unwrap_or_default();
+            if group_id == GROUP_MOBILE_WARP_DISRUPTOR || group_id == GROUP_CONSTRUCTION_PLATFORM {
+                // anchorDrop and anchorLift both use anchoringDelay in this client.
+                delays[2] = delays[0];
+            }
             Structure {
                 id: int(r, 0).unwrap_or(0),
                 type_id,
-                group_id: int(r, 2).unwrap_or(0),
+                group_id,
                 name: text(r, 3).unwrap_or_default(),
                 owner_id: int(r, 4).unwrap_or(0),
                 corp_id: int(r, 5).unwrap_or(0),
@@ -358,7 +432,7 @@ pub async fn load(db: &impl GenericClient, solar_system_id: i64) -> Result<Vec<S
                 state: int(r, 11).unwrap_or(0) as i16,
                 stamp: int(r, 12),
                 tower: int(r, 13),
-                delays: delays.get(&type_id).copied().unwrap_or_default(),
+                delays,
                 vitals: {
                     let mut v = vitals(health.get(&type_id), now);
                     if let Some(charge) = float(r, 14) {
@@ -372,8 +446,6 @@ pub async fn load(db: &impl GenericClient, solar_system_id: i64) -> Result<Vec<S
                     v
                 },
                 signature: health.get(&type_id).and_then(|a| a.get(&attr::SIGNATURE_RADIUS)).copied().unwrap_or(0.0),
-                warp_disruption_radius: health.get(&type_id)
-                    .and_then(|a| a.get(&ATTR_WARP_SCRAMBLE_RANGE)).copied().unwrap_or(0.0),
                 last_attacker: None,
                 reinforce_asked: false,
                 field_radius: health.get(&type_id).and_then(|a| a.get(&ATTR_SHIELD_RADIUS)).copied().unwrap_or(0.0),
@@ -381,6 +453,7 @@ pub async fn load(db: &impl GenericClient, solar_system_id: i64) -> Result<Vec<S
                 allow_corp: int(r, 18) == Some(1),
                 allow_alliance: int(r, 19) == Some(1),
                 field: None,
+                disruption_radius: health.get(&type_id).and_then(|a| a.get(&attr::WARP_SCRAMBLE_RANGE)).copied().unwrap_or(0.0),
                 sentry: crate::guard::Sentry {
                     standing: float(r, 20),
                     status: float(r, 21),
@@ -389,7 +462,7 @@ pub async fn load(db: &impl GenericClient, solar_system_id: i64) -> Result<Vec<S
                     aggression: int(r, 24) == Some(1),
                     war: int(r, 25) == Some(1),
                 },
-                guard: health.get(&type_id).and_then(|a| crate::guard::profile(int(r, 2).unwrap_or(0), a)),
+                guard: health.get(&type_id).and_then(|a| crate::guard::profile(group_id, a)),
             }
         })
         .collect();
@@ -460,11 +533,14 @@ pub async fn health(
     db: &impl GenericClient,
     types: &[i32],
 ) -> Result<std::collections::HashMap<i64, std::collections::HashMap<i32, f64>>, tokio_postgres::Error> {
-    let mut wanted = vec![attr::HP, attr::SHIELD_CAPACITY, attr::ARMOR_HP, attr::SHIELD_RECHARGE_RATE, attr::SIGNATURE_RADIUS, ATTR_SHIELD_RADIUS, ATTR_WARP_SCRAMBLE_RANGE];
+    let mut wanted = vec![attr::HP, attr::SHIELD_CAPACITY, attr::ARMOR_HP, attr::SHIELD_RECHARGE_RATE, attr::SIGNATURE_RADIUS, ATTR_SHIELD_RADIUS];
     wanted.extend(crate::guard::profile_attributes());
+    wanted.push(attr::WARP_SCRAMBLE_RANGE);
     wanted.extend(attr::SHIELD_RESONANCE);
     wanted.extend(attr::ARMOR_RESONANCE);
     wanted.extend(attr::HULL_RESONANCE);
+    wanted.sort_unstable();
+    wanted.dedup();
     let rows = db
         .query(
             r#"SELECT "typeID", "attributeID", COALESCE("valueFloat", "valueInt"::float8)
@@ -506,7 +582,32 @@ pub fn step(park: &mut Park, out: &mut Out) {
     let now_ms = crate::combat::now_ms();
     let (tick, system) = (park.tick, park.solar_system_id);
     let mut added_fields = Vec::new();
+    // Pilots in the system, for telling platform owners how anchoring goes.
+    let pilots: Vec<(i64, i64, i64)> = park.ships.values()
+        .filter(|ship| ship.is_player())
+        .map(|ship| (ship.pilot.char_id, ship.pilot.corp_id, ship.client_id))
+        .collect();
+    let owners_of = |s: &Structure| -> Vec<i64> {
+        pilots.iter().filter(|(c, corp, _)| *c == s.owner_id || *corp == s.corp_id).map(|(_, _, client)| *client).collect()
+    };
     for s in park.structures.values_mut() {
+        if s.is_platform() && s.state == state::ANCHORED {
+            if let Some(stamp) = s.stamp.filter(|_| s.busy(now)) {
+                let left = (stamp + s.delays[0] - now) / 10_000_000;
+                let mut reminded = REMINDED.lock().unwrap_or_else(|e| e.into_inner());
+                let last = reminded.iter().find(|(id, _)| *id == s.id).map(|(_, l)| *l);
+                // The closest mark not yet given: a short (sped-up) anchoring
+                // starts at its first applicable reminder, not at every one.
+                if let Some(mark) = ANCHOR_REMINDERS.iter().copied().filter(|m| left <= *m && last.is_none_or(|l| *m < l)).last() {
+                    reminded.retain(|(id, _)| *id != s.id);
+                    reminded.push((s.id, mark));
+                    let text = format!("{} finishes anchoring in {} (at {} EVE).", s.name, duration_text(left), eve_clock(stamp + s.delays[0]));
+                    for client in owners_of(&*s) {
+                        out.note(client, "OnRemoteMessage", custom_notify(&text));
+                    }
+                }
+            }
+        }
         let had_field = s.field.is_some();
         let fields = reconcile_field(s, now, tick);
         if !had_field {
@@ -534,16 +635,25 @@ pub fn step(park: &mut Park, out: &mut Out) {
             s.tower = None;
         }
         s.stamp = None;
-        if loose || s.is_mobile_disruptor() {
-            for e in free_entries(tick, s.id, loose) {
+        if s.is_warp_disruptor() && s.state == state::ANCHORED {
+            for e in disruptor_field_entries(tick, s.id, true) {
+                out.destiny(system, e);
+            }
+        } else if loose {
+            for e in free_entries(tick, s.id, true) {
                 out.destiny(system, e);
             }
         }
-        if s.is_mobile_disruptor() && s.state == state::ANCHORED {
-            out.destiny(system, disruptor_effect(tick, s.id, true));
-        }
         out.destiny(system, slim_change(tick, s));
         out.jobs.push(Job::Structure { id: s.id, state: s.state, completed_stamp: stamp, tower: s.tower });
+        if s.is_platform() && s.state == state::ANCHORED {
+            REMINDED.lock().unwrap_or_else(|e| e.into_inner()).retain(|(id, _)| *id != s.id);
+            let text = format!("{} has anchored. Load the materials Show Info lists into its resources and press Build.", s.name);
+            for client in owners_of(&*s) {
+                out.note(client, "OnRemoteMessage", custom_notify(&text));
+            }
+        }
+
     }
     for id in added_fields {
         for (client, entry) in crate::svc::space::add_object_entries_for_nearby(park, id) {
@@ -587,6 +697,7 @@ pub fn harmonic_entry(tick: i64, id: i64, (harmonic, corp, alliance): (i64, i64,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ballpark::{Celestial, Command, Pilot, Ship, ShipStats};
 
     fn tower(state: i16, stamp: Option<i64>) -> Structure {
         Structure {
@@ -605,10 +716,10 @@ mod tests {
             delays: [100, 200, 300],
             vitals: vitals(None, 0),
             signature: 0.0,
-            warp_disruption_radius: 0.0,
             last_attacker: None,
             reinforce_asked: false,
             field_radius: 30_000.0,
+            disruption_radius: 0.0,
             harmonic: -1,
             allow_corp: true,
             allow_alliance: false,
@@ -618,9 +729,24 @@ mod tests {
         }
     }
 
+    fn bubble(id: i64, pos: Vec3, range: f64) -> Structure {
+        let mut s = tower(state::ANCHORED, None);
+        s.id = id;
+        s.group_id = GROUP_MOBILE_WARP_DISRUPTOR;
+        s.pos = pos;
+        s.radius = 70.0;
+        s.disruption_radius = range;
+        s
+    }
+
+    fn pilot_ship(stats: ShipStats, pos: Vec3) -> Ship {
+        let pilot = Pilot { type_id: 587, group_id: 25, name: "Test ship".into(), char_id: 140_000_001,
+            corp_id: 1000002, alliance_id: None, security: 0.0, bounty: 0.0 };
+        Ship::new(10, 1, stats, pilot, pos, Vec3::ZERO)
+    }
+
     #[test]
     fn active_force_field_breaks_locks_in_both_directions_and_leaves_tower_targetable() {
-        use crate::ballpark::{Pilot, Ship, ShipStats};
         use crate::combat::Lock;
 
         let mut park = Park::new(30000001, Vec::new(), 0);
@@ -673,66 +799,6 @@ mod tests {
         assert!(tower(state::UNANCHORED, None).is_free(0));
     }
 
-    fn disruptor(id: i64, x: f64, radius: f64) -> Structure {
-        let mut bubble = tower(state::ANCHORED, None);
-        bubble.id = id;
-        bubble.group_id = GROUP_MOBILE_WARP_DISRUPTOR;
-        bubble.radius = 70.0;
-        bubble.pos = Vec3::new(x, 0.0, 0.0);
-        bubble.warp_disruption_radius = radius;
-        bubble
-    }
-
-    #[test]
-    fn mobile_disruptor_only_blocks_warp_after_anchoring_and_before_unanchoring() {
-        let mut bubble = disruptor(2, 0.0, 5000.0);
-        bubble.stamp = Some(1000);
-        assert_eq!(bubble.warp_bubble(1099), None);
-        assert_eq!(bubble.warp_bubble(1100), Some(5000.0));
-        bubble.state = state::UNANCHORED;
-        assert_eq!(bubble.warp_bubble(1100), None);
-        assert!(bubble.is_free(1100));
-    }
-
-    #[test]
-    fn mobile_disruptor_catches_warp_at_the_first_edge_and_blocks_departure() {
-        use crate::ballpark::{Command, Pilot, Ship, ShipStats};
-        for (radius, center, destination) in [
-            (5_000.0, 30_000.0, 1.0e12),
-            (15_000.0, 200_000.0, 1.0e12),
-            (45_000.0, 200_000.0, 200_000.0),
-        ] {
-            let mut park = Park::new(1, vec![], 0);
-            park.structures.insert(2, disruptor(2, center, radius));
-            park.structures.insert(3, disruptor(3, 400_000.0, radius));
-            let ship = Ship::new(
-                1, 10, ShipStats::new(35.0, 1_067_000.0, 3.2, 320.0, 3.0),
-                Pilot {
-                    type_id: 587, group_id: 25, name: "Rifter".into(), char_id: 1,
-                    corp_id: 2, alliance_id: None, security: 0.0, bounty: 0.0,
-                },
-                Vec3::ZERO, Vec3::ZERO,
-            );
-            park.ships.insert(1, ship);
-            let target = Vec3::new(destination, 0.0, 0.0);
-            park.command(1, Command::Warp { target, range: 0.0 });
-            for tick in 1..180 {
-                park.advance(tick);
-                if park.landed.contains(&1) { break; }
-            }
-            assert!(park.landed.contains(&1));
-            let landing = park.ships[&1].pos;
-            assert!((landing.x - (center - radius + 1.0)).abs() < 0.01, "{landing:?}");
-            assert!(park.inside_warp_bubble(landing));
-            park.command(1, Command::Warp { target, range: 0.0 });
-            assert!(!park.ships[&1].warping());
-
-            park.structures.get_mut(&2).unwrap().state = state::UNANCHORED;
-            park.command(1, Command::Warp { target: Vec3::new(1.0e12, 0.0, 0.0), range: 0.0 });
-            assert!(park.ships[&1].warping());
-        }
-    }
-
     #[test]
     fn an_online_tower_raises_its_field_and_lowers_it_offline() {
         let mut t = tower(state::ONLINE, None);
@@ -745,6 +811,93 @@ mod tests {
         t.state = state::ANCHORED;
         assert_eq!(reconcile_field(&mut t, 0, 4).len(), 1);
         assert!(t.field.is_none());
+    }
+
+    #[test]
+    fn a_mobile_disruptor_blocks_departure_only_inside_its_active_field() {
+        let mut park = Park::new(30_003_287, Vec::new(), 0);
+        let mut bubble = bubble(1, Vec3::ZERO, 5_000.0);
+        bubble.stamp = Some(0);
+        assert_eq!(bubble.ball().flags & flags::IS_FREE, flags::IS_FREE);
+        park.structures.insert(bubble.id, bubble);
+        let stats = ShipStats::new(37.0, 1_100_000.0, 3.1, 320.0, 2.0);
+        let inside = Vec3::new(1000.0, 0.0, 0.0);
+        let ship = pilot_ship(stats, inside);
+        let id = ship.id;
+        park.ships.insert(id, ship);
+        let warp = Command::Warp { target: Vec3::new(1.0e12, 0.0, 0.0), range: 0.0 };
+
+        park.command(id, warp.clone());
+        assert!(park.ships[&id].warping(), "anchoring has not completed");
+        park.command(id, Command::Stop);
+        step(&mut park, &mut Out::default());
+        assert_eq!(park.structures[&1].ball().flags & flags::IS_FREE, 0);
+        park.command(id, warp.clone());
+        assert!(!park.ships[&id].warping(), "the ship is within the field radius");
+
+        park.ships.get_mut(&id).unwrap().pos = Vec3::new(5_000.0, 0.0, 0.0);
+        park.command(id, warp.clone());
+        assert!(park.ships[&id].warping());
+        park.command(id, Command::Stop);
+        park.ships.get_mut(&id).unwrap().pos = inside;
+        park.structures.get_mut(&1).unwrap().state = state::UNANCHORED;
+        park.command(id, warp);
+        assert!(park.ships[&id].warping(), "unanchoring removes the field");
+    }
+
+    #[test]
+    fn a_gate_warp_lands_and_stops_on_the_first_bubble_edge() {
+        let gate = Vec3::new(-6.0e10, 3.8e9, -4.5e12);
+        let mut park = Park::new(30_003_287, vec![Celestial {
+            id: 50_000_001, type_id: 16, group_id: 10, name: "Stargate".into(),
+            pos: gate, radius: 5_047.0, undock: None, jump: None,
+        }], 0);
+        let stats = ShipStats::new(9_000.0, 1_800_000_000.0, 0.05, 87.5, 1.0);
+        let ship = pilot_ship(stats, gate - Vec3::new(4.0e12, 0.0, 0.0));
+        let id = ship.id;
+        park.ships.insert(id, ship);
+        let first = gate + Vec3::new(-13_000.0, 3_000.0, 0.0);
+        park.structures.insert(1, bubble(1, gate + Vec3::new(18_000.0, 0.0, 0.0), 45_000.0));
+        park.structures.insert(2, bubble(2, first, 45_000.0));
+
+        let target = gate - Vec3::new(5_047.0 + stats.radius, 0.0, 0.0);
+        park.command(id, Command::Warp { target, range: 0.0 });
+        let Command::Warp { target: exit, range: 0.0 } = park.ships[&id].command else { panic!("a warp to the field") };
+        assert!(exit.x < target.x);
+        assert!(((exit - first).len() - 44_999.0).abs() < 0.01);
+        assert_eq!(park.warp_disruptor_at(exit).map(|s| s.id), Some(2));
+
+        park.advance(600);
+        assert_eq!(park.landed, vec![id]);
+        assert_eq!(park.ships[&id].pos, exit);
+        assert_eq!(park.ships[&id].vel, Vec3::ZERO);
+        assert!(park.surface_distance(id, 50_000_001).unwrap() > 40_000.0);
+    }
+
+    #[test]
+    fn an_aligned_drag_bubble_sets_the_exit_when_warp_is_ordered() {
+        let mut park = Park::new(30_003_287, Vec::new(), 0);
+        let target = Vec3::new(4.0e12, 0.0, 0.0);
+        let ship = pilot_ship(ShipStats::new(37.0, 1_100_000.0, 3.1, 320.0, 2.0), Vec3::ZERO);
+        let id = ship.id;
+        park.ships.insert(id, ship);
+        park.structures.insert(1, bubble(1, target + Vec3::new(-2.0e6, 0.0, 0.0), 45_000.0));
+        park.structures.insert(2, bubble(2, target + Vec3::new(0.0, 46_000.0, 0.0), 45_000.0));
+        let drag_pos = target + Vec3::new(100_000.0, 0.0, 0.0);
+        let mut drag = bubble(3, drag_pos, 45_000.0);
+        drag.stamp = Some(0);
+        park.structures.insert(3, drag);
+
+        let warp = Command::Warp { target, range: 15_000.0 };
+        park.command(id, warp.clone());
+        assert_eq!(park.ships[&id].command, warp, "distant, off-axis and anchoring bubbles do not intercept");
+        park.structures.get_mut(&3).unwrap().stamp = None;
+        park.command(id, warp);
+        let edge = drag_pos - Vec3::new(44_999.0, 0.0, 0.0);
+        assert_eq!(park.ships[&id].command, Command::Warp { target: edge, range: 0.0 });
+        park.structures.remove(&3);
+        park.advance(100);
+        assert_eq!(park.ships[&id].pos, edge);
     }
 
     #[test]

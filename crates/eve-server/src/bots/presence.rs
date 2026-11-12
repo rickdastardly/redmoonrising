@@ -36,6 +36,7 @@ use crate::world::{World, WorldState};
 pub const PER_SYSTEM: usize = 120;
 /// A siege fleet warps to its rally point from further off than this.
 const RALLY_WARP: f64 = 150_000.0;
+const UNDOCK_SHIP_CLEARANCE: f64 = 100.0;
 const GROUP_BELT: i64 = 9;
 const GROUP_STARGATE: i64 = 10;
 const ATTR_WARP_SPEED_MULTIPLIER: i32 = 600;
@@ -51,6 +52,10 @@ static PIRATES_ATTACK_PLAYERS: AtomicBool = AtomicBool::new(true);
 
 pub fn set_pirates_attack_players(on: bool) {
     PIRATES_ATTACK_PLAYERS.store(on, Ordering::Relaxed);
+}
+
+pub fn pirates_attack_players() -> bool {
+    PIRATES_ATTACK_PLAYERS.load(Ordering::Relaxed)
 }
 
 /// A shown bot destroyed by a player: (bot, killer, it was the capsule, the
@@ -99,11 +104,25 @@ pub struct Presence {
     hunts: HashMap<u32, i64>,
     /// Pirates raiding high-sec (`events`): they attack players anywhere.
     pub raiders: HashSet<u32>,
+    /// Bots answering a fight call in Local: where they meet (`talk`).
+    meets: HashMap<u32, Meet>,
     /// What bots fly and fit.
     pub yard: Option<Arc<super::ships::Shipyard>>,
     /// Shown bots destroyed by players since the runtime last looked.
     pub kills: Vec<BotKill>,
 }
+
+/// Where a bot answering a fight call goes: in by warp to `point`, then
+/// around `anchor` (a belt, the sun, or the caller's ship), ready to fight.
+#[derive(Debug, Clone, Copy)]
+pub struct Meet {
+    pub system: i32,
+    pub anchor: i64,
+    pub point: Vec3,
+}
+
+/// How far from the meeting point bots orbit.
+const MEET_ORBIT: f64 = 8_000.0;
 
 /// Where a bot in a fleet goes: in by warp to `point`, then around `anchor`
 /// (the tower) at `orbit`; going for `target`, if it has one.
@@ -130,6 +149,7 @@ impl Presence {
             escort: HashMap::new(),
             hunts: HashMap::new(),
             raiders: HashSet::new(),
+            meets: HashMap::new(),
             yard: None,
             kills: Vec::new(),
         }
@@ -159,6 +179,11 @@ impl Presence {
         self.cap
     }
 
+    /// The dashboard changed how many bot ships one system shows.
+    pub fn set_cap(&mut self, cap: usize) {
+        self.cap = cap.max(1);
+    }
+
     /// Puts a bot in a siege fleet: shown first, and sent to `rally`.
     /// `docked_here`: the station in the fleet's system it was docked in.
     pub fn muster(&mut self, i: u32, rally: Rally, docked_here: Option<i32>) {
@@ -172,6 +197,35 @@ impl Presence {
     pub fn retarget(&mut self, i: u32, target: i64) {
         if let Some(r) = self.rally.get_mut(&i) {
             r.target = Some(target);
+        }
+    }
+
+    /// Sends a bot to a fight call: shown out of `docked_here` if it was
+    /// docked, and if it is in space already, turned hostile and on its way.
+    pub fn meet(&mut self, w: &mut WorldState, i: u32, bot: &Bot, m: Meet, docked_here: Option<i32>) {
+        self.meets.insert(i, m);
+        if let Some(station) = docked_here {
+            self.undock.insert(i, station);
+        }
+        let Some(&(system, ship)) = self.shown.get(&i) else { return };
+        let system = system as i64;
+        let from = w.parks.get_mut(&system).and_then(|p| p.ships.get_mut(&ship)).map(|s| {
+            if let Some(brain) = s.npc.as_mut() {
+                brain.set_passive(false);
+            }
+            s.pos
+        });
+        let course = match (from, w.parks.get(&system)) {
+            (Some(from), Some(park)) => self.course(i, bot, park, from),
+            _ => return,
+        };
+        steer(w, system, ship, course);
+    }
+
+    /// The fight call is over for a bot: back to its errands.
+    pub fn end_meet(&mut self, i: u32) {
+        if self.meets.remove(&i).is_some() {
+            self.undock.remove(&i);
         }
     }
 
@@ -194,6 +248,13 @@ impl Presence {
                 Some(s) if (s.pos - from).len() > RALLY_WARP => Command::Warp { target: s.pos, range: 0.0 },
                 Some(s) => Command::Orbit { target: s.id, range: super::hire::ESCORT_RANGE },
                 None => Command::Stop,
+            };
+        }
+        if let Some(m) = self.meets.get(&i).filter(|m| m.system == bot.system && bot.pod.is_none()) {
+            return if (m.point - from).len() > RALLY_WARP {
+                Command::Warp { target: m.point, range: 0.0 }
+            } else {
+                Command::Orbit { target: m.anchor, range: MEET_ORBIT }
             };
         }
         match self.rally.get(&i) {
@@ -306,8 +367,8 @@ impl Presence {
                 Change::Undocked { bot, station } => {
                     let b = &bots[bot as usize];
                     if observed.contains(&b.system) && !self.shown.contains_key(&bot) && self.room(b.system) {
-                        let at = w.parks.get(&(b.system as i64)).and_then(|p| p.celestial(station as i64))
-                            .map(|s| self.station_exit(s, b, &ids[bot as usize]));
+                        let at = w.parks.get_mut(&(b.system as i64))
+                            .and_then(|park| self.station_exit(park, station as i64, b, &ids[bot as usize]));
                         self.show(&mut w, bot, b, &ids[bot as usize], at, None, now);
                     }
                 }
@@ -369,10 +430,11 @@ impl Presence {
                     }
                 }
                 let b = &bots[i as usize];
-                let station = self.undock.remove(&i).and_then(|s| w.parks.get(&(system as i64))?.celestial(s as i64).cloned());
-                if let Some(station) = station {
+                let at = self.undock.remove(&i).and_then(|station| {
+                    self.station_exit(w.parks.get_mut(&(system as i64))?, station as i64, b, &ids[i as usize])
+                });
+                if let Some(at) = at {
                     // Docked here: out of the station.
-                    let at = self.station_exit(&station, b, &ids[i as usize]);
                     self.show(&mut w, i, b, &ids[i as usize], Some(at), None, now);
                 } else if fleet {
                     let gate = w.parks.get(&(system as i64)).and_then(|p| pick(p, GROUP_STARGATE, b.id).cloned());
@@ -503,13 +565,40 @@ impl Presence {
         self.shown.values().filter(|(s, _)| *s == system).count() < self.cap
     }
 
-    fn station_exit(&self, station: &Celestial, bot: &Bot, id: &Identity) -> Vec3 {
+    fn station_exit(&self, park: &mut Park, station_id: i64, bot: &Bot, id: &Identity) -> Option<Vec3> {
+        park.advance(crate::destiny::tick_now());
+        let station = park.celestial(station_id)?;
         let hull = if bot.pod.is_some() { TYPE_CAPSULE } else { id.hull };
         let radius = self.hulls.get(&hull).map_or(20.0, |h| h.radius.max(20.0));
-        match station.undock {
+        let nominal = match station.undock {
             Some((entry, orientation)) => station.pos + space::undock_exit(entry, orientation, station.radius, radius).0,
             None => beside(station, bot.id, 2_000.0 + radius),
+        };
+
+        // Move a materializing bot sideways along the station's tangent to
+        // clear the hulls already using the exit without moving into the station.
+        let outward = (nominal - station.pos).unit();
+        let axis = if outward.y.abs() < 0.9 { Vec3::new(0.0, 1.0, 0.0) } else { Vec3::new(1.0, 0.0, 0.0) };
+        let side = outward.cross(axis).unit();
+        let mut blocked: Vec<_> = park.ships.values().filter(|ship| ship.massive()).filter_map(|ship| {
+            let delta = ship.pos - nominal;
+            let along = delta.dot(side);
+            let reach = radius + ship.stats.radius + UNDOCK_SHIP_CLEARANCE;
+            let half_sq = reach * reach - (delta - side * along).len_sq();
+            if half_sq <= 0.0 { return None; }
+            let half = half_sq.sqrt();
+            (along + half > 0.0).then_some((along - half, along + half))
+        }).collect();
+        blocked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+        let mut offset: f64 = 0.0;
+        for (start, end) in blocked {
+            if start > offset { break; }
+            offset = offset.max(end);
         }
+        if offset > 0.0 {
+            tracing::debug!(bot = bot.id, station = station.id, offset, "cleared occupied bot undock lane");
+        }
+        Some(nominal + side * offset)
     }
 
     /// Puts a bot's ship in space: at `at`, or where its activity puts it;
@@ -534,20 +623,28 @@ impl Presence {
         let pos = beside_player.or(at).unwrap_or_else(|| appear_at(bot, park));
         let command = self.course(i, bot, park, pos);
         let pirate = bot.role == super::behaviour::Role::Pirate && PIRATES_ATTACK_PLAYERS.load(Ordering::Relaxed);
-        let hostile = self.raiders.contains(&i) || (pirate && park.wildlife.security < HIGH_SEC);
+        let hostile = self.raiders.contains(&i) || self.meets.contains_key(&i) || (pirate && park.wildlife.security < HIGH_SEC);
         // Its fitting and what it carries, for its wreck and its killmail.
         let mut loot: Vec<(i64, i64)> = Vec::new();
         let mut punch = 1.0;
+        let mut drones = None;
+        let mut fitted = 0;
         if bot.pod.is_none() {
             if let Some(yard) = &self.yard {
-                let fitting = yard.fitting(hull.type_id as i32, bot.id as u64, bot.isk > 1.0e9);
+                let fitting = yard.fitting(hull.type_id as i32, bot.role, bot.id as u64, bot.isk > 1.0e9);
                 punch = yard.punch(&fitting);
+                drones = yard.combat_drones(&fitting).and_then(|(t, n)| {
+                    Some(crate::drones::BotDrones { kind: self.hulls.get(&(t as i64))?.clone(), count: n })
+                });
                 loot.extend(fitting.into_iter().map(|(t, n)| (t as i64, n)));
+                fitted = loot.len();
             }
             loot.extend(bot.hold.iter().map(|(t, n)| (*t as i64, *n)));
         }
         let mut ship = ship_for(bot, id, ship_id, hull, pos, command.clone(), hostile, now, punch);
         ship.bot_loot = loot;
+        ship.bot_fitted = fitted;
+        ship.bot_drones = drones;
         space::add_ship(w, system, ship);
         // Apply the order through Park::command so the server enters warp at
         // the same time as the clients receiving the WarpTo opcode.
@@ -567,6 +664,11 @@ impl Presence {
         if let Some((target, guid)) = effect {
             let tick = w.parks.get(&(system as i64)).map_or(0, |p| p.tick);
             space::broadcast(w, system as i64, None, vec![space::special_fx(tick, ship, Some(target), guid)]);
+        }
+        // Its drones leave with it.
+        let drones = w.parks.get(&(system as i64)).map(|p| crate::drones::bot_drone_ids(p, ship)).unwrap_or_default();
+        for drone in drones {
+            space::remove_ship(w, system as i64, drone);
         }
         space::remove_ship(w, system as i64, ship);
     }
@@ -814,6 +916,40 @@ mod tests {
         let hull = NpcType::with(587, 25, 30.0, 1e6, &[(attr::MAX_VELOCITY, 300.0), (attr::AGILITY, 3.0), (attr::HP, 300.0)]);
         let capsule = NpcType::with(TYPE_CAPSULE, 29, 25.0, 32_000.0, &[(attr::MAX_VELOCITY, 1_000.0), (attr::AGILITY, 1.0), (attr::HP, 200.0)]);
         Presence::new(HashMap::from([(587, hull), (TYPE_CAPSULE, capsule)]), PER_SYSTEM)
+    }
+
+    #[test]
+    fn a_bot_undocks_clear_of_a_capital_aligning_in_the_exit_lane() {
+        let (world, atlas) = (watched_world(), atlas());
+        let (bot, id) = miner();
+        let station_id = 60_000_001;
+        let mut station = celestial(station_id, 15, Vec3::ZERO, None);
+        let heading = Vec3::new(1.0, 0.0, 0.0);
+        station.undock = Some((heading, heading));
+        let mut presence = presence();
+        let nominal = space::undock_exit(heading, heading, station.radius, 30.0).0;
+        {
+            let mut w = world.lock();
+            let park = w.parks.get_mut(&(HERE as i64)).unwrap();
+            park.celestials.push(station);
+            park.tick = crate::destiny::tick_now();
+            let player = park.ships.get_mut(&900).unwrap();
+            player.stats = ShipStats::new(1_650.0, 1_012_500_000.0, 0.02, 87.5, 0.5);
+            player.pos = nominal + heading * 1_200.0;
+            player.vel = heading * 60.0;
+            park.command(900, Command::Warp { target: heading * 2.0e12, range: 0.0 });
+        }
+        let by_char = HashMap::from([(bot.id as i64, 0)]);
+        let ship_id = id.ship;
+        presence.sync(
+            &world, &atlas, &mut [bot], &[id], &by_char,
+            vec![Change::Undocked { bot: 0, station: station_id as i32 }], &mut Rng::seeded(1),
+        );
+        let mut w = world.lock();
+        let park = w.parks.get_mut(&(HERE as i64)).unwrap();
+        assert!(park.surface_distance(900, ship_id).unwrap() > 0.0, "the bot appeared inside the capital");
+        park.advance(park.tick + 8);
+        assert!(park.ships[&900].in_warp(), "the capital should finish aligning without losing speed");
     }
 
     #[test]
