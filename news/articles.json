@@ -466,5 +466,11 @@
     "publishedMs": 1794604762426,
     "title": "Your game no longer drowns in a big battle",
     "body": "<p>A game that can't keep up in a big battle now gets fewer ships on its own, instead of falling behind until it crashes.</p>\n<ul>\n<li><b>The server backs off by itself.</b> If your game asks for the whole grid again within 30 seconds of the last time, it is sent 40% fewer ships, down to 60, until it stops falling behind. While it keeps up, it gets a quarter more every 45 seconds, back up to the setting.</li>\n<li><b>\"Ships your client is sent\" on the Bots page is now the most your game is sent</b>, not a fixed number. 250 suits most PCs.</li>\n</ul>\n<p>Before this, a game set to 500 asked for the whole grid 13 times in a minute, every time getting all 500 ships rebuilt, until it ran out and closed.</p>"
+  },
+  {
+    "published": "2026-11-13 21:45 UTC",
+    "publishedMs": 1794606306987,
+    "title": "Your game can use 4 GB of memory",
+    "body": "<p><b>Your game can now use up to 4 GB of memory instead of 2.</b> EVE 2.10 is a 32-bit program, and Windows gives a 32-bit program 2 GB unless the program says it can handle more. A big battle can use those 2 GB up, and the game then closes without warning.</p>\n<ul>\n<li><code>Client.bat</code> now sets the one-bit \"large address aware\" flag in <code>bin\\exefile.exe</code> when it prepares your game. On 64-bit Windows, that gives the game 4 GB.</li>\n<li>The original <code>exefile.exe</code> is kept in the <code>.rmr-backup</code> folder inside your EVE folder.</li>\n<li>To go back to 2 GB, run <code>Client.bat --memory-2gb</code>.</li>\n<li>If the game is running when <code>Client.bat</code> prepares it, Windows won't let the file change. The flag is then set the next time.</li>\n</ul>\n<p>Run <code>Client.bat</code> once with the game closed to apply it. If your game still closes in a big battle, open Task Manager and watch <code>exefile.exe</code>'s memory before it happens, and tell us what it reached.</p>"
   }
 ]

@@ -2,6 +2,19 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Your game can use 4 GB of memory
+
+*2026-11-13 21:45 UTC*
+
+**Your game can now use up to 4 GB of memory instead of 2.** EVE 2.10 is a 32-bit program, and Windows gives a 32-bit program 2 GB unless the program says it can handle more. A big battle can use those 2 GB up, and the game then closes without warning.
+
+- `Client.bat` now sets the one-bit "large address aware" flag in `bin\exefile.exe` when it prepares your game. On 64-bit Windows, that gives the game 4 GB.
+- The original `exefile.exe` is kept in the `.rmr-backup` folder inside your EVE folder.
+- To go back to 2 GB, run `Client.bat --memory-2gb`.
+- If the game is running when `Client.bat` prepares it, Windows won't let the file change. The flag is then set the next time.
+
+Run `Client.bat` once with the game closed to apply it. If your game still closes in a big battle, open Task Manager and watch `exefile.exe`'s memory before it happens, and tell us what it reached.
+
 ## Your game no longer drowns in a big battle
 
 *2026-11-13 21:19 UTC*

@@ -4,12 +4,13 @@ rem Red Moon Rising launcher: pick a server, press Play. It keeps a list of
 rem servers (this PC, others on your local network), shows each one's status and
 rem news, points your EVE 2.10 (build 3913) client at the chosen one and starts
 rem it. Players need only this file and their client; Start.bat runs a server.
-rem Usage: Client.bat [server-address[:port]] [--client "EVE folder"] [--no-launch]
+rem Usage: Client.bat [server-address[:port]] [--client "EVE folder"] [--no-launch] [--memory-2gb]
 set "RMR_LAUNCHER=%~f0"
 set "RMR_INVOCATION_DIRECTORY=%CD%"
 set "RMR_SERVER_ARG="
 set "RMR_CLIENT_DIRECTORY="
 set "RMR_NO_LAUNCH="
+set "RMR_CLIENT_2GB="
 :parse
 if "%~1"=="" goto parsed
 if /i "%~1"=="--help" goto help
@@ -24,6 +25,11 @@ if /i "%~1"=="--no-launch" (
     shift
     goto parse
 )
+if /i "%~1"=="--memory-2gb" (
+    set "RMR_CLIENT_2GB=1"
+    shift
+    goto parse
+)
 if /i "%~1"=="--client" (
     set "RMR_CLIENT_DIRECTORY=%~2"
     shift
@@ -35,10 +41,12 @@ shift
 goto parse
 :help
 echo Red Moon Rising launcher
-echo Usage: Client.bat [server-address[:port]] [--client "EVE folder"] [--no-launch]
+echo Usage: Client.bat [server-address[:port]] [--client "EVE folder"] [--no-launch] [--memory-2gb]
 echo With no address it opens the launcher: servers on the left, news, and Play.
 echo With an address it points EVE there and starts it straight away (port 26000
 echo unless given). --no-launch prepares the client without starting it.
+echo The client is let use up to 4 GB of memory on 64-bit Windows, not 2;
+echo --memory-2gb puts it back to 2 GB (the original game, kept in .rmr-backup).
 exit /b 0
 :parsed
 set "RMR_PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -191,6 +199,36 @@ function Write-RmrFile {
     } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
 }
 
+# A 32-bit program gets 2 GB of memory unless its header says it can take
+# more (IMAGE_FILE_LARGE_ADDRESS_AWARE); with the flag, 64-bit Windows gives
+# it 4 GB. EVE 2.10 was built without it, and a big battle can use the 2 GB
+# up. This sets (or, with -Enable $false, clears) that one bit in
+# bin\exefile.exe; the original is kept in .rmr-backup by Write-RmrFile.
+# Returns $null, or why it could not.
+function Set-RmrLargeAddressAware {
+    param([string]$ClientDirectory, [bool]$Enable = $true)
+    $relative = 'bin\exefile.exe'
+    try {
+        $bytes = [IO.File]::ReadAllBytes((Join-Path $ClientDirectory $relative))
+        if ($bytes.Length -lt 0x40 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { return 'exefile.exe is not a Windows program.' }
+        $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+        if ($pe -lt 0x40 -or ($pe + 24) -gt $bytes.Length -or [BitConverter]::ToUInt32($bytes, $pe) -ne 0x00004550) { return 'exefile.exe has no PE header.' }
+        # COFF header: Machine (i386), then Characteristics 18 bytes on.
+        if ([BitConverter]::ToUInt16($bytes, $pe + 4) -ne 0x014C) { return 'exefile.exe is not a 32-bit x86 program.' }
+        $at = $pe + 22
+        $flags = [int][BitConverter]::ToUInt16($bytes, $at)
+        if ((($flags -band 0x20) -ne 0) -eq $Enable) { return $null }
+        $flags = if ($Enable) { $flags -bor 0x20 } else { $flags -band 0xFFDF }
+        $bytes[$at] = [byte]($flags -band 0xFF)
+        $bytes[$at + 1] = [byte](($flags -shr 8) -band 0xFF)
+        Write-RmrFile $ClientDirectory $relative $bytes
+        return $null
+    } catch {
+        # Most often the game is running and Windows holds the file: next time.
+        return ('exefile.exe could not be changed: ' + $_.Exception.Message)
+    }
+}
+
 function Prepare-RmrClient {
     param([Parameter(Mandatory=$true)][string]$ClientDirectory, [string]$ServerBind = '127.0.0.1', [int]$ServerPort = 26000)
     if (-not (Test-RmrClient $ClientDirectory)) { throw "Invalid EVE 2.10 build 3913 client: $ClientDirectory" }
@@ -227,7 +265,10 @@ function Prepare-RmrClient {
     Write-RmrFile $ClientDirectory 'script\rmr_connection.py' ([Text.Encoding]::ASCII.GetBytes($script:RmrClientConnection))
     Write-RmrFile $ClientDirectory 'script\rmr_login.py' ([Text.Encoding]::ASCII.GetBytes($script:RmrClientLogin))
     Write-RmrFile $ClientDirectory 'Start.bat' ([Text.Encoding]::ASCII.GetBytes($start))
-    return [pscustomobject]@{ ClientDirectory = $ClientDirectory; Launcher = (Join-Path $ClientDirectory 'Start.bat') }
+    # Up to 4 GB of memory, not 2, unless asked for the original (--memory-2gb).
+    $memory = Set-RmrLargeAddressAware -ClientDirectory $ClientDirectory -Enable (-not $env:RMR_CLIENT_2GB)
+    if ($memory) { Write-Log ('Client memory: ' + $memory) }
+    return [pscustomobject]@{ ClientDirectory = $ClientDirectory; Launcher = (Join-Path $ClientDirectory 'Start.bat'); MemoryNote = $memory }
 }
 
 function Prepare-RmrGameClient($Settings) {
