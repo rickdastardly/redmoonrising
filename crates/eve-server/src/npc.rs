@@ -1040,6 +1040,15 @@ pub mod slot {
     pub fn scrambler(ship: i64) -> i64 {
         ship + 2_000_000_000_000
     }
+    /// A bot's `k`th turret (of up to eight), mounted where the client
+    /// draws it.
+    pub fn mount(ship: i64, k: usize) -> i64 {
+        ship + (3 + k as i64) * 1_000_000_000_000
+    }
+    /// A bot's `k`th missile launcher.
+    pub fn launcher_mount(ship: i64, k: usize) -> i64 {
+        -mount(ship, k)
+    }
 }
 
 /// A module template for an entity's weapon.
@@ -1134,10 +1143,10 @@ const EFFECT_WARP_SCRAMBLE_FOR_ENTITY: i64 = 563;
 const GUID_WEB: &str = "effects.ModifyTargetSpeed";
 const GUID_SCRAMBLE: &str = "effects.WarpScramble";
 
-const EFFECT_TARGET_ATTACK: i64 = 10;
-const EFFECT_MISSILE_LAUNCHING: i64 = 569;
+pub(crate) const EFFECT_TARGET_ATTACK: i64 = 10;
+pub(crate) const EFFECT_MISSILE_LAUNCHING: i64 = 569;
 const GUID_TURRET: &str = "effects.Laser";
-const GUID_MISSILE: &str = "effects.MissileDeployment";
+pub(crate) const GUID_MISSILE: &str = "effects.MissileDeployment";
 const MISSILE_VELOCITY_MULTIPLIER: i32 = 645;
 const MISSILE_FLIGHT_MULTIPLIER: i32 = 646;
 const MISSILE_CLOUD_MULTIPLIER: i32 = 858;
@@ -1321,9 +1330,18 @@ fn think_one(park: &mut Park, id: i64, now: i64, seen: &[Seen], enemies: &HashSe
         return;
     }
     let mut started = Vec::new();
+    let mut stopped = Vec::new();
     for w in &brain.weapons {
         match fight.module_mut(w.module_id) {
-            Some(running) => running.target = Some(target),
+            // A new target: the client stops drawing fire at the old one and
+            // starts on the new.
+            Some(running) if running.target != Some(target) => {
+                stopped.push(running.clone());
+                running.target = Some(target);
+                running.started_ms = now;
+                started.push(running.clone());
+            }
+            Some(_) => {}
             None => {
                 let mut m = w.clone();
                 m.target = Some(target);
@@ -1336,6 +1354,9 @@ fn think_one(park: &mut Park, id: i64, now: i64, seen: &[Seen], enemies: &HashSe
         }
     }
     let tick = park.tick;
+    for m in stopped {
+        out.destiny(park.solar_system_id, crate::fight::module_fx(tick, id, &m, false));
+    }
     for m in started {
         out.destiny(park.solar_system_id, crate::fight::module_fx(tick, id, &m, true));
     }

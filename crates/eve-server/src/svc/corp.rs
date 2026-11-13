@@ -157,7 +157,21 @@ async fn corp_registry(ctx: &Ctx<'_>, method: &str, args: &[Value]) -> Outcome {
         "GetRoleGroups" => role_groups(ctx).await,
         "GetSharesByShareholder" => shares_by_shareholder(ctx, arg0.unwrap_or(0) != 0).await,
         "GetInfoWindowDataForChar" => info_window_data_for_char(ctx, arg0.unwrap_or(0)).await,
-        "GetTitles" => index_rowset(TITLE_HEADER, "titleID", Vec::new()),
+        // Every corporation has its sixteen title slots (1, 2, 4 ... 32768),
+        // untitled and with no roles until a director sets them; the Titles
+        // tab reads one row a slot and fails on none.
+        "GetTitles" => index_rowset(
+            TITLE_HEADER,
+            "titleID",
+            (0..16)
+                .map(|n| {
+                    let id = 1i64 << n;
+                    let mut row = vec![Value::Int(id), Value::bytes(format!("Untitled {}", n + 1).as_str())];
+                    row.extend(std::iter::repeat_n(Value::Long(0), TITLE_HEADER.len() - 2));
+                    (Value::Int(id), Value::List(row))
+                })
+                .collect(),
+        ),
         // The stations holding items locked down by a corporation vote.
         "GetLockedItemLocations" => crate::svc::votes::locked_locations(ctx).await,
         "GetMemberIDsWithMoreThanAvgShares" => Value::List(Vec::new()),

@@ -109,22 +109,27 @@ async fn keyed(ctx: &Ctx<'_>, what: &str, sql: &str, ids: &[i32]) -> Value {
 }
 
 async fn owners(ctx: &Ctx<'_>, ids: &[i32]) -> Value {
+    // Last of all, a type: the client looks some up as owners, such as the
+    // NPC killed in a security status change (standing event 89's int_1).
     const SQL: &str = r#"
         SELECT k.id AS "ownerID",
-               COALESCE(o."ownerName", c."characterName", co."corporationName", a."allianceName") AS "ownerName",
+               COALESCE(o."ownerName", c."characterName", co."corporationName", a."allianceName", t."typeName") AS "ownerName",
                COALESCE(NULLIF(o."typeID", 0), NULLIF(c."typeID", 0), bt."typeID",
                         CASE WHEN co."corporationID" IS NOT NULL THEN 2 END,
-                        CASE WHEN a."allianceID" IS NOT NULL THEN 16159 END) AS "typeID"
+                        CASE WHEN a."allianceID" IS NOT NULL THEN 16159 END,
+                        t."typeID") AS "typeID"
           FROM unnest($1::int[]) AS k(id)
           LEFT JOIN "eveStaticOwners" o  ON o."ownerID"       = k.id
           LEFT JOIN "character_"     c   ON c."characterID"   = k.id
           LEFT JOIN "bloodlineTypes" bt  ON bt."bloodlineID"  = c."bloodlineID"
           LEFT JOIN "corporation"    co  ON co."corporationID" = k.id
           LEFT JOIN alliances        a   ON a."allianceID"     = k.id
-         WHERE COALESCE(o."ownerName", c."characterName", co."corporationName", a."allianceName") IS NOT NULL
+          LEFT JOIN "invTypes"       t   ON t."typeID"         = k.id AND k.id < 500000
+         WHERE COALESCE(o."ownerName", c."characterName", co."corporationName", a."allianceName", t."typeName") IS NOT NULL
            AND COALESCE(NULLIF(o."typeID", 0), NULLIF(c."typeID", 0), bt."typeID",
                         CASE WHEN co."corporationID" IS NOT NULL THEN 2 END,
-                        CASE WHEN a."allianceID" IS NOT NULL THEN 16159 END) IS NOT NULL"#;
+                        CASE WHEN a."allianceID" IS NOT NULL THEN 16159 END,
+                        t."typeID") IS NOT NULL"#;
     keyed(ctx, "GetMultiOwnersEx", SQL, ids).await
 }
 

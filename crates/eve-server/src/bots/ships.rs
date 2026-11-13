@@ -68,6 +68,8 @@ const LAUNCHER_ROCKET: i32 = 507;
 const LAUNCHER_SIEGE: i32 = 508;
 const LAUNCHER_STANDARD: i32 = 509;
 const LAUNCHER_HEAVY: i32 = 510;
+const LAUNCHER_CITADEL: i32 = 524;
+const CITADEL_TORPEDO: i32 = 476;
 const TORPEDO: i32 = 89;
 const LIGHT_MISSILE: i32 = 384;
 const HEAVY_MISSILE: i32 = 385;
@@ -581,6 +583,30 @@ impl Shipyard {
         self.modules.iter().filter(|m| m.group == COMBAT_DRONE).map(|m| m.type_id)
     }
 
+    /// The guns and launchers in a fitting and what they load, for its
+    /// ship to mount and fire them where players can see.
+    pub fn kit(&self, fitting: &[(i32, i64)]) -> Kit {
+        let group = |t: i32| self.module(t).map(|m| m.group).or_else(|| super::capitals::group_of(t));
+        let mut kit = Kit::default();
+        for &(t, n) in fitting {
+            let Some(g) = group(t) else { continue };
+            match g {
+                ENERGY_WEAPON | PROJECTILE_WEAPON | HYBRID_WEAPON => {
+                    if kit.turret.is_none_or(|(_, _, have)| n as usize > have) {
+                        kit.turret = Some((t, g, n as usize));
+                    }
+                }
+                LAUNCHER_CRUISE | LAUNCHER_ROCKET | LAUNCHER_SIEGE | LAUNCHER_STANDARD | LAUNCHER_HEAVY | LAUNCHER_CITADEL => {
+                    kit.launcher = Some((t, n as usize));
+                }
+                PROJECTILE_AMMO | HYBRID_CHARGE | FREQUENCY_CRYSTAL => kit.ammo = Some(t),
+                TORPEDO | LIGHT_MISSILE | HEAVY_MISSILE | CRUISE_MISSILE | ROCKET | CITADEL_TORPEDO => kit.missile = Some((t, g)),
+                _ => {}
+            }
+        }
+        kit
+    }
+
     /// How much harder a fitting hits than a plain one: named guns and
     /// launchers do a little more.
     pub fn punch(&self, fitting: &[(i32, i64)]) -> f64 {
@@ -593,6 +619,26 @@ impl Shipyard {
         1.0 + 0.05 * best as f64
     }
 }
+
+/// A fitting's weapons: its turrets (type, group, how many), launchers
+/// (type, how many), the charge its turrets load and the missiles (type,
+/// group) its launchers fire.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Kit {
+    pub turret: Option<(i32, i32, usize)>,
+    pub launcher: Option<(i32, usize)>,
+    pub ammo: Option<i32>,
+    pub missile: Option<(i32, i32)>,
+}
+
+pub const GROUP_ENERGY_WEAPON: i32 = ENERGY_WEAPON;
+pub const GROUP_PROJECTILE_WEAPON: i32 = PROJECTILE_WEAPON;
+pub const GROUP_ROCKET: i32 = ROCKET;
+pub const GROUP_LIGHT_MISSILE: i32 = LIGHT_MISSILE;
+pub const GROUP_HEAVY_MISSILE: i32 = HEAVY_MISSILE;
+pub const GROUP_CRUISE_MISSILE: i32 = CRUISE_MISSILE;
+pub const GROUP_TORPEDO: i32 = TORPEDO;
+pub const GROUP_CITADEL_TORPEDO: i32 = CITADEL_TORPEDO;
 
 /// The tier a bot moves up to, if its wallet allows: when it holds the next
 /// hull's price `CUSHION` times over.

@@ -611,6 +611,9 @@ fn launch(
     });
 }
 
+/// The most missiles drawn in flight in one system at once.
+const MISSILES_DRAWN_MOST: usize = 150;
+
 /// Puts a missile in flight on the screens of the pilots who can see both its
 /// launcher and its target: a free ball of the missile's type following the
 /// target at its flight speed, which the client draws leaving the launcher
@@ -640,6 +643,11 @@ pub fn missile_ball(
         .copied()
         .collect();
     if viewers.is_empty() || type_id <= 0 {
+        return None;
+    }
+    // In a battle of hundreds, every missile drawn is a ball the client
+    // adds and blows up; past this many in flight the rest still hit, unseen.
+    if park.missiles.iter().filter(|m| m.ball.is_some()).count() >= MISSILES_DRAWN_MOST {
         return None;
     }
     let id = npc::next_id();

@@ -126,6 +126,75 @@ pub fn fighters(hull: i64) -> Option<(i64, usize)> {
     })
 }
 
+// Capital modules and charges, from the 2007 database.
+const DUAL_GIGA_PULSE: i32 = 20444;
+const DUAL_1000MM_RAIL: i32 = 20448;
+const ION_SIEGE_BLASTER: i32 = 20450;
+const QUAD_3500MM_ARTY: i32 = 20454;
+const CITADEL_LAUNCHER: i32 = 20539;
+const SIEGE_MODULE: i32 = 20280;
+const CAPITAL_ARMOR_REPAIRER: i32 = 20701;
+const CAPITAL_SHIELD_BOOSTER: i32 = 20703;
+const CAPITAL_REMOTE_ARMOR: i32 = 24569;
+const DAMAGE_CONTROL: i32 = 2046;
+pub const CYNO_GENERATOR: i32 = 21096;
+const MULTIFREQUENCY_XL: i32 = 17686;
+const ANTIMATTER_XL: i32 = 17648;
+const PHASED_PLASMA_XL: i32 = 17674;
+const DOOM_TORPEDO: i32 = 17863;
+const THOR_TORPEDO: i32 = 17857;
+const JUDGEMENT: i32 = 24550;
+const OBLIVION: i32 = 24552;
+const AURORA_OMINAE: i32 = 24554;
+const GJALLARHORN: i32 = 23674;
+
+/// Groups of the capital weapons and charges above: energy, hybrid and
+/// projectile turrets, citadel launchers and their torpedoes, and the
+/// charges the turrets load.
+pub fn group_of(type_id: i32) -> Option<i32> {
+    Some(match type_id {
+        DUAL_GIGA_PULSE => 53,
+        DUAL_1000MM_RAIL | ION_SIEGE_BLASTER => 74,
+        QUAD_3500MM_ARTY => 55,
+        CITADEL_LAUNCHER => 524,
+        DOOM_TORPEDO | THOR_TORPEDO => 476,
+        MULTIFREQUENCY_XL => 86,
+        ANTIMATTER_XL => 85,
+        PHASED_PLASMA_XL => 83,
+        _ => return None,
+    })
+}
+
+/// What a capital hull flies with into a battle, as a 2007 pilot fitted
+/// it: dreadnoughts their race's siege guns or citadel launchers and a
+/// siege module, carriers fighters and capital remote repairers, titans
+/// their doomsday and a broadside of capital guns. None for other hulls.
+pub fn fit(hull: i32) -> Option<Vec<(i32, i64)>> {
+    let tank = |shield: bool| if shield { (CAPITAL_SHIELD_BOOSTER, 1) } else { (CAPITAL_ARMOR_REPAIRER, 1) };
+    Some(match hull {
+        // Dreadnoughts: Revelation, Phoenix, Moros, Naglfar.
+        19720 => vec![(DUAL_GIGA_PULSE, 3), (MULTIFREQUENCY_XL, 3), (SIEGE_MODULE, 1), tank(false), (DAMAGE_CONTROL, 1)],
+        19726 => vec![(CITADEL_LAUNCHER, 3), (DOOM_TORPEDO, 60), (SIEGE_MODULE, 1), tank(true), (DAMAGE_CONTROL, 1)],
+        19724 => vec![(ION_SIEGE_BLASTER, 3), (ANTIMATTER_XL, 300), (SIEGE_MODULE, 1), tank(false), (DAMAGE_CONTROL, 1)],
+        19722 => vec![(QUAD_3500MM_ARTY, 2), (PHASED_PLASMA_XL, 200), (CITADEL_LAUNCHER, 1), (THOR_TORPEDO, 20), (SIEGE_MODULE, 1), tank(true), (DAMAGE_CONTROL, 1)],
+        // Carriers: Archon, Chimera, Thanatos, Nidhoggur. Their fighters
+        // come from `fighters`.
+        23757 | 23911 => vec![(CAPITAL_REMOTE_ARMOR, 2), tank(false), (DAMAGE_CONTROL, 1)],
+        23915 | 24483 => vec![(CAPITAL_REMOTE_ARMOR, 2), tank(true), (DAMAGE_CONTROL, 1)],
+        // Titans: Avatar, Leviathan, Erebus, Ragnarok.
+        11567 => vec![(JUDGEMENT, 1), (DUAL_GIGA_PULSE, 4), (MULTIFREQUENCY_XL, 4), tank(false), (DAMAGE_CONTROL, 1)],
+        3764 => vec![(AURORA_OMINAE, 1), (CITADEL_LAUNCHER, 4), (DOOM_TORPEDO, 80), tank(true), (DAMAGE_CONTROL, 1)],
+        671 => vec![(OBLIVION, 1), (ION_SIEGE_BLASTER, 4), (ANTIMATTER_XL, 400), tank(false), (DAMAGE_CONTROL, 1)],
+        23773 => vec![(GJALLARHORN, 1), (QUAD_3500MM_ARTY, 4), (PHASED_PLASMA_XL, 400), tank(true), (DAMAGE_CONTROL, 1)],
+        _ => return None,
+    })
+}
+
+/// The recon hulls that carry a cynosural field generator into a battle.
+pub fn cyno_hull(hull: i32) -> bool {
+    matches!(hull, 11965 | 11957 | 11969 | 11963)
+}
+
 /// A pilot flying something special for a battle.
 #[derive(Debug, Clone, Copy)]
 pub struct Assigned {

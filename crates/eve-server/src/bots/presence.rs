@@ -471,10 +471,12 @@ impl Presence {
                     if !fleet {
                         break;
                     }
+                    // A fleet's ship makes room by sending another bot away
+                    // if it can; if all here are fleets, it comes anyway: a
+                    // battle brings what it brings.
                     let spare = self.shown.iter().find(|(j, (s, _))| *s == system && !self.rally.contains_key(j)).map(|(j, _)| *j);
-                    match spare {
-                        Some(j) => self.hide(&mut w, j, ids, None),
-                        None => break,
+                    if let Some(j) = spare {
+                        self.hide(&mut w, j, ids, None);
                     }
                 }
                 let b = &bots[i as usize];
@@ -753,9 +755,15 @@ impl Presence {
         let mut punch = 1.0;
         let mut drones = None;
         let mut fitted = 0;
+        let mut kit = super::ships::Kit::default();
         if bot.pod.is_none() {
             if let Some(yard) = &self.yard {
-                let fitting = yard.fitting(hull.type_id as i32, bot.role, bot.id as u64, bot.isk > 1.0e9);
+                // Capitals fly as 2007 pilots fitted them; the rest as the yard fits them.
+                let mut fitting = super::capitals::fit(hull.type_id as i32).unwrap_or_else(|| yard.fitting(hull.type_id as i32, bot.role, bot.id as u64, bot.isk > 1.0e9));
+                if super::capitals::cyno_hull(hull.type_id as i32) && bot.activity == Activity::Sieging {
+                    fitting.push((super::capitals::CYNO_GENERATOR, 1));
+                }
+                kit = yard.kit(&fitting);
                 punch = yard.punch(&fitting);
                 drones = yard.combat_drones(&fitting).and_then(|(t, n)| {
                     Some(crate::drones::BotDrones { kind: self.hulls.get(&(t as i64))?.clone(), count: n })
@@ -772,7 +780,7 @@ impl Presence {
             }
             loot.extend(bot.hold.iter().map(|(t, n)| (*t as i64, *n)));
         }
-        let mut ship = ship_for(bot, id, ship_id, hull, pos, command.clone(), hostile, now, punch);
+        let mut ship = ship_for(bot, id, ship_id, hull, pos, command.clone(), hostile, now, punch, &kit);
         ship.bot_loot = loot;
         ship.bot_fitted = fitted;
         ship.bot_drones = drones;
@@ -862,6 +870,72 @@ pub fn arms(hull: &NpcType, ship_id: i64, pirate: bool, punch: f64) -> Option<(V
     let gun = Gun { optimal, falloff, tracking, optimal_sig: sig };
     let fly = (optimal * 0.7).max(2_500.0);
     Some((vec![crate::npc::bot_gun(hull, ship_id, damage, gun, cycle)], optimal + falloff, fly))
+}
+
+/// A bot's guns as the client sees them: the one gun `arms` gives it
+/// becomes the turrets and launchers of its fitting (`kit`), each a module
+/// of its own, firing its own charge, so the client mounts the turrets on
+/// the hull and draws every shot, and missiles fly to their targets. The
+/// damage is the same, shared out. The second list is the turrets to
+/// mount: (module, type).
+pub fn mounted(weapons: Vec<Active>, ship_id: i64, kit: &super::ships::Kit) -> (Vec<Active>, Vec<(i64, i64)>) {
+    use crate::combat::{Action, Ammo};
+    use super::ships::{GROUP_CITADEL_TORPEDO, GROUP_CRUISE_MISSILE, GROUP_ENERGY_WEAPON, GROUP_HEAVY_MISSILE, GROUP_LIGHT_MISSILE, GROUP_PROJECTILE_WEAPON, GROUP_ROCKET, GROUP_TORPEDO};
+    const MOST: usize = 8;
+    let Some(base) = weapons.iter().find(|w| matches!(w.action, Action::Turret { .. })).cloned() else { return (weapons, Vec::new()) };
+    let Action::Turret { damage, gun } = base.action else { return (weapons, Vec::new()) };
+    let turrets = kit.turret.map_or(0, |(_, _, n)| n.min(MOST));
+    let launchers = if kit.missile.is_some() { kit.launcher.map_or(0, |(_, n)| n.min(MOST)) } else { 0 };
+    if turrets + launchers == 0 {
+        return (weapons, Vec::new());
+    }
+    let mut out: Vec<Active> = weapons.into_iter().filter(|w| !matches!(w.action, Action::Turret { .. })).collect();
+    let mut hardpoints = Vec::new();
+    let share = turrets as f64 / (turrets + launchers) as f64;
+    if let Some((turret, group, _)) = kit.turret.filter(|_| turrets > 0) {
+        let guid = match group {
+            GROUP_ENERGY_WEAPON => "effects.Laser",
+            GROUP_PROJECTILE_WEAPON => "effects.ProjectileFired",
+            _ => "effects.HybridFired",
+        };
+        let each = damage.map(|d| d * share / turrets as f64);
+        for k in 0..turrets {
+            let mut m = base.clone();
+            m.module_id = crate::npc::slot::mount(ship_id, k);
+            m.type_id = turret as i64;
+            m.guid = guid.to_string();
+            m.action = Action::Turret { damage: each, gun };
+            m.ammo = kit.ammo.map(|a| Ammo { item_id: 0, type_id: a as i64, quantity: 1, per_cycle: 0 });
+            hardpoints.push((m.module_id, m.type_id));
+            out.push(m);
+        }
+    }
+    if let (Some((missile, group)), true) = (kit.missile, launchers > 0) {
+        // (flight speed m/s, flight time ms, explosion radius, explosion velocity)
+        let (speed, flight, cloud, aoe) = match group {
+            GROUP_ROCKET => (2_250.0, 5_000.0, 20.0, 150.0),
+            GROUP_LIGHT_MISSILE => (3_750.0, 6_000.0, 40.0, 170.0),
+            GROUP_HEAVY_MISSILE => (3_750.0, 9_000.0, 125.0, 81.0),
+            GROUP_CRUISE_MISSILE => (3_750.0, 25_000.0, 300.0, 69.0),
+            GROUP_TORPEDO => (1_250.0, 24_000.0, 450.0, 71.0),
+            GROUP_CITADEL_TORPEDO => (1_500.0, 60_000.0, 2_000.0, 60.0),
+            _ => (3_750.0, 9_000.0, 125.0, 81.0),
+        };
+        let cycle = (base.duration_ms as f64).max(8_000.0);
+        let each = damage.map(|d| d * (1.0 - share) / launchers as f64 * cycle / base.duration_ms.max(1) as f64);
+        for k in 0..launchers {
+            let mut m = base.clone();
+            m.module_id = crate::npc::slot::launcher_mount(ship_id, k);
+            m.type_id = missile as i64;
+            m.effect_id = crate::npc::EFFECT_MISSILE_LAUNCHING;
+            m.guid = crate::npc::GUID_MISSILE.to_string();
+            m.duration_ms = cycle as i64;
+            m.action = Action::Missile { damage: each, flight_ms: flight as i64, range: speed * flight / 1_000.0, cloud, aoe_velocity: aoe };
+            m.ammo = None;
+            out.push(m);
+        }
+    }
+    (out, hardpoints)
 }
 
 /// The gate in `from` that leads to `to`.
@@ -979,7 +1053,7 @@ pub fn eject(park: &mut Park, ship: &Ship, now: i64, out: &mut crate::heartbeat:
         hull_lost: false,
         prime: 19,
     };
-    let pod = ship_for(&bot, &id, capsule, hull, ship.pos, Command::Stop, false, now, 1.0);
+    let pod = ship_for(&bot, &id, capsule, hull, ship.pos, Command::Stop, false, now, 1.0, &super::ships::Kit::default());
     park.ships.insert(capsule, pod);
     for (client, e) in space::add_ball_entries_for_nearby(park, capsule) {
         out.destiny_to(park.solar_system_id, client, e);
@@ -993,7 +1067,8 @@ fn player_ship(park: &Park, char_id: i64) -> Option<&Ship> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn ship_for(bot: &Bot, id: &Identity, ship_id: i64, hull: &NpcType, pos: Vec3, command: Command, hostile: bool, now: i64, punch: f64) -> Ship {
+#[allow(clippy::too_many_arguments)]
+fn ship_for(bot: &Bot, id: &Identity, ship_id: i64, hull: &NpcType, pos: Vec3, command: Command, hostile: bool, now: i64, punch: f64, kit: &super::ships::Kit) -> Ship {
     let a = |x: i32| hull.get(x);
     let top = a(attr::MAX_VELOCITY).max(50.0);
     let agility = if a(attr::AGILITY) > 0.0 { a(attr::AGILITY) } else { 1.0 };
@@ -1015,6 +1090,8 @@ fn ship_for(bot: &Bot, id: &Identity, ship_id: i64, hull: &NpcType, pos: Vec3, c
     let lock_range = armed.as_ref().map_or(30_000.0, |(_, reach, _)| (reach * 1.5).max(30_000.0));
     ship.fight = Some(crate::npc::entity_fighter(hull, lock_range, 1, top, now));
     if let Some((weapons, reach, fly)) = armed {
+        let (weapons, hardpoints) = mounted(weapons, ship_id, kit);
+        ship.hardpoints = hardpoints;
         ship.npc = Some(crate::npc::bot_brain(weapons, reach, fly, !hostile, command.clone(), now));
     }
     ship.speed_fraction = if matches!(command, Command::Warp { .. }) { 1.0 } else { CRUISE };

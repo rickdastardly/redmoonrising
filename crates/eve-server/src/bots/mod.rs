@@ -233,7 +233,7 @@ static SHOWN: AtomicUsize = AtomicUsize::new(0);
 static SETTINGS_VERSION: AtomicUsize = AtomicUsize::new(0);
 
 /// The most bots shown in one system, and the range of online activity.
-pub const SHOWN_RANGE: (usize, usize) = (10, 5_000);
+pub const SHOWN_RANGE: (usize, usize) = (10, 20_000);
 pub const ACTIVITY_RANGE: (f64, f64) = (0.1, 4.0);
 
 fn changed() {
@@ -488,7 +488,7 @@ impl SovWarfare {
 static SOV_WARFARE: AtomicU8 = AtomicU8::new(SovWarfare::Moderate as u8);
 /// The most ships one side brings to a battle.
 static BATTLE_SIZE: AtomicUsize = AtomicUsize::new(2_000);
-pub const BATTLE_SIZE_RANGE: (usize, usize) = (10, 3_000);
+pub const BATTLE_SIZE_RANGE: (usize, usize) = (10, 10_000);
 
 pub fn sov_warfare() -> SovWarfare {
     match SOV_WARFARE.load(Ordering::Relaxed) {
@@ -761,7 +761,15 @@ struct Tally {
     flushed_rows: u64,
     flush_time: Duration,
     worst_flush: Duration,
+    /// The slowest save of the bots' rows, which runs beside the loop.
+    worst_save: Duration,
+    /// What the slowest flush spent its time on.
+    worst_parts: String,
 }
+
+/// The bots' rows being saved beside the loop: who, the ISK each save
+/// moves (to put back if it fails), how it went and how long it took.
+type Saving = tokio::task::JoinHandle<(Vec<(u32, f64)>, Result<(), String>, Duration)>;
 
 /// Everything the simulation holds while it runs.
 struct Sim {
@@ -794,6 +802,12 @@ struct Sim {
     dirty: Vec<bool>,
     changed: Vec<u32>,
     hulls_changed: Vec<u32>,
+    /// A connection of its own for saving the bots' rows, so the loop goes
+    /// on while they are written.
+    saver: Option<Arc<Client>>,
+    saving: Option<Saving>,
+    /// The wallets are to be read back from the database.
+    balances_due: bool,
     said: std::collections::VecDeque<(i64, String)>,
     /// The dashboard settings last applied, and the online activity then.
     applied_settings: usize,
@@ -852,6 +866,9 @@ impl Sim {
             dirty: vec![true; n],
             changed: (0..n as u32).collect(),
             hulls_changed: Vec::new(),
+            saver: None,
+            saving: None,
+            balances_due: false,
             said: std::collections::VecDeque::new(),
             applied_settings: usize::MAX,
             applied_activity: activity_factor(),
@@ -953,6 +970,8 @@ impl Sim {
                         self.touch(i);
                     }
                     self.flush_all(RUNNING.load(Ordering::Relaxed)).await;
+                    // The last save waits to be done before the server stops.
+                    self.save_rows(true).await;
                     return;
                 }
             }
@@ -991,11 +1010,11 @@ impl Sim {
                 self.tally.flushes += 1;
                 self.tally.flush_time += took;
                 self.tally.worst_flush = self.tally.worst_flush.max(took);
+                // Wallets are read back between saves (`save_rows`), once
+                // their changes are written.
                 if last_balances.elapsed() >= BALANCES {
                     last_balances = Instant::now();
-                    if let Err(e) = reload_balances(&self.db, &mut self.bots, &self.by_char).await {
-                        error!("bots: reading wallets back: {}", crate::logging::chain(&e));
-                    }
+                    self.balances_due = true;
                 }
             }
             if last_report.elapsed() >= REPORT {
@@ -1022,7 +1041,10 @@ impl Sim {
                     *st = summary;
                 }
                 if self.tally.worst_flush > FLUSH / 2 {
-                    warn!("bots: a save took {:.1}s, half the time between saves", self.tally.worst_flush.as_secs_f64());
+                    warn!("bots: a save held the bots up {:.1}s, half the time between saves ({})", self.tally.worst_flush.as_secs_f64(), self.tally.worst_parts);
+                }
+                if self.tally.worst_save > FLUSH {
+                    info!("bots: saving the bots' rows took up to {:.1}s, beside the loop; saves of them wait their turn", self.tally.worst_save.as_secs_f64());
                 }
                 self.tally = Tally::default();
                 last_report = Instant::now();
@@ -1419,35 +1441,115 @@ impl Sim {
 
     /// Every few seconds: the changed bots, the economy, relations and kill
     /// reports saved; the dashboard's windows and the map's counts.
-    async fn flush_all(&mut self, running: bool) {
-        let rows = self.changed.len();
-        match flush(&self.db, &self.bots, &self.changed).await {
-            Ok(()) => {
-                for i in std::mem::take(&mut self.changed) {
-                    self.dirty[i as usize] = false;
-                    let b = &mut self.bots[i as usize];
-                    b.isk_saved = b.isk;
+    /// Saves the bots' changed rows beside the loop, on a connection of its
+    /// own: at 500,000 bots a save can take many seconds, and every bot (the
+    /// battles too) stood still while it did. One save at a time; `wait`
+    /// waits for it (before a shutdown). A failed save's changes are kept
+    /// for the next. Wallets due to be read back are read between saves,
+    /// when none is being written.
+    async fn save_rows(&mut self, wait: bool) {
+        if let Some(h) = self.saving.take() {
+            if !wait && !h.is_finished() {
+                self.saving = Some(h);
+                return;
+            }
+            self.collect(h).await;
+        }
+        if self.balances_due {
+            self.balances_due = false;
+            if let Err(e) = reload_balances(&self.db, &mut self.bots, &self.by_char).await {
+                error!("bots: reading wallets back: {}", crate::logging::chain(&e));
+            }
+        }
+        if self.changed.is_empty() {
+            return;
+        }
+        if self.saver.is_none() {
+            match crate::db::connect(&self.server.db_url).await {
+                Ok(c) => self.saver = Some(Arc::new(c)),
+                Err(e) => warn!("bots: no connection of its own for saving, saving in the loop: {}", crate::logging::chain(&e)),
+            }
+        }
+        let mut changed = std::mem::take(&mut self.changed);
+        // In character order, so row locks are always taken the same way.
+        changed.sort_unstable_by_key(|i| self.bots[*i as usize].id);
+        let rows = Rows::of(&self.bots, &changed);
+        let moved: Vec<(u32, f64)> = changed.iter().zip(&rows.delta).map(|(i, d)| (*i, *d)).collect();
+        for &i in &changed {
+            self.dirty[i as usize] = false;
+            let b = &mut self.bots[i as usize];
+            b.isk_saved = b.isk;
+        }
+        self.tally.flushed_rows += changed.len() as u64;
+        let db = self.saver.clone();
+        let h = match db {
+            Some(db) => tokio::spawn(async move {
+                let t = Instant::now();
+                let result = rows.write(&db).await.map_err(|e| crate::logging::chain(&e).to_string());
+                (moved, result, t.elapsed())
+            }),
+            None => {
+                let t = Instant::now();
+                let result = rows.write(&self.db).await.map_err(|e| crate::logging::chain(&e).to_string());
+                let took = t.elapsed();
+                tokio::spawn(async move { (moved, result, took) })
+            }
+        };
+        if wait {
+            self.collect(h).await;
+        } else {
+            self.saving = Some(h);
+        }
+    }
+
+    /// A save is done: how long it took, and its changes back in line for
+    /// the next if it failed.
+    async fn collect(&mut self, h: Saving) {
+        match h.await {
+            Ok((rows, result, took)) => {
+                self.tally.worst_save = self.tally.worst_save.max(took);
+                if let Err(e) = result {
+                    error!("bots: saving {} bot(s): {e}", rows.len());
+                    for (i, delta) in rows {
+                        self.bots[i as usize].isk_saved -= delta;
+                        self.touch(i);
+                    }
                 }
             }
-            Err(e) => error!("bots: saving {rows} bot(s): {}", crate::logging::chain(&e)),
+            Err(e) => error!("bots: the save of the bots' rows failed: {e}"),
         }
-        self.tally.flushed_rows += rows as u64;
+    }
+
+    async fn flush_all(&mut self, running: bool) {
+        let started = Instant::now();
+        let mut parts: Vec<(&str, Duration)> = Vec::new();
+        let mut mark = |name: &'static str, since: &mut Instant| {
+            parts.push((name, since.elapsed()));
+            *since = Instant::now();
+        };
+        let mut since = Instant::now();
+        self.save_rows(false).await;
+        mark("rows", &mut since);
         if !self.hulls_changed.is_empty() {
             let list = std::mem::take(&mut self.hulls_changed);
             if let Err(e) = save_hulls(&self.db, &self.bots, &self.ids, &list).await {
                 error!("bots: saving new ships: {}", crate::logging::chain(&e));
             }
         }
+        mark("hulls", &mut since);
         if let Err(e) = economy::flush(&mut self.econ, &self.db).await {
             error!("bots: saving the economy: {}", crate::logging::chain(&e));
         }
+        mark("economy", &mut since);
         if let Err(e) = relations::flush(&mut self.relations, &self.db).await {
             error!("bots: saving relations: {}", crate::logging::chain(&e));
         }
+        mark("relations", &mut since);
         let kills = std::mem::take(&mut self.politics.unseen_kills);
         if let Err(e) = write_kills(&self.db, &kills, &self.bots, &self.ids).await {
             error!("bots: writing kill reports: {}", crate::logging::chain(&e));
         }
+        mark("kills", &mut since);
         let mut events = panels::events(&self.events, &self.names);
         events["said"] = serde_json::Value::Array(self.said.iter().rev().map(|(t, l)| serde_json::json!({ "time": t / 10_000 - 11_644_473_600_000, "text": l })).collect());
         events["controls"] = serde_json::Value::Bool(controls_enabled());
@@ -1457,34 +1559,62 @@ impl Sim {
             followed: panels::followed(&self.db, &self.following, &self.bots, &self.ids, &self.econ, &self.atlas, &self.names).await,
             events,
         };
+        mark("panels", &mut since);
         self.server.world.lock().bot_panels = panels;
         publish_counts(&self.server, &self.bots, &self.politics, &self.sieges, running);
+        // Kept for the report: what the slowest flush spent its time on.
+        if started.elapsed() >= self.tally.worst_flush {
+            self.tally.worst_parts = parts.iter().map(|(n, d)| format!("{n} {:.1}s", d.as_secs_f64())).collect::<Vec<_>>().join(", ");
+        }
     }
 }
 
 /// Writes back where the changed bots are, whether they play, what their
 /// wallets gained or lost, and their homes, in one batch.
-async fn flush(db: &Client, bots: &[Bot], changed: &[u32]) -> Result<(), tokio_postgres::Error> {
-    if changed.is_empty() {
+/// The bots' rows to save: where each is, whether online, its home and the
+/// ISK it gained or spent since the last save.
+struct Rows {
+    ids: Vec<i32>,
+    stations: Vec<i32>,
+    systems: Vec<i32>,
+    homes: Vec<i32>,
+    online: Vec<i16>,
+    delta: Vec<f64>,
+}
+
+impl Rows {
+    fn of(bots: &[Bot], changed: &[u32]) -> Rows {
+        let pick = |f: &dyn Fn(&Bot) -> i32| changed.iter().map(|i| f(&bots[*i as usize])).collect::<Vec<i32>>();
+        Rows {
+            ids: pick(&|b| b.id),
+            stations: pick(&|b| b.station),
+            systems: pick(&|b| b.system),
+            homes: pick(&|b| b.home),
+            online: changed.iter().map(|i| i16::from(bots[*i as usize].online)).collect(),
+            // A change, not a value: what players paid them meanwhile stays.
+            delta: changed.iter().map(|i| bots[*i as usize].isk - bots[*i as usize].isk_saved).collect(),
+        }
+    }
+
+    async fn write(&self, db: &Client) -> Result<(), tokio_postgres::Error> {
+        flush(db, self).await
+    }
+}
+
+async fn flush(db: &Client, rows: &Rows) -> Result<(), tokio_postgres::Error> {
+    if rows.ids.is_empty() {
         return Ok(());
     }
-    let pick = |f: &dyn Fn(&Bot) -> i32| changed.iter().map(|i| f(&bots[*i as usize])).collect::<Vec<i32>>();
-    let ids = pick(&|b| b.id);
-    let stations = pick(&|b| b.station);
-    let systems = pick(&|b| b.system);
-    let homes = pick(&|b| b.home);
-    let online: Vec<i16> = changed.iter().map(|i| i16::from(bots[*i as usize].online)).collect();
-    // A change, not a value: what players paid them meanwhile stays.
-    let delta: Vec<f64> = changed.iter().map(|i| bots[*i as usize].isk - bots[*i as usize].isk_saved).collect();
+    let Rows { ids, stations, systems, homes, online, delta } = rows;
     let sql = r#"UPDATE "character_" c SET "stationID" = u.station, "solarSystemID" = u.system,
                         "constellationID" = s."constellationID", "regionID" = s."regionID", "online" = u.online, "balance" = c."balance" + u.delta
                    FROM unnest($1::int[], $2::int[], $3::int[], $4::smallint[], $5::float8[]) AS u(id, station, system, online, delta)
                    JOIN "mapSolarSystems" s ON s."solarSystemID" = u.system
                   WHERE c."characterID" = u.id"#;
-    db.execute(sql, &[&ids, &stations, &systems, &online, &delta]).await?;
+    db.execute(sql, &[ids, stations, systems, online, delta]).await?;
     let sql = r#"UPDATE "bots" b SET "homeStationID" = u.home FROM unnest($1::int[], $2::int[]) AS u(id, home)
                   WHERE b."characterID" = u.id AND b."homeStationID" <> u.home"#;
-    db.execute(sql, &[&ids, &homes]).await?;
+    db.execute(sql, &[ids, homes]).await?;
     Ok(())
 }
 

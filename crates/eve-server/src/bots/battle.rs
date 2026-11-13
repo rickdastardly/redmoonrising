@@ -37,7 +37,7 @@ use crate::combat::Rng;
 use crate::world::World;
 
 /// The most ships one side brings to a battle, allies included.
-pub const SIDE_MAX: u32 = 3_000;
+pub const SIDE_MAX: u32 = 10_000;
 const FLEET_MIN: u32 = 6;
 /// Room left in the system for bots that are not in either fleet.
 const ROOM_FOR_OTHERS: usize = 10;
@@ -54,13 +54,23 @@ const ATTRITION: f64 = 1.0 / 900.0;
 /// one, withdraws.
 const ROUT: f64 = 0.2;
 /// Reinforcements warp in this often, in waves.
-const REINFORCE: Duration = Duration::from_secs(8);
-/// The most ships one side brings onto the grid in a wave, so a watching
-/// client takes them in a few at a time rather than all at once.
-const WAVE_MOST: usize = 10;
-/// The most ships one side keeps on the grid in a battle asked for to be
-/// watched, whatever the shown-per-system setting allows.
-const SHOWCASE_ROOM: usize = 30;
+const REINFORCE: Duration = Duration::from_secs(5);
+/// The most ships one side warps onto the grid in a wave: hundreds landing
+/// in the same second stall a watching client for half a minute (it loads
+/// every new ship at once), and its ship seems to jump about as it catches
+/// up. A wave every few seconds fills the grid smoothly, with no limit on
+/// how many come in the end.
+const WAVE_MOST: usize = 25;
+/// Capitals jump through a cyno in waves of up to this many.
+const JUMP_WAVE_MOST: usize = 50;
+/// Fought where players see it: the subcapital fleets fight this long
+/// before the first side lights its cyno and its capitals jump in ...
+const CYNO_FIRST: Duration = Duration::from_secs(60);
+/// ... and the other side lights its own this long after they land.
+const CYNO_ANSWER: Duration = Duration::from_secs(40);
+/// Should the first side never get its capitals in, the other lights its
+/// cyno anyway this much later.
+const CYNO_LATE: Duration = Duration::from_secs(90);
 /// Allies at war with the other side who may join each side.
 const ALLIES_MAX: usize = 3;
 const ALLY_CHANCE: f64 = 0.5;
@@ -126,14 +136,15 @@ impl Stakes {
         }
     }
 
-    /// The ships one side brings to a battle asked for to be watched: small
-    /// enough for a client to draw, big enough for every kind of capital.
-    fn showcase_fleet(self) -> u32 {
-        match self {
-            Stakes::Skirmish => 12,
-            Stakes::Battle => 20,
-            Stakes::Decisive => SHOWCASE_ROOM as u32,
-        }
+    /// How many ships one side brings to a battle asked for by hand: from
+    /// two hundred to five hundred, capitals on top of their share.
+    fn showcase_fleet(self, rng: &mut Rng) -> u32 {
+        let (lo, hi) = match self {
+            Stakes::Skirmish => (200, 280),
+            Stakes::Battle => (250, 400),
+            Stakes::Decisive => (350, 500),
+        };
+        lo + rng.below((hi - lo + 1) as usize) as u32
     }
 
     fn share(self, rng: &mut Rng) -> f64 {
@@ -199,6 +210,8 @@ pub struct Side {
     cyno: Option<(i64, Vec3)>,
     /// Since when its capitals have waited for a cyno.
     waiting_since: Option<Instant>,
+    /// When its first capitals jumped in.
+    landed: Option<Instant>,
     /// Dreadnoughts in siege mode.
     sieged: HashSet<u32>,
     /// When each titan last fired its doomsday.
@@ -228,6 +241,7 @@ impl Side {
             waiting: Vec::new(),
             cyno: None,
             waiting_since: None,
+            landed: None,
             sieged: HashSet::new(),
             doomsday: HashMap::new(),
             caps_lost: HashMap::new(),
@@ -282,8 +296,11 @@ impl Side {
 /// A battle being fought.
 pub struct Fight {
     pub stakes: Stakes,
-    /// Asked for to be watched: small fleets, a small grid.
+    /// Asked for by hand: every ship it brings may be on the grid.
     pub showcase: bool,
+    /// The side whose capitals cyno in first: 0 the attackers, 1 the
+    /// defenders.
+    first_cyno: usize,
     pub attack: Side,
     pub defend: Side,
     /// Whether it is being fought ship against ship, where players see it.
@@ -554,10 +571,9 @@ fn assemble(s: &Siege, bots: &[Bot], ids: &[Identity], presence: &Presence, p: &
         }
         // The defenders turn out for their own space a little more.
         let share = (stakes.share(rng) + if home { 0.1 } else { 0.0 }).min(1.0);
-        // Asked for to be watched, a side brings a small fleet of its own:
-        // a grid of hundreds stalls the client of whoever watches.
+        // Asked for by hand, a side brings two to five hundred ships.
         let brought = if s.showcase.is_some() {
-            stakes.showcase_fleet().min(fit.len() as u32)
+            stakes.showcase_fleet(rng).min(fit.len() as u32)
         } else {
             ((fit.len() as f64 * share) as u32).clamp(FLEET_MIN.min(fit.len() as u32), (super::battle_size() as u32).clamp(FLEET_MIN, SIDE_MAX))
         };
@@ -572,6 +588,7 @@ fn assemble(s: &Siege, bots: &[Bot], ids: &[Identity], presence: &Presence, p: &
     Some(Fight {
         stakes,
         showcase: s.showcase.is_some(),
+        first_cyno: rng.below(2),
         attack,
         defend,
         seen: false,
@@ -683,11 +700,22 @@ fn reinforce(f: &mut Fight, system: i32, world: &World, bots: &mut [Bot], presen
     }
     f.last_wave = Instant::now();
     let Some((attack, defend)) = f.rallies else { return };
-    let mut room = (presence.cap().saturating_sub(ROOM_FOR_OTHERS) / 2).max(1);
-    if f.showcase {
-        room = room.min(SHOWCASE_ROOM);
-    }
-    for (side, rally) in [(&mut f.attack, attack), (&mut f.defend, defend)] {
+    // Asked for by hand, every ship it brings may come; otherwise as many as
+    // the shown-per-system setting leaves room for.
+    let room = if f.showcase { usize::MAX } else { (presence.cap().saturating_sub(ROOM_FOR_OTHERS) / 2).max(1) };
+    // The cyno sequence: the subcapitals fight first; one side lights a
+    // cyno and its capitals jump in; the other answers with its own.
+    let fighting = f.seen_since.map_or(Duration::ZERO, |t| t.elapsed());
+    let landed = [f.attack.landed, f.defend.landed];
+    let first = f.first_cyno;
+    let may_cyno = |me: usize| {
+        if me == first {
+            fighting >= CYNO_FIRST
+        } else {
+            landed[first].is_some_and(|t| t.elapsed() >= CYNO_ANSWER) || fighting >= CYNO_FIRST + CYNO_ANSWER + CYNO_LATE
+        }
+    };
+    for (me, (side, rally)) in [(&mut f.attack, attack), (&mut f.defend, defend)].into_iter().enumerate() {
         if side.withdrew {
             continue;
         }
@@ -718,17 +746,20 @@ fn reinforce(f: &mut Fight, system: i32, world: &World, bots: &mut [Bot], presen
             let tick = w.parks.get(&(system as i64)).map_or(0, |p| p.tick);
             crate::svc::space::broadcast(&w, system as i64, None, vec![crate::svc::space::special_fx(tick, titan, None, "effects.JumpPortal")]);
         }
-        // Capitals jump to the side's cyno, once it is lit.
-        if side.waiting.is_empty() {
+        // Capitals jump to the side's cyno, once it is lit, in their turn.
+        if side.waiting.is_empty() || !may_cyno(me) {
             continue;
         }
         if side.cyno.is_none() {
             light_cyno(side, system, world, presence);
+            if side.cyno.is_some() {
+                let order = if me == first { "first" } else { "in answer" };
+                info!("bots: alliance {} lit its cyno {order} in {system}, {:.0}s into the fight: {} capital(s) jump in", side.alliances[0], fighting.as_secs_f64(), side.waiting.len());
+            }
         }
         let Some((beacon, at)) = side.cyno else { continue };
         let mut jumped: Vec<&'static str> = Vec::new();
-        // Capitals come through the cyno on top of the wave, as many again.
-        while side.on_grid.len() < room && jumped.len() < WAVE_MOST {
+        while side.on_grid.len() < room && jumped.len() < JUMP_WAVE_MOST {
             let Some(i) = side.waiting.pop() else { break };
             if bots[i as usize].pod.is_some() || bots[i as usize].activity == Activity::Sieging {
                 continue;
@@ -740,6 +771,7 @@ fn reinforce(f: &mut Fight, system: i32, world: &World, bots: &mut [Bot], presen
             jumped.push(side.assigned(i).map_or("ship", |a| a.class.name(1)));
         }
         if !jumped.is_empty() {
+            side.landed.get_or_insert_with(Instant::now);
             let mut counts: HashMap<&str, usize> = HashMap::new();
             for c in &jumped {
                 *counts.entry(c).or_default() += 1;
