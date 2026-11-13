@@ -2,6 +2,21 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Faction and officer gear back on the market; unreleased items gone
+
+*2026-11-13 17:24 UTC*
+
+- **Faction, officer and deadspace gear is back on the main market**, beside the ordinary versions: Caldari Navy, Shadow Serpentis, Gist, Pith, Dread Guristas, officer modules and the pirate faction ships. They were all in the game in 2007 from DED complexes and LP stores. The last update wrongly moved them to Additional Items.
+- **Only unreleased items are removed**, unlisted and never stocked again (about 380 in all):
+  - Anything named "test", such as *test hardener*, *TEST Smartbomb* and the *Uber Test* towers. Real items with "test" in the name stay: *Test Dummies*, *Serpentis Test Reports* and *'Protest' Large Armor Repairer I*.
+  - The NPC *Boss Rank* placeholders for Serpentis, Sansha and Blood Raider hardeners and membranes.
+  - Developer copies and tools: *Dummy*, *UNUSED* and *OLD* items, the *GM* modules and the *Pimp* fittings.
+  - NPC and placeholder hulls: CONCORD, Polaris and police ships, Jove ships, *Elite* and *Tier3* test hulls, *Atron much HP* and the like. Odd drones such as the *lewt drone* are gone too.
+  - Skills that were never put into play, such as the Jove ship skills, *Omnipotent*, *Smuggling* and *Black Market Trading*.
+- Everything else stays as it was. The real market tree is kept exactly as the 2007 data has it, and the remaining extras are still in **Additional Items**. Anything already in someone's hangar stays there.
+
+*Takes effect when Start.bat restarts the server.*
+
 ## The market tab is Red Moon Rising's again
 
 *2026-11-13 17:10 UTC*

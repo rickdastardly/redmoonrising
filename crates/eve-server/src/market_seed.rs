@@ -23,16 +23,29 @@ fn market_tree_2007() -> Vec<(i32, i32)> {
         .collect()
 }
 
-/// CCP's developer items, never meant for players: anything named "test"
-/// (TEST Smartbomb, Uber Test Control Towers, Gfx_turret_test...), the NPC
-/// boss placeholders ("Serpentis Bship Boss Rank1 Armor EM Hardener"; the
-/// real ones are the Shadow Serpentis modules), and dummy or unused
-/// modules. The real items whose names happen to contain "test" stay.
+/// Items Red Moon Rising never released to players, kept off the market:
+/// anything named "test" (TEST Smartbomb, Uber Test towers...), the NPC boss
+/// placeholders ("Serpentis Bship Boss Rank1 Armor EM Hardener"; the real
+/// ones are the Shadow Serpentis modules), dummy, unused and OLD developer
+/// copies, GM and "Pimp" modules, CONCORD and Polaris NPC hulls, Jove ships,
+/// placeholder hulls and drones, and skills never put into play. Faction,
+/// officer and deadspace gear was released (it drops in DED complexes) and
+/// stays; so do real items with "test" in the name.
 const DEVELOPER_ITEM: &str = r#"(
        (t."typeName" ~* 'test' AND t."typeName" !~* 'protest'
         AND t."typeName" NOT IN ('Test Dummies', 'Serpentis Test Reports'))
     OR t."typeName" ~* 'boss rank ?[0-9]'
-    OR t."typeName" ~* '(^|[^a-z])(dummy|unused)([^a-z]|$)')"#;
+    OR t."typeName" ~* '(^|[^a-z])(dummy|unused|placeholder|deprecated|obsolete)([^a-z]|$)'
+    OR t."typeName" ~* '^(gm|pimp) '
+    OR t."typeName" ~ '(^| )OLD( |$)'
+    OR ((SELECT ig."categoryID" FROM "invGroups" ig WHERE ig."groupID" = t."groupID") IN (6, 16, 18)
+        AND t."typeName" ~* '(^|[^a-z])(concord|polaris|police|swat|peacekeeper|enforcer|army|special ops)([^a-z]|$)')
+    OR ((SELECT ig."categoryID" FROM "invGroups" ig WHERE ig."groupID" = t."groupID") = 6
+        AND t."typeName" ~* '^elite |^faction prophecy|^tier3 |bc tier 2|much hp|^immovable|^infested|corvette prototype|^scorpion [0-9]$|^rook [0-9]$|apocalypse the hammer|^soct|arbitrator house|^capsule (home|cp)|^jove ')
+    OR ((SELECT ig."categoryID" FROM "invGroups" ig WHERE ig."groupID" = t."groupID") = 18
+        AND t."typeName" ~* 'lewt drone|horrible tracking|fighter uno|webscramblifying|^acolyte1$')
+    OR ((SELECT ig."categoryID" FROM "invGroups" ig WHERE ig."groupID" = t."groupID") = 16
+        AND t."typeName" ~* '^jove |fake skill|^omnipotent$|^(media|chief science officer|public relations|intelligence analyst|amarr tech|caldari tech|gallente tech|minmatar tech|duplicating|hypernet science|black market trading|smuggling|propulsion (optimal range|fall off|ws strength|stasis strength)|structural analyzis|skunk cruise missiles)$'))"#;
 
 pub async fn ensure(db: &mut Client) -> Result<(), Error> {
     // A freshly imported universe has no planner statistics yet, and without
@@ -79,14 +92,14 @@ pub async fn ensure(db: &mut Client) -> Result<(), Error> {
         ).await?;
     }
     if hidden > 0 || withdrawn > 0 {
-        info!("market: {hidden} developer item type(s) taken off the market, {withdrawn} NPC order(s) withdrawn");
+        info!("market: {hidden} unreleased item type(s) taken off the market, {withdrawn} NPC order(s) withdrawn");
     }
 
-    // The market tab is the one Red Moon Rising had: every item keeps the
-    // market group the 2007 data gives it, and nothing else goes in it.
-    // Items the 2007 market never listed (faction, officer and deadspace
-    // modules, pirate ships, unreleased items) go to Additional Items below
-    // instead of being slotted in beside their Tech I parents.
+    // Every item keeps the market group the 2007 data gives it. Released
+    // items the 2007 tree has no place for (faction, officer and deadspace
+    // modules, pirate faction ships) go beside their Tech I versions, as
+    // before; anything else left over goes to Additional Items below. Items
+    // an earlier start put in Additional Items are looked at again.
     let (tree_types, tree_groups): (Vec<i32>, Vec<i32>) = market_tree_2007().into_iter().unzip();
     let mut categorized = tx.execute(
         format!(r#"UPDATE "invTypes" t SET "marketGroupID" = r.mg
@@ -94,16 +107,30 @@ pub async fn ensure(db: &mut Client) -> Result<(), Error> {
             WHERE t."typeID" = r.id AND t."marketGroupID" IS DISTINCT FROM r.mg AND NOT {DEVELOPER_ITEM}"#).as_str(),
         &[&tree_types, &tree_groups],
     ).await?;
-    let pulled = tx.execute(
-        r#"UPDATE "invTypes" t SET "marketGroupID" = NULL
-             FROM "invGroups" g
-            WHERE g."groupID" = t."groupID" AND g."categoryID" = ANY($1)
-              AND t."marketGroupID" < 1000000 AND NOT (t."typeID" = ANY($2))"#,
-        &[&CATEGORIES, &tree_types],
+    tx.execute(r#"UPDATE "invTypes" SET "marketGroupID" = NULL WHERE "marketGroupID" >= 1000000"#, &[]).await?;
+
+    // Variants belong beside their Tech I parent whenever that parent has a
+    // market group. A group with only one market category is also unambiguous.
+    let parent_group = r#"UPDATE "invTypes" t SET "marketGroupID" = p."marketGroupID"
+                           FROM "invMetaTypes" m
+                           JOIN "invTypes" p ON p."typeID" = m."parentTypeID"
+                          WHERE t."typeID" = m."typeID" AND t."marketGroupID" IS NULL
+                            AND t."published" = 1 AND p."marketGroupID" IS NOT NULL
+                            AND (SELECT "categoryID" FROM "invGroups" WHERE "groupID" = t."groupID") = ANY($1)"#;
+    categorized += tx.execute(parent_group, &[&CATEGORIES]).await?;
+    categorized += tx.execute(
+        r#"WITH peer AS (
+               SELECT "groupID", min("marketGroupID") AS market_group
+                 FROM "invTypes" WHERE "marketGroupID" IS NOT NULL
+                GROUP BY "groupID" HAVING count(DISTINCT "marketGroupID") = 1
+           )
+           UPDATE "invTypes" t SET "marketGroupID" = peer.market_group
+             FROM peer JOIN "invGroups" g ON g."groupID" = peer."groupID"
+            WHERE t."groupID" = peer."groupID" AND t."marketGroupID" IS NULL
+              AND t."published" = 1 AND g."categoryID" = ANY($1)"#,
+        &[&CATEGORIES],
     ).await?;
-    if pulled > 0 {
-        info!("market: {pulled} item type(s) the 2007 market tab never listed moved to Additional Items");
-    }
+    categorized += tx.execute(parent_group, &[&CATEGORIES]).await?;
 
     // The source data has no suitable peer for some published types. Stable
     // IDs keep these additional groups unchanged across server restarts.

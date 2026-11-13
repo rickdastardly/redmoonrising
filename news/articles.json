@@ -1,5 +1,11 @@
 [
   {
+    "published": "2026-11-13 17:24 UTC",
+    "publishedMs": 1794590696674,
+    "title": "Faction and officer gear back on the market; unreleased items gone",
+    "body": "<ul>\n<li><b>Faction, officer and deadspace gear is back on the main market</b>, beside the ordinary versions: Caldari Navy, Shadow Serpentis, Gist, Pith, Dread Guristas, officer modules and the pirate faction ships. They were all in the game in 2007 from DED complexes and LP stores. The last update wrongly moved them to Additional Items.</li>\n<li><b>Only unreleased items are removed</b>, unlisted and never stocked again (about 380 in all):\n<ul>\n<li>Anything named \"test\", such as <i>test hardener</i>, <i>TEST Smartbomb</i> and the <i>Uber Test</i> towers. Real items with \"test\" in the name stay: <i>Test Dummies</i>, <i>Serpentis Test Reports</i> and <i>'Protest' Large Armor Repairer I</i>.</li>\n<li>The NPC <i>Boss Rank</i> placeholders for Serpentis, Sansha and Blood Raider hardeners and membranes.</li>\n<li>Developer copies and tools: <i>Dummy</i>, <i>UNUSED</i> and <i>OLD</i> items, the <i>GM</i> modules and the <i>Pimp</i> fittings.</li>\n<li>NPC and placeholder hulls: CONCORD, Polaris and police ships, Jove ships, <i>Elite</i> and <i>Tier3</i> test hulls, <i>Atron much HP</i> and the like. Odd drones such as the <i>lewt drone</i> are gone too.</li>\n<li>Skills that were never put into play, such as the Jove ship skills, <i>Omnipotent</i>, <i>Smuggling</i> and <i>Black Market Trading</i>.</li>\n</ul></li>\n<li>Everything else stays as it was. The real market tree is kept exactly as the 2007 data has it, and the remaining extras are still in <b>Additional Items</b>. Anything already in someone's hangar stays there.</li>\n</ul>\n<p><i>Takes effect when Start.bat restarts the server.</i></p>"
+  },
+  {
     "published": "2026-11-13 17:10 UTC",
     "publishedMs": 1794589858707,
     "title": "The market tab is Red Moon Rising's again",
