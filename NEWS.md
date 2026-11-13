@@ -2,6 +2,55 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Update roundup: everything new since 12 November
+
+*2026-11-13 15:22 UTC*
+
+Everything new since the sovereignty warfare update, in one place. Each change also has its own note below this one.
+
+### Launcher
+
+- **Three launchers, one job each.** Start.bat runs the server, **Client.bat** sets up and starts the game, and **Dashboard.bat** puts the dashboard behind a sign-in. Five wrong passwords lock an address out for 15 minutes.
+- **Client.bat is a new EVE-style launcher**, with your servers and their online lights, the chosen server's news, and a big PLAY button. It can also change or repair your EVE client.
+- Dashboard.bat keeps nothing between runs. The sign-in lives only in memory, and its firewall opening closes when you stop it.
+- Start.bat builds on PCs without MinGW, since the tools it needs now come with the download. It keeps your PC responsive by building and running the server at a lower priority.
+
+### Accounts and setup
+
+- **Passwords are stored hashed** (salted PBKDF2-SHA256). A password typed into `rmr.yml` is hashed at the next start.
+- `rmr.yml` is now each server's own file. A new server starts with **100,000 bots**, accounts made at first login, and the dashboard's bot controls on. An old file you never edited is brought up to these defaults; one you edited is left alone.
+
+### Skills and items
+
+- **Skills train**, online or off, at a speed set by your attributes, implants and learning skills. Skills and modules need their prerequisites, and new pilots get the prerequisites of their starting skills.
+- A clone bought as an item is used up when installed.
+- **Show Info shows the real values:** 680 negative numbers had been stored wrongly (Gunnery's -2% showed as 254%). Skills train, check prerequisites and give bonuses exactly as Show Info says.
+
+### Market
+
+- **Selling into buy orders works wherever the order reaches.** Bot buy orders now cover their whole range, and bots put up bids for items in your hangar that nobody nearby is buying. Order ranges count real jumps.
+
+### Bots, chat and corporations
+
+- In high-sec, bots fight only their war targets, or someone who shot first. CONCORD handles the rest.
+- Corp mates show a green star and alliance mates a blue one in Local and in corp and alliance chat. Those channels list their members, and bots in your corporation chat among themselves.
+- Executor corporations can pay alliance bills from the corp wallet. Offices get a rental bill five days before the rent runs out.
+- The dashboard Overview uses wide screens, and bot applications have an **Extra high** setting.
+
+### Agents and mail
+
+- **People & Places** no longer freezes. Your contacts and mission agents are in the normal list, and every other agent who'll work with you is under **Level N agents available to you**, loaded one small group at a time.
+- The inbox loads your newest 250 mails.
+
+### Fixes from a player's server log
+
+- The market no longer fails on some items: attributes this client doesn't know are no longer sent.
+- The Channels window opens again: tutorials with no pages are no longer offered.
+- Stargate jumps no longer cause a *No ballpark for update* error, and the System Scanner waits until a jump finishes.
+- Guards for the chat star and for the character selection screen's tables, and quieter server logs.
+
+*Restart Start.bat to rebuild the server, and start the game from Client.bat.*
+
 ## Fixes from a player's server log: market, chat window, jumps and more
 
 *2026-11-13 15:17 UTC*
