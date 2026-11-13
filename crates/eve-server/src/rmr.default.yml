@@ -82,6 +82,10 @@ bots:
 # Accounts made, or brought into line with this file, at every start.
 # Accounts not listed here are left as they are; removing one from the
 # list does not delete it.
+#   password:    type a new one here; at the next start the server stores
+#                only its salted hash and writes that back in its place
+#                (passwordHash), so no password is kept in the clear. Use a
+#                long password, above all for GM accounts.
 #   gm:          GM powers (slash commands, petitions).
 #   banned:      cannot log in.
 #   startingIsk: what this account's new characters start with, instead

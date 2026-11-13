@@ -5,3 +5,4 @@ __pycache__/
 _backup_*/
 
 Client.settings.json
+rmr.yml

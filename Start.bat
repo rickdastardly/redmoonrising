@@ -956,7 +956,9 @@ function Start-RmrWorker {
         [IO.File]::WriteAllText($LogPath, ('RMR launcher - ' + (Get-Date -Format s) + "`r`n"), $Utf8)
         Set-Status 'Preparing' 'Checking Windows and preparing your local server' 2
         if (-not [Environment]::Is64BitOperatingSystem -or -not [Environment]::Is64BitProcess) { throw 'RMR requires 64-bit Windows and 64-bit Windows PowerShell.' }
-        foreach ($required in @('Cargo.lock','Cargo.toml','rmr.yml','db\00_shared.sql.gz','crates\eve-server\Cargo.toml')) {
+        # rmr.yml is this server's own (accounts included): the server writes a
+        # default one when there is none, and it is not shared through git.
+        foreach ($required in @('Cargo.lock','Cargo.toml','db\00_shared.sql.gz','crates\eve-server\Cargo.toml')) {
             if (-not (Test-Path -LiteralPath (Join-Path $Root $required))) { throw "Missing $required. Keep start.bat in the extracted RMR repository." }
         }
         $settingsPath = Join-Path $Runtime 'settings.json'

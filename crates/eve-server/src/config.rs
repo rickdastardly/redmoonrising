@@ -98,7 +98,14 @@ pub struct Config {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Account {
     pub username: String,
+    /// A password typed into the file. The server hashes it at start and
+    /// writes the hash back in its place (`passwordHash`), so the file keeps
+    /// no password in the clear.
+    #[serde(default)]
     pub password: String,
+    /// The password's salted hash (crate::secret), as the server writes it.
+    #[serde(default)]
+    pub password_hash: Option<String>,
     /// GM powers: slash commands, petitions.
     #[serde(default)]
     pub gm: bool,
@@ -324,7 +331,9 @@ impl Config {
         if let Some(w) = names.windows(2).find(|w| w[0] == w[1]) {
             return Err(format!("{}: the account {:?} is listed twice", path.display(), w[0]));
         }
-        if let Some(a) = c.accounts.iter().find(|a| a.username.trim().is_empty() || a.password.is_empty()) {
+        if let Some(a) = c.accounts.iter().find(|a| {
+            a.username.trim().is_empty() || (a.password.is_empty() && !a.password_hash.as_deref().is_some_and(crate::secret::is_hash))
+        }) {
             return Err(format!("{}: every account needs a username and a password (see {:?})", path.display(), a.username));
         }
         Ok((c, note))
@@ -377,6 +386,71 @@ fn parse(text: &str) -> Result<File, serde_yaml_ng::Error> {
 }
 
 /// Where the config file is: `RMR_CONFIG`, else `rmr.yml` here.
+/// Replaces each named account's `password:` line in the config file with
+/// `passwordHash:` and the hash the server stored, keeping everything else
+/// (comments included) as it was. Accounts written in flow style are left,
+/// with a warning.
+pub fn seal_passwords(sealed: &[(String, String)]) {
+    let path = file_path();
+    let Ok(text) = std::fs::read_to_string(&path) else { return };
+    let mut out = Vec::new();
+    let (mut in_accounts, mut user): (bool, Option<String>) = (false, None);
+    let mut done: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        let top_level = !line.starts_with(' ') && !line.starts_with('\t') && !line.starts_with('-') && !trimmed.starts_with('#') && !trimmed.is_empty();
+        if top_level {
+            in_accounts = trimmed.starts_with("accounts:");
+            user = None;
+        }
+        if in_accounts {
+            let item = trimmed.trim_start_matches('-').trim_start();
+            if let Some(name) = item.strip_prefix("username:") {
+                user = Some(name.trim().trim_matches(|c| c == '"' || c == '\'').to_string());
+            } else if let Some(rest) = item.strip_prefix("password:") {
+                if let Some((name, hash)) = user.as_ref().and_then(|u| sealed.iter().find(|(n, _)| n == u)) {
+                    if !rest.trim().is_empty() {
+                        let indent = &line[..line.len() - trimmed.len()];
+                        let dash = if trimmed.starts_with('-') { "- " } else { "" };
+                        out.push(format!("{indent}{dash}passwordHash: \"{hash}\""));
+                        done.push(name);
+                        continue;
+                    }
+                }
+            }
+        }
+        out.push(line.to_string());
+    }
+    for (name, _) in sealed {
+        if !done.contains(&name.as_str()) {
+            tracing::warn!("{}: could not replace account {name:?}'s password with its hash (write it on its own line as password: ...)", path.display());
+        }
+    }
+    if done.is_empty() {
+        return;
+    }
+    let mut new_text = out.join(if text.contains("\r\n") { "\r\n" } else { "\n" });
+    if text.ends_with('\n') {
+        new_text.push_str(if text.contains("\r\n") { "\r\n" } else { "\n" });
+    }
+    match std::fs::write(&path, new_text) {
+        Ok(()) => tracing::info!("{}: {} account password(s) replaced by their hashes", path.display(), done.len()),
+        Err(e) => tracing::warn!("{}: could not write the password hashes back: {e}", path.display()),
+    }
+}
+
+/// GM accounts with a password anyone could guess (the file's examples, or
+/// the name itself) get a warning in the log at every start.
+pub fn warn_weak_passwords(accounts: &[Account]) {
+    const KNOWN: [&str; 8] = ["root", "pass", "password", "testpass", "admin", "1234", "12345678", "test"];
+    for a in accounts.iter().filter(|a| !a.password.is_empty()) {
+        let p = a.password.to_lowercase();
+        if p.chars().count() < 8 || KNOWN.contains(&p.as_str()) || p == a.username.to_lowercase() {
+            tracing::warn!("account {:?} has a weak password; give it a longer one in the config file (it is hashed there at the next start)", a.username);
+        }
+    }
+}
+
 pub fn file_path() -> PathBuf {
     PathBuf::from(var("RMR_CONFIG").unwrap_or_else(|| "rmr.yml".into()))
 }

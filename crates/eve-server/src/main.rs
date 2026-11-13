@@ -28,6 +28,7 @@ mod npc;
 mod pos;
 mod services;
 mod session;
+mod secret;
 mod sites;
 mod svc;
 mod web;
@@ -85,9 +86,20 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         .map(|r| r.get(0))
         .unwrap_or(0);
     info!("database: {} ({accounts} accounts)", config.database_redacted());
-    let ids = db::sync_accounts(&client, &config.accounts)
+    let (ids, sealed) = db::sync_accounts(&client, &config.accounts)
         .await
         .map_err(|e| format!("setting up the config file's accounts: {}", logging::chain(&e)))?;
+    // No password stays in the clear: the config file's become their hashes,
+    // and any account in the database still holding a plain one is hashed.
+    if !sealed.is_empty() {
+        config::seal_passwords(&sealed);
+    }
+    match db::hash_stored_passwords(&client).await {
+        Ok(0) => {}
+        Ok(n) => info!("{n} stored account password(s) hashed"),
+        Err(e) => tracing::warn!("hashing stored account passwords: {}", logging::chain(&e)),
+    }
+    config::warn_weak_passwords(&config.accounts);
     if !ids.is_empty() {
         info!("{} account(s) from the config file", ids.len());
     }
