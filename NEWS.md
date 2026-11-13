@@ -2,6 +2,12 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Capital battles you can actually watch
+
+*2026-11-13 20:32 UTC*
+
+Starting a capital battle from the dashboard or with /bots battle could freeze the game for half a minute at a time. Your ship seemed to jump about, the overview broke, local filled up, and no fleets ever appeared. A "decisive" battle was bringing whole alliances: in one test, 257 ships against 1,138, all warping onto the same grid at once. No client can draw that.  What changed: - A battle you ask for now brings a small fleet per side: 12 ships for a skirmish, 20 for a battle, 30 for a decisive one. That is still enough for a titan, three dreadnoughts, two carriers, logistics and a cyno ship on each side. - Ships arrive in waves of at most 10 per side every 8 seconds, and capitals come through the cyno the same way, so the grid fills gradually instead of all at once. This applies to every battle fought where players can see it. - A battle you ask for never keeps more than 30 ships per side on the grid, whatever the shown-per-system setting is. - The Capital battle window on the Bots page and the GM commands table now show how many ships each size brings.  The jumping was your client catching up after each freeze; the server never moved your ship. Once the server is rebuilt, undock, start a battle in your system, and watch for the cynos, the capitals jumping in and the dreadnoughts going into siege.
+
 ## Capital battles in open space, anywhere
 
 *2026-11-13 20:19 UTC*

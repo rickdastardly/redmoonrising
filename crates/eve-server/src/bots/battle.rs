@@ -55,6 +55,12 @@ const ATTRITION: f64 = 1.0 / 900.0;
 const ROUT: f64 = 0.2;
 /// Reinforcements warp in this often, in waves.
 const REINFORCE: Duration = Duration::from_secs(8);
+/// The most ships one side brings onto the grid in a wave, so a watching
+/// client takes them in a few at a time rather than all at once.
+const WAVE_MOST: usize = 10;
+/// The most ships one side keeps on the grid in a battle asked for to be
+/// watched, whatever the shown-per-system setting allows.
+const SHOWCASE_ROOM: usize = 30;
 /// Allies at war with the other side who may join each side.
 const ALLIES_MAX: usize = 3;
 const ALLY_CHANCE: f64 = 0.5;
@@ -117,6 +123,16 @@ impl Stakes {
             Stakes::Battle
         } else {
             Stakes::Decisive
+        }
+    }
+
+    /// The ships one side brings to a battle asked for to be watched: small
+    /// enough for a client to draw, big enough for every kind of capital.
+    fn showcase_fleet(self) -> u32 {
+        match self {
+            Stakes::Skirmish => 12,
+            Stakes::Battle => 20,
+            Stakes::Decisive => SHOWCASE_ROOM as u32,
         }
     }
 
@@ -266,6 +282,8 @@ impl Side {
 /// A battle being fought.
 pub struct Fight {
     pub stakes: Stakes,
+    /// Asked for to be watched: small fleets, a small grid.
+    pub showcase: bool,
     pub attack: Side,
     pub defend: Side,
     /// Whether it is being fought ship against ship, where players see it.
@@ -536,7 +554,13 @@ fn assemble(s: &Siege, bots: &[Bot], ids: &[Identity], presence: &Presence, p: &
         }
         // The defenders turn out for their own space a little more.
         let share = (stakes.share(rng) + if home { 0.1 } else { 0.0 }).min(1.0);
-        let brought = ((fit.len() as f64 * share) as u32).clamp(FLEET_MIN.min(fit.len() as u32), (super::battle_size() as u32).clamp(FLEET_MIN, SIDE_MAX));
+        // Asked for to be watched, a side brings a small fleet of its own:
+        // a grid of hundreds stalls the client of whoever watches.
+        let brought = if s.showcase.is_some() {
+            stakes.showcase_fleet().min(fit.len() as u32)
+        } else {
+            ((fit.len() as f64 * share) as u32).clamp(FLEET_MIN.min(fit.len() as u32), (super::battle_size() as u32).clamp(FLEET_MIN, SIDE_MAX))
+        };
         // The nearest come; the reserve is kept nearest last, to call up in turn.
         fit.sort_by_key(|i| std::cmp::Reverse(nearness(&bots[*i as usize], s.system)));
         let reserve = fit.split_off(fit.len() - brought as usize);
@@ -547,6 +571,7 @@ fn assemble(s: &Siege, bots: &[Bot], ids: &[Identity], presence: &Presence, p: &
     let now = Instant::now();
     Some(Fight {
         stakes,
+        showcase: s.showcase.is_some(),
         attack,
         defend,
         seen: false,
@@ -658,14 +683,18 @@ fn reinforce(f: &mut Fight, system: i32, world: &World, bots: &mut [Bot], presen
     }
     f.last_wave = Instant::now();
     let Some((attack, defend)) = f.rallies else { return };
-    let room = (presence.cap().saturating_sub(ROOM_FOR_OTHERS) / 2).max(1);
+    let mut room = (presence.cap().saturating_sub(ROOM_FOR_OTHERS) / 2).max(1);
+    if f.showcase {
+        room = room.min(SHOWCASE_ROOM);
+    }
     for (side, rally) in [(&mut f.attack, attack), (&mut f.defend, defend)] {
         if side.withdrew {
             continue;
         }
         let bridge = titan_on_grid(side, system, world, presence);
         let mut bridged = 0;
-        while side.on_grid.len() < room {
+        let mut arrived = 0;
+        while side.on_grid.len() < room && arrived < WAVE_MOST {
             let Some(i) = side.reserve.pop() else { break };
             if bots[i as usize].pod.is_some() || bots[i as usize].activity == Activity::Sieging {
                 continue;
@@ -681,6 +710,7 @@ fn reinforce(f: &mut Fight, system: i32, world: &World, bots: &mut [Bot], presen
             }
             side.on_grid.push(i);
             report.touched.push(i);
+            arrived += 1;
         }
         if let (Some((titan, _)), true) = (bridge, bridged > 0) {
             info!("bots: titan {titan} bridged {bridged} ship(s) of alliance {} into {system}", side.alliances[0]);
@@ -697,7 +727,8 @@ fn reinforce(f: &mut Fight, system: i32, world: &World, bots: &mut [Bot], presen
         }
         let Some((beacon, at)) = side.cyno else { continue };
         let mut jumped: Vec<&'static str> = Vec::new();
-        while side.on_grid.len() < room {
+        // Capitals come through the cyno on top of the wave, as many again.
+        while side.on_grid.len() < room && jumped.len() < WAVE_MOST {
             let Some(i) = side.waiting.pop() else { break };
             if bots[i as usize].pod.is_some() || bots[i as usize].activity == Activity::Sieging {
                 continue;
