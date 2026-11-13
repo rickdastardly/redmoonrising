@@ -196,10 +196,22 @@ async fn orders_for_type(ctx: &Ctx<'_>, type_id: i64) -> Value {
         }
     };
 
+    // How many jumps each order is from here, which the market window shows
+    // and checks a buy order's range against (marketsvc.py:373).
+    let here = ctx.session.solar_system_id2.or(ctx.session.solar_system_id);
+    let distance: std::collections::HashMap<i64, i64> = match here {
+        Some(here) => crate::gates::within(ctx.db, here, 100).await.into_iter().collect(),
+        None => Default::default(),
+    };
     let (mut asks, mut bids) = (Vec::new(), Vec::new());
     for r in &rows {
         let bid: i16 = r.get(6);
-        let line = Value::List(order_line(r));
+        let mut line = order_line(r);
+        let system = r.get::<_, i32>(17) as i64;
+        if let Some(n) = distance.get(&system) {
+            line[19] = Value::Int(*n);
+        }
+        let line = Value::List(line);
         if bid == 0 { asks.push(line) } else { bids.push(line) }
     }
     Value::Tuple(vec![rowset_with_columns(ORDER_HEADER, asks), rowset_with_columns(ORDER_HEADER, bids)])

@@ -6,6 +6,11 @@
 //! so the market looks like players trade on it. Each order stands for one to
 //! three days and is then taken down; new ones replace it.
 //!
+//! Their buy orders reach across the system, some jumps or the whole region,
+//! like players' do. Where a player is docked, traders also bid on what that
+//! player has in the station hangar, so anything worth something can be sold
+//! there.
+//!
 //! Players buy from and sell to these like any other order (`svc::trade`):
 //! what a player pays goes to the bot's wallet, and what a player sells into a
 //! bot's buy order goes to the bot's hangar. The dashboard sets how busy the
@@ -30,6 +35,10 @@ const FIRST_PLAYER_ID: i32 = 100_000_000;
 /// The busiest NPC market stations traded at, besides where players are docked.
 const HUBS: i64 = 10;
 const RANGE_STATION: i32 = -1;
+const RANGE_SOLAR_SYSTEM: i32 = 0;
+const RANGE_REGION: i32 = 32767;
+/// Bids on what a docked player holds, at most this many a station a round.
+const HELD_PER_ROUND: i64 = 60;
 const ORDER_OPEN: i32 = 0;
 const ORDER_DAYS: i32 = 14;
 /// A day in FILETIME units (100 ns).
@@ -134,15 +143,23 @@ async fn round(server: &Server, db: &Client, rng: &mut Rng) -> Result<(), tokio_
         .iter()
         .filter_map(|r| int(r, 0))
         .collect();
-    let docked: Vec<i64> = server.world.lock().players().iter().filter_map(|p| p.station_id).collect();
-    for s in docked {
-        if !stations.contains(&s) {
-            stations.push(s);
+    let mut docked: std::collections::BTreeMap<i64, Vec<i32>> = std::collections::BTreeMap::new();
+    for p in server.world.lock().players() {
+        if let Some(s) = p.station_id {
+            docked.entry(s).or_default().push(p.char_id as i32);
+        }
+    }
+    for s in docked.keys() {
+        if !stations.contains(s) {
+            stations.push(*s);
         }
     }
     let mut placed = 0;
     for station in stations {
         placed += stock_station(db, rng, &traders, station, now, sell_cap, buy_cap, per_round).await?;
+    }
+    for (station, chars) in &docked {
+        placed += bid_on_held(db, rng, &traders, *station, chars, now).await?;
     }
     if placed > 0 || retired > 0 {
         info!("bots: market traders placed {placed} order(s) and took down {retired}");
@@ -219,6 +236,7 @@ async fn stock_station(
         let escrow = if buy { price * volume as f64 } else { 0.0 };
         let trader = traders[rng.below(traders.len())];
         let bid: i16 = i16::from(buy);
+        let range = if buy { buy_range(rng) } else { RANGE_STATION };
         let row = db
             .query_one(
                 r#"INSERT INTO market_orders
@@ -227,7 +245,7 @@ async fn stock_station(
                    VALUES ($1::int, $2::int, $3::int, $4::int, $5::int, $6::smallint, $7::float8, $8::int, $8::int, $9::bigint,
                            $10::int, 1, 0, 1000, $11::int, 0, $12::int, $13::float8, 1)
                    RETURNING "orderID""#,
-                &[&(type_id as i32), &trader, &region, &station, &RANGE_STATION, &bid, &price, &volume, &now, &ORDER_OPEN, &ORDER_DAYS, &system, &escrow],
+                &[&(type_id as i32), &trader, &region, &station, &range, &bid, &price, &volume, &now, &ORDER_OPEN, &ORDER_DAYS, &system, &escrow],
             )
             .await?;
         let order: i32 = row.get(0);
@@ -242,6 +260,90 @@ async fn stock_station(
         } else {
             sells_left -= 1;
         }
+        placed += 1;
+    }
+    Ok(placed)
+}
+
+/// How far a bot's buy order reaches: often the whole region, else some
+/// jumps, the system or only its own station.
+fn buy_range(rng: &mut Rng) -> i32 {
+    const JUMPS: [i32; 8] = [1, 2, 3, 4, 5, 10, 20, 40];
+    let u = rng.unit();
+    if u < 0.4 {
+        RANGE_REGION
+    } else if u < 0.7 {
+        JUMPS[rng.below(JUMPS.len())]
+    } else if u < 0.85 {
+        RANGE_SOLAR_SYSTEM
+    } else {
+        RANGE_STATION
+    }
+}
+
+/// Bids, at the station, on what the players docked there have in its
+/// hangar and nobody is buying within reach: at a good deal under what the
+/// NPC market asks for it, or under its base price where nothing is on sale.
+async fn bid_on_held(db: &Client, rng: &mut Rng, traders: &[i32], station: i64, chars: &[i32], now: i64) -> Result<usize, tokio_postgres::Error> {
+    let station = station as i32;
+    let Some(place) = db.query_opt(r#"SELECT "solarSystemID", "regionID" FROM "staStations" WHERE "stationID" = $1"#, &[&station]).await? else {
+        return Ok(0);
+    };
+    let (system, region) = (int(&place, 0).unwrap_or(0) as i32, int(&place, 1).unwrap_or(0) as i32);
+    let held = db
+        .query(
+            r#"SELECT e."typeID", sum(e."quantity")::bigint, g."categoryID",
+                      (SELECT min(o."price") FROM market_orders o
+                        WHERE o."typeID" = e."typeID" AND o."regionID" = $3::int AND o."bid" = 0
+                          AND o."orderState" = 0 AND o."charID" < $4::int AND o."price" > 0)::float8,
+                      (t."basePrice" / GREATEST(t."portionSize", 1))::float8
+                 FROM entity e
+                 JOIN "invTypes" t ON t."typeID" = e."typeID"
+                 JOIN "invGroups" g ON g."groupID" = t."groupID"
+                WHERE e."ownerID" = ANY($1::int[]) AND e."locationID" = $2::int AND e."flag" = $5::int
+                  AND t."published" = 1 AND t."marketGroupID" IS NOT NULL AND g."categoryID" <> 9
+                  AND NOT EXISTS (
+                      SELECT 1 FROM market_orders b
+                       WHERE b."typeID" = e."typeID" AND b."regionID" = $3::int AND b."bid" = 1 AND b."orderState" = 0
+                         AND b."volRemaining" > 0 AND b."price" > 0
+                         AND (b."stationID" = $2::int OR b."range" >= $6::int
+                              OR (b."range" >= 0 AND b."solarSystemID" = $7::int)))
+                GROUP BY e."typeID", g."categoryID", t."basePrice", t."portionSize"
+                LIMIT $8::bigint"#,
+            &[&chars, &station, &region, &FIRST_PLAYER_ID, &crate::svc::inventory::FLAG_HANGAR, &RANGE_REGION, &system, &HELD_PER_ROUND],
+        )
+        .await?;
+    let mut placed = 0;
+    for r in &held {
+        let (type_id, quantity, category) = (int(r, 0).unwrap_or(0) as i32, int(r, 1).unwrap_or(0), int(r, 2).unwrap_or(0) as i32);
+        let ask = float(r, 3).filter(|p| *p > 0.0);
+        let base = float(r, 4).filter(|p| *p > 0.0);
+        let price = match (ask, base) {
+            (Some(ask), _) => ask * rng.range(0.6, 0.85),
+            (None, Some(base)) => base * rng.range(0.5, 0.8),
+            _ => continue,
+        };
+        let price = tidy(price);
+        let volume = (volume_for(category, price, true, rng) as i64).max(quantity).clamp(1, i32::MAX as i64) as i32;
+        let trader = traders[rng.below(traders.len())];
+        let row = db
+            .query_one(
+                r#"INSERT INTO market_orders
+                       ("typeID","charID","regionID","stationID","range","bid","price","volEntered","volRemaining","issued",
+                        "orderState","minVolume","contraband","accountID","duration","isCorp","solarSystemID","escrow","jumps")
+                   VALUES ($1::int, $2::int, $3::int, $4::int, $5::int, 1, $6::float8, $7::int, $7::int, $8::bigint,
+                           $9::int, 1, 0, 1000, $10::int, 0, $11::int, $12::float8, 1)
+                   RETURNING "orderID""#,
+                &[&type_id, &trader, &region, &station, &buy_range(rng), &price, &volume, &now, &ORDER_OPEN, &ORDER_DAYS, &system, &(price * volume as f64)],
+            )
+            .await?;
+        let order: i32 = row.get(0);
+        let expires = now + (DAY as f64 * rng.range(1.0, 3.0)) as i64;
+        db.execute(
+            r#"INSERT INTO "rmrBotMarketOrders" ("orderID", "stationID", "bid", "expires") VALUES ($1::int, $2::int, 1, $3::bigint)"#,
+            &[&order, &station, &expires],
+        )
+        .await?;
         placed += 1;
     }
     Ok(placed)

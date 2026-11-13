@@ -22,6 +22,9 @@ use crate::svc::rows::row;
 use crate::svc::wallet::{post, Entry, Transfer};
 
 const RANGE_STATION: i64 = -1;
+const RANGE_SOLAR_SYSTEM: i64 = 0;
+/// const.rangeRegion: anywhere in the region.
+const RANGE_REGION: i64 = 32767;
 const ORDER_OPEN: i32 = 0;
 /// const.mktOrderExpired, also used for an order that has run out.
 const ORDER_DONE: i32 = 2;
@@ -227,7 +230,7 @@ async fn buy(txn: &mut ItemTxn<'_>, fx: &mut Effects, me: i64, order: &NewOrder,
     let rows = txn
         .tx()
         .query(
-            r#"SELECT "orderID","charID","stationID","price","volRemaining","escrow"
+            r#"SELECT "orderID","charID","stationID","price","volRemaining","escrow","solarSystemID"
                  FROM market_orders
                 WHERE "typeID" = $1 AND "regionID" = $2 AND "bid" = 0 AND "orderState" = 0
                   AND "volRemaining" > 0 AND "price" <= $3 AND "charID" <> $4
@@ -245,7 +248,14 @@ async fn buy(txn: &mut ItemTxn<'_>, fx: &mut Effects, me: i64, order: &NewOrder,
             ],
         )
         .await?;
-    let fills = take(rows.iter().map(as_match), order.quantity);
+    // A buy order of some jumps reaches sell orders that many jumps away.
+    let near = if order.range > RANGE_SOLAR_SYSTEM && order.range < RANGE_REGION {
+        Some(crate::gates::within(txn.tx(), at.solar_system, order.range).await.into_iter().map(|(s, _)| s).collect::<std::collections::HashSet<i64>>())
+    } else {
+        None
+    };
+    let rows = rows.iter().filter(|r| near.as_ref().is_none_or(|n| n.contains(&(r.get::<_, i32>(6) as i64))));
+    let fills = take(rows.map(as_match), order.quantity);
     let filled: i64 = fills.iter().map(|(_, n)| n).sum();
     if order.duration == 0 && filled < order.quantity {
         return refuse("There is not enough for sale at that price within that range.");
@@ -300,7 +310,7 @@ async fn sell(txn: &mut ItemTxn<'_>, fx: &mut Effects, me: i64, order: &NewOrder
     let rows = txn
         .tx()
         .query(
-            r#"SELECT "orderID","charID","stationID","price","volRemaining","escrow"
+            r#"SELECT "orderID","charID","stationID","price","volRemaining","escrow","solarSystemID","range"
                  FROM market_orders
                 WHERE "typeID" = $1 AND "regionID" = $2 AND "bid" = 1 AND "orderState" = 0
                   AND "volRemaining" > 0 AND "price" >= $3 AND "charID" <> $4
@@ -320,7 +330,18 @@ async fn sell(txn: &mut ItemTxn<'_>, fx: &mut Effects, me: i64, order: &NewOrder
             ],
         )
         .await?;
-    let fills = take(rows.iter().map(as_match), order.quantity);
+    // A buy order of some jumps reaches sellers that many jumps from it.
+    let mut reach: Vec<&Row> = Vec::with_capacity(rows.len());
+    for r in &rows {
+        let range = r.get::<_, i32>(7) as i64;
+        let from = r.get::<_, i32>(6) as i64;
+        if range <= RANGE_SOLAR_SYSTEM || range >= RANGE_REGION || from == at.solar_system
+            || crate::gates::jumps(txn.tx(), from, at.solar_system, range).await.is_some()
+        {
+            reach.push(r);
+        }
+    }
+    let fills = take(reach.into_iter().map(as_match), order.quantity);
     let sold: i64 = fills.iter().map(|(_, n)| n).sum();
     if order.duration == 0 && sold < order.quantity {
         return refuse("Nobody is buying that many at that price within reach.");
