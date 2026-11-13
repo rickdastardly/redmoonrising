@@ -208,7 +208,7 @@ impl Default for ServerSection {
             web: "0.0.0.0:8080".into(),
             database: "postgres://rmr:rmr@127.0.0.1:55432/rmr".into(),
             node_id: 1,
-            auto_create_accounts: false,
+            auto_create_accounts: true,
             strings: None,
             dump_dir: ".".into(),
         }
@@ -223,7 +223,7 @@ impl Default for GameSection {
 
 impl Default for BotsSection {
     fn default() -> Self {
-        BotsSection { count: 0, speed: 1.0, shown_per_system: 120, pirates_attack_players: true, dashboard_controls: false, aggression: "some".into(),
+        BotsSection { count: 100_000, speed: 1.0, shown_per_system: 120, pirates_attack_players: true, dashboard_controls: true, aggression: "some".into(),
             chat: "normal".into(), trash_talk: true, join_player_corps: "normal".into(), join_player_alliances: "normal".into(),
             accept_applications: "selective".into(), online_activity: 1.0, roaming_gangs: "normal".into(), hunt_players: true,
             mining_fleets: true, clear_belts: true, wingmen: "paid".into(), bot_market: "normal".into(),
