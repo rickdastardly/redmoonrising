@@ -304,5 +304,11 @@
     "publishedMs": 1794533558117,
     "title": "Launcher and dashboard fixes",
     "body": "<ul><li><b>Launcher:</b> EVE is given exactly the server address you pick, and the online/offline lights check that address as entered.</li><li><b>Dashboard.bat</b> keeps nothing between runs. Every start asks for a new sign-in, which is held only in memory, and closing the window forgets it.</li></ul>"
+  },
+  {
+    "published": "2026-11-13 13:08 UTC",
+    "publishedMs": 1794575311451,
+    "title": "Fix: new servers started with no bots",
+    "body": "<p>Since <code>rmr.yml</code> stopped coming with the download, a brand-new server built its settings from the defaults inside the server program. Those defaults had <b>0 bots</b>, so a fresh install started with an empty New Eden. Account auto-creation and the dashboard's bot controls were also off.</p>\n<h3>Fixed</h3>\n<ul>\n<li><b>Bots:</b> new servers start with <b>100,000</b> bots again.</li>\n<li><b>Accounts:</b> made automatically the first time someone logs in with a new name.</li>\n<li><b>Dashboard:</b> the <b>Bots</b> page controls are switched on.</li>\n</ul>\n<h3>Already set up?</h3>\n<p>A server that already has an <code>rmr.yml</code> keeps it, so nothing changes there on its own. If yours shows 0 bots, open <code>rmr.yml</code> and set:</p>\n<ul>\n<li><code>count: 100000</code> under <code>bots:</code></li>\n<li><code>dashboardControls: true</code> under <code>bots:</code></li>\n<li><code>autoCreateAccounts: true</code> under <code>server:</code></li>\n</ul>\n<p>Then restart the server with Start.bat.</p>"
   }
 ]

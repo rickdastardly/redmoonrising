@@ -2,6 +2,28 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Fix: new servers started with no bots
+
+*2026-11-13 13:08 UTC*
+
+Since `rmr.yml` stopped coming with the download, a brand-new server built its settings from the defaults inside the server program. Those defaults had **0 bots**, so a fresh install started with an empty New Eden. Account auto-creation and the dashboard's bot controls were also off.
+
+### Fixed
+
+- **Bots:** new servers start with **100,000** bots again.
+- **Accounts:** made automatically the first time someone logs in with a new name.
+- **Dashboard:** the **Bots** page controls are switched on.
+
+### Already set up?
+
+A server that already has an `rmr.yml` keeps it, so nothing changes there on its own. If yours shows 0 bots, open `rmr.yml` and set:
+
+- `count: 100000` under `bots:`
+- `dashboardControls: true` under `bots:`
+- `autoCreateAccounts: true` under `server:`
+
+Then restart the server with Start.bat.
+
 ## Launcher and dashboard fixes
 
 *2026-11-13 01:32 UTC*
