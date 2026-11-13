@@ -23,6 +23,8 @@ use crate::svc::wallet::{post, Entry, Transfer};
 
 const RANGE_STATION: i64 = -1;
 const RANGE_SOLAR_SYSTEM: i64 = 0;
+/// const.rangeConstellation in this client: the order's constellation.
+const RANGE_CONSTELLATION: i64 = 4;
 /// const.rangeRegion: anywhere in the region.
 const RANGE_REGION: i64 = 32767;
 const ORDER_OPEN: i32 = 0;
@@ -200,6 +202,28 @@ struct Where {
     region: i64,
 }
 
+/// Whether a buy order of `range` placed in `from` reaches `to`. Station and
+/// system ranges are settled in SQL; the constellation range is the order's
+/// constellation, the region range all of it, and any other value that many
+/// jumps through the gates.
+async fn reaches(txn: &mut ItemTxn<'_>, range: i64, from: i64, to: i64) -> bool {
+    if range <= RANGE_SOLAR_SYSTEM || range >= RANGE_REGION || from == to {
+        return true;
+    }
+    if range == RANGE_CONSTELLATION {
+        return txn
+            .tx()
+            .query_one(
+                r#"SELECT count(DISTINCT "constellationID") = 1 FROM "mapSolarSystems" WHERE "solarSystemID" = ANY($1)"#,
+                &[&vec![from as i32, to as i32]],
+            )
+            .await
+            .map(|r| r.get::<_, bool>(0))
+            .unwrap_or(false);
+    }
+    crate::gates::jumps(txn.tx(), from, to, range).await.is_some()
+}
+
 async fn place(txn: &mut ItemTxn<'_>, fx: &mut Effects, me: i64, order: NewOrder) -> Result<(), Refusal> {
     if order.corp {
         return refuse("Corporation orders are not available yet.");
@@ -248,14 +272,14 @@ async fn buy(txn: &mut ItemTxn<'_>, fx: &mut Effects, me: i64, order: &NewOrder,
             ],
         )
         .await?;
-    // A buy order of some jumps reaches sell orders that many jumps away.
-    let near = if order.range > RANGE_SOLAR_SYSTEM && order.range < RANGE_REGION {
-        Some(crate::gates::within(txn.tx(), at.solar_system, order.range).await.into_iter().map(|(s, _)| s).collect::<std::collections::HashSet<i64>>())
-    } else {
-        None
-    };
-    let rows = rows.iter().filter(|r| near.as_ref().is_none_or(|n| n.contains(&(r.get::<_, i32>(6) as i64))));
-    let fills = take(rows.map(as_match), order.quantity);
+    // A ranged buy order reaches sell orders within its range.
+    let mut reach: Vec<&Row> = Vec::with_capacity(rows.len());
+    for r in &rows {
+        if reaches(txn, order.range, at.solar_system, r.get::<_, i32>(6) as i64).await {
+            reach.push(r);
+        }
+    }
+    let fills = take(reach.into_iter().map(as_match), order.quantity);
     let filled: i64 = fills.iter().map(|(_, n)| n).sum();
     if order.duration == 0 && filled < order.quantity {
         return refuse("There is not enough for sale at that price within that range.");
@@ -330,14 +354,10 @@ async fn sell(txn: &mut ItemTxn<'_>, fx: &mut Effects, me: i64, order: &NewOrder
             ],
         )
         .await?;
-    // A buy order of some jumps reaches sellers that many jumps from it.
+    // A ranged buy order reaches sellers within its range.
     let mut reach: Vec<&Row> = Vec::with_capacity(rows.len());
     for r in &rows {
-        let range = r.get::<_, i32>(7) as i64;
-        let from = r.get::<_, i32>(6) as i64;
-        if range <= RANGE_SOLAR_SYSTEM || range >= RANGE_REGION || from == at.solar_system
-            || crate::gates::jumps(txn.tx(), from, at.solar_system, range).await.is_some()
-        {
+        if reaches(txn, r.get::<_, i32>(7) as i64, r.get::<_, i32>(6) as i64, at.solar_system).await {
             reach.push(r);
         }
     }

@@ -61,6 +61,12 @@ pub async fn reprocessing_svc(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
             let quotes = quotes(ctx, &terms, station, &item_ids(call)).await;
             Value::Dict(quotes.into_iter().map(|q| (Value::Int(q.item_id), q.to_value())).collect())
         }
+        // The plant window asks one item at a time (base_reprocessingplant.py:345).
+        "GetQuote" => {
+            let item_id = call.args.first().and_then(|v| v.as_i64()).unwrap_or(0);
+            let terms = terms(ctx, station).await?;
+            quotes(ctx, &terms, station, &[item_id]).await.into_iter().next().map(|q| q.to_value()).unwrap_or(Value::None)
+        }
         "Reprocess" => return Some(reprocess(ctx, station, &item_ids(call)).await),
         _ => return None,
     };

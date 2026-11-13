@@ -6,8 +6,8 @@
 //! so the market looks like players trade on it. Each order stands for one to
 //! three days and is then taken down; new ones replace it.
 //!
-//! Their buy orders reach across the system, some jumps or the whole region,
-//! like players' do. Where a player is docked, traders also bid on what that
+//! Their buy orders reach across the system, the constellation or the whole
+//! region, like players' do. Where a player is docked, traders also bid on what that
 //! player has in the station hangar, so anything worth something can be sold
 //! there.
 //!
@@ -36,6 +36,7 @@ const FIRST_PLAYER_ID: i32 = 100_000_000;
 const HUBS: i64 = 10;
 const RANGE_STATION: i32 = -1;
 const RANGE_SOLAR_SYSTEM: i32 = 0;
+const RANGE_CONSTELLATION: i32 = 4;
 const RANGE_REGION: i32 = 32767;
 /// Bids on what a docked player holds, at most this many a station a round.
 const HELD_PER_ROUND: i64 = 60;
@@ -98,7 +99,11 @@ async fn ensure_table(db: &Client) -> Result<(), tokio_postgres::Error> {
                "bid" smallint NOT NULL,
                "expires" bigint NOT NULL
            );
-           CREATE INDEX IF NOT EXISTS "rmrBotMarketOrders_station" ON "rmrBotMarketOrders" ("stationID");"#,
+           CREATE INDEX IF NOT EXISTS "rmrBotMarketOrders_station" ON "rmrBotMarketOrders" ("stationID");
+           -- Jump ranges the 2.10 market window cannot name (the sell window
+           -- fails to draw) become the constellation or the region.
+           UPDATE market_orders SET "range" = CASE WHEN "range" BETWEEN 1 AND 4 THEN 4 ELSE 32767 END
+            WHERE "bid" = 1 AND "orderState" = 0 AND "range" NOT IN (-1, 0, 4, 32767);"#,
     )
     .await
 }
@@ -265,15 +270,15 @@ async fn stock_station(
     Ok(placed)
 }
 
-/// How far a bot's buy order reaches: often the whole region, else some
-/// jumps, the system or only its own station.
+/// How far a bot's buy order reaches: often the whole region, else its
+/// constellation, its system or only its own station. These four are all the
+/// 2.10 market window knows how to name.
 fn buy_range(rng: &mut Rng) -> i32 {
-    const JUMPS: [i32; 8] = [1, 2, 3, 4, 5, 10, 20, 40];
     let u = rng.unit();
-    if u < 0.4 {
+    if u < 0.45 {
         RANGE_REGION
     } else if u < 0.7 {
-        JUMPS[rng.below(JUMPS.len())]
+        RANGE_CONSTELLATION
     } else if u < 0.85 {
         RANGE_SOLAR_SYSTEM
     } else {
