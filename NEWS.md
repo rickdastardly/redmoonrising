@@ -2,6 +2,22 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Fixes from a player's server log: market, chat window, jumps and more
+
+*2026-11-13 15:17 UTC*
+
+Fixes for the errors in a player's server log:
+
+- **Market:** opening some market groups failed with an error. The item data gave 211 values for seven attributes (1112 to 1126) that this game client has never heard of, on implants among others. They're no longer sent, so the market's skill check and Show Info work on those items again.
+- **Channels window:** opening it failed with an error. The game tried to show its "Creating a chat channel" tutorial, which has no pages in the data, and 19 other tutorials are the same. The server no longer offers the empty ones, the tutorial chain stops before them, and the client skips one if asked for it anyway.
+- **Jumping through a stargate:** the gate flash and jump-out effect sometimes reached your client after you had arrived in the next system, causing a *No ballpark for update* error. Your own copy is now sent before the jump.
+- **System Scanner:** it refreshed while you were jumping and tripped the client's session check. It now waits until you've arrived.
+- **Local and chat member lists:** fixed an error in the war/corp/alliance star when a row closed while it was loading.
+- **Character selection:** the game's HTML tables could fail with *KeyError 'spacing-right'* when a line was too wide for its column. The client now keeps the layout it has instead of failing.
+- **Server log:** Client.bat checks every few seconds whether each server is online, and the server logged each check as a lost connection: 157 warnings in one evening. Those checks are now logged only at debug level. Real players connecting, disconnecting and dropping are logged as before.
+
+*Restart Start.bat to rebuild the server. Start the game from Client.bat to pick up the client fixes.*
+
 ## Item and skill attributes show their real values
 
 *2026-11-13 15:02 UTC*

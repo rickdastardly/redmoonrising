@@ -456,13 +456,20 @@ impl Conn {
         // Leave: the gate lights up and the ship jumps out, for everyone here
         // and for the pilot ("Jumping", spaceMgr.py:123); it goes once that
         // has played.
-        {
+        // The pilot's copy goes straight out: queued, it would wait behind
+        // this call and reach the client after the session change, when its
+        // ballpark for this system is gone ("No ballpark for update").
+        let own = {
             let world = self.server.world.lock();
             let tick = world.parks.get(&system_id).map_or(destiny::tick_now(), |p| p.tick);
             let gate = space::special_fx(tick, from_gate, None, "effects.GateActivity");
             let out = space::special_fx(tick, ship_id, Some(from_gate), "effects.JumpOut");
-            space::broadcast(&world, system_id, None, vec![gate, out]);
-        }
+            let args = Value::Tuple(vec![Value::List(vec![gate, out]), Value::Int(0)]);
+            let others: Vec<i64> = world.in_space(system_id).into_iter().filter(|c| *c != self.client_id).collect();
+            world.notify(&others, "DoDestinyUpdate", args.clone());
+            Notification { event: "DoDestinyUpdate", args }
+        };
+        self.send_notification(&own).await?;
         tokio::time::sleep(JUMP_OUT_TIME).await;
         let ship = space::remove_ship(&mut self.server.world.lock(), system_id, ship_id);
         let Some(ship) = ship else {

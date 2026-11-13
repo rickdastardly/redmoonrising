@@ -21,8 +21,17 @@ pub async fn tutorial_svc(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
 
 async fn get_tutorials(ctx: &Ctx<'_>) -> Value {
     const HEADER: &[&str] = &["tutorialID", "tutorialVName", "nextTutorialID"];
-    let sql = r#"SELECT "tutorialID","tutorialVName","nextTutorialID"
-                   FROM tutorials ORDER BY "tutorialID""#;
+    // 20 of the 41 tutorials (the Aura notes for chat channels, cloning,
+    // insurance and others) have no pages in the data. The client opens one
+    // by showing its first page, and fails on a tutorial without any, so
+    // only those with pages are listed, and a chain stops before a
+    // tutorial without them.
+    let sql = r#"SELECT t."tutorialID", t."tutorialVName",
+                        CASE WHEN EXISTS (SELECT 1 FROM tutorial_pages n WHERE n."tutorialID" = t."nextTutorialID")
+                               THEN t."nextTutorialID" END AS "nextTutorialID"
+                   FROM tutorials t
+                  WHERE EXISTS (SELECT 1 FROM tutorial_pages p WHERE p."tutorialID" = t."tutorialID")
+                  ORDER BY t."tutorialID""#;
     ctx.rowset(HEADER, sql, &[]).await
 }
 
@@ -42,8 +51,12 @@ async fn tutorial_info(ctx: &Ctx<'_>, tutorial_id: i64) -> Value {
 
     let id = tutorial_id as i32;
 
-    let tutorial_sql = r#"SELECT "tutorialID","tutorialVName","nextTutorialID"
-                            FROM tutorials WHERE "tutorialID" = $1"#;
+    let tutorial_sql = r#"SELECT t."tutorialID", t."tutorialVName",
+                                 CASE WHEN EXISTS (SELECT 1 FROM tutorial_pages n WHERE n."tutorialID" = t."nextTutorialID")
+                               THEN t."nextTutorialID" END AS "nextTutorialID"
+                            FROM tutorials t
+                           WHERE t."tutorialID" = $1
+                             AND EXISTS (SELECT 1 FROM tutorial_pages p WHERE p."tutorialID" = t."tutorialID")"#;
     let tutorial_rows = match ctx.db.query(tutorial_sql, &[&id]).await {
         Ok(rows) => rows,
         Err(e) => {

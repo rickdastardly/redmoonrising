@@ -1077,7 +1077,20 @@ def _rmr_install_scan_results():
         cls._rmr_scan_results_installed = True
         scanner = xtriui.SystemScanner
         original_refresh = scanner.Refresh
+        def refresh_later(window):
+            # Refresh once the session has settled: asking the server for
+            # scans while it changes (on a jump) trips the client's
+            # session check.
+            for i in range(50):
+                blue.pyos.synchro.Sleep(200)
+                if not getattr(eve.session, 'changing', None):
+                    break
+            if window is not None and not getattr(window, 'destroyed', 0):
+                refresh(window)
         def refresh(self, *args, **kwargs):
+            if getattr(eve.session, 'changing', None):
+                uthread.new(refresh_later, self)
+                return
             try:
                 return original_refresh(self, *args, **kwargs)
             except:
@@ -1096,6 +1109,83 @@ def _rmr_install_scan_results():
         sys.exc_clear()
 
 uthread.new(_rmr_install_scan_results)
+
+def _rmr_install_tutorial_guard():
+    # Half of the tutorials in the data have no pages (the Aura notes for
+    # chat channels, cloning, insurance and more). The server no longer
+    # lists them; should the client still ask for one, it is skipped
+    # instead of failing on its missing first page.
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        svc = None
+        for name in ('tutorial', 'tutorialSvc'):
+            try:
+                candidate = sm.GetService(name)
+            except:
+                sys.exc_clear()
+                continue
+            if hasattr(candidate, 'OpenTutorial'):
+                svc = candidate
+                break
+        if svc is None:
+            _rmr_log('Tutorial guard: no tutorial service found.')
+            return
+        cls = svc.__class__
+        if getattr(cls, '_rmr_tutorial_guard', False):
+            return
+        original = cls.OpenTutorial
+        def open_tutorial(self, *args, **kwargs):
+            try:
+                return original(self, *args, **kwargs)
+            except (IndexError, AttributeError, KeyError):
+                _rmr_log('Tutorial %r has no pages; skipped.' % (args[:1],))
+                sys.exc_clear()
+        cls.OpenTutorial = open_tutorial
+        cls._rmr_tutorial_guard = True
+        _rmr_log('Tutorials without pages are skipped.')
+    except:
+        _rmr_log('Tutorial guard failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+uthread.new(_rmr_install_tutorial_guard)
+
+def _rmr_install_html_table_guard():
+    # The client's HTML tables fail (KeyError 'spacing-right') when a cell's
+    # text is wider than its column, which can stop a window drawing (the
+    # character selection screen). Keep the layout it has instead.
+    try:
+        cls = None
+        for i in range(120):
+            try:
+                import listentry
+                cls = getattr(listentry, 'table', None)
+            except:
+                sys.exc_clear()
+            if cls is not None:
+                break
+            blue.pyos.synchro.Sleep(500)
+        if cls is None or not hasattr(cls, 'RefreshSizes'):
+            _rmr_log('HTML table guard: no table entry class found.')
+            return
+        if getattr(cls, '_rmr_table_guard', False):
+            return
+        original = cls.RefreshSizes
+        def refresh_sizes(self, *args, **kwargs):
+            try:
+                return original(self, *args, **kwargs)
+            except KeyError, e:
+                if 'spacing' not in str(e):
+                    raise
+                sys.exc_clear()
+        cls.RefreshSizes = refresh_sizes
+        cls._rmr_table_guard = True
+        _rmr_log('HTML table width guard installed.')
+    except:
+        _rmr_log('HTML table guard failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+uthread.new(_rmr_install_html_table_guard)
 
 def _rmr_install_alliance_logos():
     while not getattr(eve.session, 'charid', None):
@@ -1833,7 +1923,8 @@ def _rmr_install_local_roster():
         def load(self, node, *args):
             result = original_load(self, node, *args)
             try:
-                if self.destroyed or self.sr.node is not node:
+                # An entry closed while it loaded has no sr left.
+                if getattr(self, 'sr', None) is None or self.destroyed or getattr(self.sr, 'node', None) is not node:
                     return result
                 owner = getattr(node, 'allianceID', None) or getattr(node, 'corpID', None)
                 badge = getattr(self.sr, 'rmrWarBadge', None)

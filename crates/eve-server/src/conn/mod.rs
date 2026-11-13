@@ -114,14 +114,20 @@ impl Conn {
     pub async fn run(mut self) {
         let span = self.span.clone();
         async move {
-            info!("connected");
+            // Launchers and the login screen open a connection just to see
+            // whether the server is up, and drop it: only a connection that
+            // logged in is worth more than a debug line.
+            debug!("connected");
             let notifications = self.server.world.lock().connect(self.client_id);
             let result = self.serve(notifications).await;
             self.leave_world();
+            let player = self.authenticated;
             match result {
-                Ok(()) => info!("disconnected"),
+                Ok(()) if player => info!("disconnected"),
+                Ok(()) => debug!("status check closed"),
                 Err(ConnError::Closed(reason)) => warn!("closed by the server: {reason}"),
-                Err(ConnError::Io(e)) => warn!("connection lost: {}", crate::logging::chain(&e)),
+                Err(ConnError::Io(e)) if player => warn!("connection lost: {}", crate::logging::chain(&e)),
+                Err(ConnError::Io(e)) => debug!("status check dropped: {}", crate::logging::chain(&e)),
                 Err(e) => error!("connection dropped: {}", crate::logging::chain(&e)),
             }
         }

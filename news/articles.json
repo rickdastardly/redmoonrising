@@ -1,5 +1,11 @@
 [
   {
+    "published": "2026-11-13 15:17 UTC",
+    "publishedMs": 1794583073278,
+    "title": "Fixes from a player's server log: market, chat window, jumps and more",
+    "body": "<p>Fixes for the errors in a player's server log:</p>\n<ul>\n<li><b>Market:</b> opening some market groups failed with an error. The item data gave 211 values for seven attributes (1112 to 1126) that this game client has never heard of, on implants among others. They're no longer sent, so the market's skill check and Show Info work on those items again.</li>\n<li><b>Channels window:</b> opening it failed with an error. The game tried to show its \"Creating a chat channel\" tutorial, which has no pages in the data, and 19 other tutorials are the same. The server no longer offers the empty ones, the tutorial chain stops before them, and the client skips one if asked for it anyway.</li>\n<li><b>Jumping through a stargate:</b> the gate flash and jump-out effect sometimes reached your client after you had arrived in the next system, causing a <i>No ballpark for update</i> error. Your own copy is now sent before the jump.</li>\n<li><b>System Scanner:</b> it refreshed while you were jumping and tripped the client's session check. It now waits until you've arrived.</li>\n<li><b>Local and chat member lists:</b> fixed an error in the war/corp/alliance star when a row closed while it was loading.</li>\n<li><b>Character selection:</b> the game's HTML tables could fail with <i>KeyError 'spacing-right'</i> when a line was too wide for its column. The client now keeps the layout it has instead of failing.</li>\n<li><b>Server log:</b> Client.bat checks every few seconds whether each server is online, and the server logged each check as a lost connection: 157 warnings in one evening. Those checks are now logged only at debug level. Real players connecting, disconnecting and dropping are logged as before.</li>\n</ul>\n<p><i>Restart Start.bat to rebuild the server. Start the game from Client.bat to pick up the client fixes.</i></p>"
+  },
+  {
     "published": "2026-11-11 23:21 UTC",
     "publishedMs": 1794439318338,
     "title": "Heavy drones, shortcuts and bot controls",

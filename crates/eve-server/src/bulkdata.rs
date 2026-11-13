@@ -117,7 +117,12 @@ pub const SPECS: &[Spec] = &[
     s("config.BulkData.dgmeffects", Shape::Tuple,
       r#"SELECT "effectID","effectName","effectCategory","preExpression","postExpression","description","guid","graphicID","isOffensive","isAssistance","durationAttributeID","trackingSpeedAttributeID","dischargeAttributeID","rangeAttributeID","falloffAttributeID","published","displayName","isWarpSafe","rangeChance","electronicChance","propulsionChance","distribution","sfxName","npcUsageChanceAttributeID","npcActivationChanceAttributeID" FROM "dgmEffects""#),
     s_num("config.BulkData.dgmtypeattribs", Shape::Tuple,
-      r#"SELECT "typeID","attributeID","value" FROM "dgmTypeAttribs""#,
+      // Only attributes the client knows (dgmattribs above): 211 rows give
+      // values for attributes 1112-1126, which this client has no entry
+      // for, and Show Info and the market's skill check fail on them
+      // (KeyError 1112).
+      r#"SELECT "typeID","attributeID","value" FROM "dgmTypeAttribs"
+          WHERE "attributeID" IN (SELECT "attributeID" FROM "dgmAttributeTypes")"#,
       &["value"]),
     s("config.BulkData.dgmtypeeffects", Shape::Tuple,
       r#"SELECT "typeID","effectID","isDefault" FROM "dgmTypeEffects""#),
