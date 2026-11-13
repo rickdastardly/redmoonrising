@@ -385,6 +385,9 @@ pub enum BattleOrder {
     Doomsday { titan: i64, hostile: Vec<i64> },
     /// A sieged dreadnought's volley at a tower.
     Bombard { ship: i64, tower: i64, damage: f64 },
+    /// A sieged dreadnought's volley at an enemy ship (a capital, if one is
+    /// on the grid): where there is no tower to bombard.
+    Volley { ship: i64, target: i64, damage: f64 },
     /// A logistics ship's remote repair: shield (shield transfer) or armor.
     Repair { from: i64, to: i64, amount: f64, shield: bool },
 }

@@ -225,6 +225,18 @@ fn battle_orders(park: &mut Park, now: i64, out: &mut Out) {
                 out.destiny(system, crate::svc::space::special_fx(tick, ship, Some(tower), "effects.Laser"));
                 hit(park, attacker, tower, [0.0, 0.0, damage * 0.5, damage * 0.5], Shot::Hit { quality: 3, multiplier: 1.0 }, "Siege bombardment", now, out);
             }
+            crate::ballpark::BattleOrder::Volley { ship, target, damage } => {
+                let (Some(source), Some(victim)) = (park.ships.get(&ship), park.ships.get(&target)) else {
+                    tracing::debug!("siege volley dropped in {system}: dreadnought {ship} or its target {target} is no longer in space");
+                    continue;
+                };
+                if source.in_warp() || victim.in_warp() || victim.fight.is_none() {
+                    continue;
+                }
+                let attacker = by(source);
+                out.destiny(system, crate::svc::space::special_fx(tick, ship, Some(target), "effects.Laser"));
+                hit(park, attacker, target, [0.0, 0.0, damage * 0.5, damage * 0.5], Shot::Hit { quality: 3, multiplier: 1.0 }, "Siege volley", now, out);
+            }
             crate::ballpark::BattleOrder::Repair { from, to, amount, shield } => {
                 if !park.ships.contains_key(&from) || !park.ships.contains_key(&to) {
                     tracing::debug!("repair order dropped in {system}: logistics {from} or its target {to} is no longer in space");

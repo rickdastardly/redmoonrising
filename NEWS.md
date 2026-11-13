@@ -2,6 +2,15 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Capital battles in open space, anywhere
+
+*2026-11-13 20:19 UTC*
+
+- **A capital battle can now be started in any system.** Where no bot alliance holds a tower, two bot alliances meet in open space instead: a *Battlefield* beacon appears about 45 km from you and both fleets form up round it. Before, the request was turned down.
+- **Dreadnoughts fight each other.** In siege mode, with no tower to bombard, they fire heavy volleys at the enemy's capitals first, then at the rest of the enemy fleet. Round a tower, the attackers still bombard it.
+- An open-space battle decides no sovereignty: the news says who won, and the beacon goes when it ends.
+- An open-space battle forms up wherever a pilot is in space in that system; with nobody in space there it is fought on paper until someone undocks.
+
 ## Capitals arrive at a cyno with the jump drive's flash
 
 *2026-11-13 18:58 UTC*

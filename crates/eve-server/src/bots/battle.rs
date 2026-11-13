@@ -64,6 +64,20 @@ const ORDERS_EVERY: Duration = Duration::from_secs(5);
 /// How often a fight players see says, in the server log, what its capitals
 /// are doing.
 const ORDERS_LOG_EVERY: Duration = Duration::from_secs(30);
+/// A sieged dreadnought's volley at an enemy ship, where there is no tower
+/// to bombard: capitals first.
+const VOLLEY: f64 = 12_000.0;
+/// Where an open-space battle forms up: a beacon this far from the player
+/// who watches, the fleets round it.
+const FIELD_OFF: f64 = 45_000.0;
+const FIELD_DEFEND_ORBIT: f64 = 12_000.0;
+const FIELD_ATTACK_ORBIT: f64 = 28_000.0;
+/// How far a sieged dreadnought reaches with a volley at a ship.
+const VOLLEY_RANGE: f64 = 150_000.0;
+/// Titan, dreadnought, freighter, carrier and mothership groups.
+const CAPITAL_GROUPS: [i64; 5] = [30, 485, 513, 547, 659];
+/// Celestial Beacon II: marks an open-space battlefield.
+const TYPE_BATTLE_BEACON: i64 = 19706;
 /// A sieged dreadnought's damage to a tower in that time.
 const BOMBARD_VOLLEY: f64 = 9_000.0;
 /// A logistics ship's repair in that time.
@@ -138,6 +152,7 @@ impl Stakes {
 #[derive(Default)]
 struct Tally {
     bombard: u32,
+    volleys: u32,
     repairs: u32,
     doomsdays: u32,
     sieged: u32,
@@ -255,6 +270,8 @@ pub struct Fight {
     pub defend: Side,
     /// Whether it is being fought ship against ship, where players see it.
     pub seen: bool,
+    /// The beacon an open-space battle forms up round, while seen.
+    beacon: Option<i64>,
     began: Instant,
     last: Instant,
     last_wave: Instant,
@@ -345,6 +362,10 @@ pub async fn run(
             let Some(mut f) = assemble(&s, bots, ids, presence, p, rng, &mut report) else {
                 // One side has nobody who can fight: the other walks in.
                 let won = s.attackers >= s.defenders;
+                if s.field {
+                    info!("bots: the open-space battle in {} did not happen: one side had nobody to bring", s.names.system);
+                    continue;
+                }
                 report.news.push(sov::conclude(db, p, &s, won, (0, 0), rng, claim_delay_secs, speed).await?);
                 sov::show_towers(db, world, s.system).await;
                 continue;
@@ -391,7 +412,7 @@ pub async fn run(
         let verdict = {
             let f = s.fight.as_mut().expect("a fight under way");
             if seen && !f.seen {
-                f.seen = muster(&s.system, s.defender, world, f, bots, presence, rng, clock, &mut report);
+                f.seen = muster(&s.system, s.defender, s.field, world, f, bots, presence, rng, clock, &mut report);
             } else if !seen && f.seen {
                 stand_down(f, s.system, world, bots, atlas, presence, rng, &mut report);
             }
@@ -419,7 +440,14 @@ pub async fn run(
         };
         let mut f = s.fight.take().expect("a fight under way");
         let lost = (f.attack.lost, f.defend.lost);
-        let mut news = sov::conclude(db, p, &s, won, lost, rng, claim_delay_secs, speed).await?;
+        take_down_beacon(&mut f, s.system, world);
+        // An open-space battle holds no space: it ends with the battle.
+        let mut news = if s.field {
+            let (winner, loser) = if won { (&s.names.attacker, &s.names.defender) } else { (&s.names.defender, &s.names.attacker) };
+            (crate::bulkdata::filetime_now(), format!("{winner} beat {loser} in open space in {}", s.names.system))
+        } else {
+            sov::conclude(db, p, &s, won, lost, rng, claim_delay_secs, speed).await?
+        };
         news.1 = format!("{} ({} ships lost: {} of {}'s side, {} of {}'s)", news.1, lost.0 + lost.1, lost.0, s.names.attacker, lost.1, s.names.defender);
         if let Some(id) = f.report_id {
             if let Err(e) = report_update(db, id, &f, Some((&news.1, won))).await {
@@ -528,6 +556,7 @@ fn assemble(s: &Siege, bots: &[Bot], ids: &[Identity], presence: &Presence, p: &
         cleared: None,
         rallies: None,
         report_id: None,
+        beacon: None,
         last_report: now,
         last_order: now,
         last_order_log: now,
@@ -539,7 +568,10 @@ fn assemble(s: &Siege, bots: &[Bot], ids: &[Identity], presence: &Presence, p: &
 /// The fight comes into view: rally points round the defender's tower. False
 /// if there is no tower left to fight round (it is fought unseen).
 #[allow(clippy::too_many_arguments)]
-fn muster(system: &i32, defender: i32, world: &World, f: &mut Fight, bots: &mut [Bot], presence: &mut Presence, rng: &mut Rng, clock: u32, report: &mut Report) -> bool {
+#[allow(clippy::too_many_arguments)]
+fn muster(system: &i32, defender: i32, open: bool, world: &World, f: &mut Fight, bots: &mut [Bot], presence: &mut Presence, rng: &mut Rng, clock: u32, report: &mut Report) -> bool {
+    let dir = rng.in_sphere(1.0);
+    let dir = if dir.len() > 1e-6 { dir.unit() } else { crate::ballpark::Vec3::new(1.0, 0.0, 0.0) };
     let place = {
         let w = world.lock();
         let found = w.parks.get(&(*system as i64)).and_then(|park| {
@@ -547,16 +579,73 @@ fn muster(system: &i32, defender: i32, world: &World, f: &mut Fight, bots: &mut 
         });
         found
     };
-    let Some((tower, at, field)) = place else { return false };
-    let dir = rng.in_sphere(1.0);
-    let dir = if dir.len() > 1e-6 { dir.unit() } else { crate::ballpark::Vec3::new(1.0, 0.0, 0.0) };
-    let defend = Rally { anchor: tower, point: at + dir * (field + DEFENDERS_OUT), orbit: field + DEFENDERS_OUT, target: None };
-    let attack = Rally { anchor: tower, point: at + dir * (field + ATTACKERS_IN), orbit: field + ATTACKERS_ORBIT, target: None };
+    let (defend, attack) = match place {
+        Some((tower, at, field)) => (
+            Rally { anchor: tower, point: at + dir * (field + DEFENDERS_OUT), orbit: field + DEFENDERS_OUT, target: None },
+            Rally { anchor: tower, point: at + dir * (field + ATTACKERS_IN), orbit: field + ATTACKERS_ORBIT, target: None },
+        ),
+        None if open => {
+            let Some((beacon, at)) = battlefield(*system, world, dir) else {
+                tracing::warn!("bots: an open-space battle in {system} has nobody in space to fight beside; fought unseen until someone undocks");
+                return false;
+            };
+            f.beacon = Some(beacon);
+            info!("bots: open-space battle in {system}: the fleets form up round beacon {beacon}, {:.0} km from the pilot watching", FIELD_OFF / 1000.0);
+            (
+                Rally { anchor: beacon, point: at + dir * FIELD_DEFEND_ORBIT, orbit: FIELD_DEFEND_ORBIT, target: None },
+                Rally { anchor: beacon, point: at - dir * FIELD_ATTACK_ORBIT, orbit: FIELD_ATTACK_ORBIT, target: None },
+            )
+        }
+        None => return false,
+    };
     f.rallies = Some((attack, defend));
     f.last_wave = Instant::now() - REINFORCE;
     f.seen_since.get_or_insert_with(Instant::now);
     reinforce(f, *system, world, bots, presence, clock, report);
     true
+}
+
+/// Puts a beacon in space `FIELD_OFF` from a player in space in `system`, for
+/// an open-space battle to form up round. Its id and where it is.
+fn battlefield(system: i32, world: &World, dir: Vec3) -> Option<(i64, Vec3)> {
+    let mut w = world.lock();
+    let park = w.parks.get_mut(&(system as i64))?;
+    let watcher = park.ships.values().find(|s| s.client_id != 0 && !s.bot && s.npc.is_none() && s.drone.is_none())?.pos;
+    let id = crate::npc::next_id();
+    let pos = watcher + dir * FIELD_OFF;
+    park.sites.insert(
+        id,
+        crate::sites::Site {
+            id,
+            mission_id: 0,
+            char_id: 0,
+            name: "Battlefield".into(),
+            pos,
+            rats: Vec::new(),
+            wave: 0,
+            waves: 0,
+            security: -1.0,
+            type_id: TYPE_BATTLE_BEACON,
+            dungeon: None,
+            gate: None,
+            part_of: Some(id),
+            size: 0.0,
+        },
+    );
+    let entries = crate::svc::space::add_object_entries_for_nearby(park, id);
+    for (client, entry) in entries {
+        w.notify(&[client], "DoDestinyUpdate", eve_marshal::Value::Tuple(vec![eve_marshal::Value::List(vec![entry]), eve_marshal::Value::Int(0)]));
+    }
+    Some((id, pos))
+}
+
+/// The open-space battle's beacon goes.
+fn take_down_beacon(f: &mut Fight, system: i32, world: &World) {
+    let Some(id) = f.beacon.take() else { return };
+    let mut w = world.lock();
+    let Some(park) = w.parks.get_mut(&(system as i64)) else { return };
+    let gone = crate::sites::close_site(park, id);
+    crate::svc::space::broadcast(&w, system as i64, None, gone);
 }
 
 /// Both sides' reserves warp in, as far as the grid has room. A side's
@@ -727,6 +816,7 @@ fn put_out_cyno(side: &mut Side, system: i32, world: &World) {
 /// reserves, to fight on unseen.
 #[allow(clippy::too_many_arguments)]
 fn stand_down(f: &mut Fight, system: i32, world: &World, bots: &mut [Bot], atlas: &Atlas, presence: &mut Presence, rng: &mut Rng, report: &mut Report) {
+    take_down_beacon(f, system, world);
     for side in [&mut f.attack, &mut f.defend] {
         put_out_cyno(side, system, world);
         side.sieged.clear();
@@ -798,6 +888,13 @@ fn capital_orders(f: &mut Fight, system: i32, world: &World, presence: &Presence
     let mut orders = Vec::new();
     let mut fx = Vec::new();
     for (side, hostile, attacking) in [(&mut f.attack, &hostile_to_attack, true), (&mut f.defend, &hostile_to_defend, false)] {
+        // The enemy's ships on the grid: (ship, where, a capital?).
+        let enemies: Vec<(i64, Vec3, bool)> = park
+            .ships
+            .values()
+            .filter(|s| s.fight.is_some() && !s.in_warp() && s.pilot.alliance_id.is_some_and(|a| hostile.contains(&a)))
+            .map(|s| (s.id, s.pos, CAPITAL_GROUPS.contains(&s.pilot.group_id)))
+            .collect();
         // Its ships on the grid: (bot, ship, how hurt).
         let ships: Vec<(u32, i64, f64)> = side
             .on_grid
@@ -825,6 +922,17 @@ fn capital_orders(f: &mut Fight, system: i32, world: &World, presence: &Presence
                     if let (true, Some(tower)) = (attacking, tower) {
                         orders.push(BattleOrder::Bombard { ship, tower, damage: BOMBARD_VOLLEY });
                         tally.bombard += 1;
+                    } else if let Some(at) = park.ships.get(&ship).map(|s| s.pos) {
+                        // No tower to bombard: the nearest enemy capital, else
+                        // the nearest enemy ship.
+                        let target = enemies
+                            .iter()
+                            .filter(|(_, pos, _)| (*pos - at).len() <= VOLLEY_RANGE)
+                            .min_by(|x, y| (!x.2).cmp(&!y.2).then((x.1 - at).len().total_cmp(&(y.1 - at).len())));
+                        if let Some(&(target, ..)) = target {
+                            orders.push(BattleOrder::Volley { ship, target, damage: VOLLEY });
+                            tally.volleys += 1;
+                        }
                     }
                 }
                 Class::Logistics => {
@@ -869,6 +977,7 @@ fn capital_orders(f: &mut Fight, system: i32, world: &World, presence: &Presence
     drop(w);
     f.tally.sieged += tally.sieged;
     f.tally.bombard += tally.bombard;
+    f.tally.volleys += tally.volleys;
     f.tally.repairs += tally.repairs;
     f.tally.doomsdays += tally.doomsdays;
     if f.last_order_log.elapsed() >= ORDERS_LOG_EVERY {
@@ -877,7 +986,7 @@ fn capital_orders(f: &mut Fight, system: i32, world: &World, presence: &Presence
         let on_grid = |side: &Side, class: Class| side.caps.iter().filter(|a| a.class == class && side.on_grid.contains(&a.bot)).count();
         let dreads_attacking = on_grid(&f.attack, Class::Dreadnought);
         info!(
-            "bots: battle in {system}: on grid {} v {} (titans {}/{}, dreads {}/{}, carriers {}/{}, logistics {}/{}); in {}s: {} bombard volley(s), {} repair cycle(s), {} doomsday(s), {} into siege; {}",
+            "bots: battle in {system}: on grid {} v {} (titans {}/{}, dreads {}/{}, carriers {}/{}, logistics {}/{}); in {}s: {} bombard volley(s), {} dreadnought volley(s) at ships, {} repair cycle(s), {} doomsday(s), {} into siege; {}",
             f.attack.on_grid.len(),
             f.defend.on_grid.len(),
             on_grid(&f.attack, Class::Titan),
@@ -890,10 +999,11 @@ fn capital_orders(f: &mut Fight, system: i32, world: &World, presence: &Presence
             on_grid(&f.defend, Class::Logistics),
             ORDERS_LOG_EVERY.as_secs(),
             t.bombard,
+            t.volleys,
             t.repairs,
             t.doomsdays,
             t.sieged,
-            tower_state.unwrap_or_else(|| if dreads_attacking > 0 { "no enemy tower on the grid for the dreadnoughts to bombard".into() } else { "no tower in view".into() })
+            tower_state.unwrap_or_else(|| if f.beacon.is_some() { "open space: the dreadnoughts fire on the enemy's ships".into() } else if dreads_attacking > 0 { "no enemy tower on the grid: the dreadnoughts fire on the enemy's ships".into() } else { "no tower in view".into() })
         );
     }
 }
@@ -1219,12 +1329,12 @@ mod tests {
         // Somebody is watching, so the fleets are called up.
         presence.sync(&world, &atlas, &mut bots, &ids, &by_char, Vec::new(), &mut rng);
         let names = sov::SiegeNames { attacker: "A".into(), defender: "D".into(), system: "Here".into(), region: "R".into(), security: -0.3 };
-        let siege = Siege { war: 1, attacker: ATTACKER, defender: DEFENDER, attacker_exec: 1, attacker_race: 1, attackers: 300, defenders: 300, system: HERE, names, starts: 0, starts_at: 0, fight: None, showcase: None };
+        let siege = Siege { war: 1, attacker: ATTACKER, defender: DEFENDER, attacker_exec: 1, attacker_race: 1, attackers: 300, defenders: 300, system: HERE, names, starts: 0, starts_at: 0, fight: None, showcase: None, field: false };
         let politics = Politics::new(&atlas);
         let mut report = Report::default();
         let mut fight = assemble(&siege, &bots, &ids, &presence, &politics, &mut rng, &mut report).expect("both sides have armed ships");
         assert_eq!((fight.attack.brought, fight.defend.brought), (6, 6), "small alliances bring everyone");
-        assert!(muster(&HERE, DEFENDER, &world, &mut fight, &mut bots, &mut presence, &mut rng, 0, &mut report), "fought round the tower");
+        assert!(muster(&HERE, DEFENDER, false, &world, &mut fight, &mut bots, &mut presence, &mut rng, 0, &mut report), "fought round the tower");
         assert_eq!((fight.attack.on_grid.len(), fight.defend.on_grid.len()), (6, 6));
         presence.sync(&world, &atlas, &mut bots, &ids, &by_char, Vec::new(), &mut rng);
         assert_eq!(presence.shown(), 12, "both fleets are in space");

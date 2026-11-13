@@ -436,5 +436,11 @@
     "publishedMs": 1794596290916,
     "title": "Capitals arrive at a cyno with the jump drive's flash",
     "body": "<ul>\n<li><b>Capitals jumping to a cynosural field, and ships coming through a titan's bridge, now arrive with the jump drive's own effect</b> (the bright flash with streaks trailing from it) instead of the stargate flash.</li>\n<li>This one is on trial: if you see no flash when the capitals appear, or the server log shows a client error about it, tell the server's owner so it can be put right.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-13 20:19 UTC",
+    "publishedMs": 1794601165106,
+    "title": "Capital battles in open space, anywhere",
+    "body": "<ul>\n<li><b>A capital battle can now be started in any system.</b> Where no bot alliance holds a tower, two bot alliances meet in open space instead: a <i>Battlefield</i> beacon appears about 45 km from you and both fleets form up round it. Before, the request was turned down.</li>\n<li><b>Dreadnoughts fight each other.</b> In siege mode, with no tower to bombard, they fire heavy volleys at the enemy's capitals first, then at the rest of the enemy fleet. Round a tower, the attackers still bombard it.</li>\n<li>An open-space battle decides no sovereignty: the news says who won, and the beacon goes when it ends.</li>\n<li>An open-space battle forms up wherever a pilot is in space in that system; with nobody in space there it is fought on paper until someone undocks.</li>\n</ul>"
   }
 ]

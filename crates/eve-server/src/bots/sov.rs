@@ -98,6 +98,9 @@ pub struct Siege {
     /// Asked for by hand (`/bots battle`): fought at these stakes, with
     /// every kind of capital ship on both sides.
     pub showcase: Option<super::battle::Stakes>,
+    /// Fought in open space, round a beacon by a watching pilot, where
+    /// nobody holds a tower: it decides no sovereignty.
+    pub field: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -540,6 +543,7 @@ pub async fn upkeep(
             starts_at,
             fight: None,
             showcase: None,
+            field: false,
         });
     }
 
@@ -722,13 +726,31 @@ pub async fn siege_now(
     }
     candidates.sort_unstable();
     candidates.dedup();
-    if candidates.is_empty() {
-        return Ok(Err(match wanted {
-            Some(_) => "No bot alliance has a claiming tower there (or a siege is already on there). /bots battle with no system picks a place.".into(),
-            None => "No bot alliance holds space with a claiming tower yet, or every such system is already under siege.".into(),
-        }));
-    }
     let at_war = |a: i32| p.wars.iter().any(|w| w.a == a || w.b == a);
+    // Where no bot alliance holds a tower, the battle is fought in open
+    // space, round a beacon by the pilot watching: two bot alliances (at
+    // war already, if any are) meet there.
+    let mut field = false;
+    if candidates.is_empty() {
+        let Some(system) = wanted else {
+            return Ok(Err("No bot alliance holds space with a claiming tower yet, or every such system is already under siege. Name a system to fight in open space there.".into()));
+        };
+        if sieges.iter().any(|s| s.system == system) {
+            return Ok(Err("A battle is already under way there.".into()));
+        }
+        if !atlas.systems.contains_key(&system) {
+            return Ok(Err(format!("No solar system {system}.")));
+        }
+        let mut alliances: Vec<i32> = info.keys().copied().collect();
+        alliances.sort_unstable();
+        let warring: Vec<i32> = alliances.iter().copied().filter(|a| at_war(*a)).collect();
+        let pool = if warring.is_empty() { &alliances } else { &warring };
+        let Some(&defender) = pool.get(rng.below(pool.len().max(1))) else {
+            return Ok(Err("There are no bot alliances to fight.".into()));
+        };
+        candidates.push((system, defender));
+        field = true;
+    }
     let warring: Vec<(i32, i32)> = candidates.iter().copied().filter(|(_, d)| at_war(*d)).collect();
     let pool = if warring.is_empty() { &candidates } else { &warring };
     let (system, defender) = pool[rng.below(pool.len())];
@@ -760,16 +782,28 @@ pub async fn siege_now(
         region: region_name(db, atlas.systems.get(&system).map_or(0, |x| x.region)).await,
         security: atlas.systems.get(&system).map_or(0.0, |x| x.security as f64),
     };
-    let said = format!(
-        "{} by request: {} attack {} in {} ({}), now. Be in space in {} to watch it; the fleets rally round {}'s tower.",
-        stakes.label(),
-        names.attacker,
-        names.defender,
-        names.system,
-        names.region,
-        names.system,
-        names.defender
-    );
+    let said = if field {
+        format!(
+            "{} by request: {} and {} meet in open space in {} ({}), now. Be in space in {} to watch it: the fleets form up round a beacon about 45 km from you.",
+            stakes.label(),
+            names.attacker,
+            names.defender,
+            names.system,
+            names.region,
+            names.system
+        )
+    } else {
+        format!(
+            "{} by request: {} attack {} in {} ({}), now. Be in space in {} to watch it; the fleets rally round {}'s tower.",
+            stakes.label(),
+            names.attacker,
+            names.defender,
+            names.system,
+            names.region,
+            names.system,
+            names.defender
+        )
+    };
     info!("bots: {said}");
     sieges.push(Siege {
         war,
@@ -785,6 +819,7 @@ pub async fn siege_now(
         starts_at: crate::bulkdata::filetime_now(),
         fight: None,
         showcase: Some(stakes),
+        field,
     });
     Ok(Ok(said))
 }
