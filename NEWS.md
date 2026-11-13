@@ -4,7 +4,7 @@ Every update, as published on the server dashboard and the character selection s
 
 ## Selling to buy orders, bot buy orders, account creation and a calmer Start.bat
 
-*2026-11-13 13:29 UTC*
+*2026-11-13 14:44 UTC*
 
 ### Market
 
@@ -22,27 +22,48 @@ Every update, as published on the server dashboard and the character selection s
 - The build and the game server leave a quarter of the processor free.
 - The launchers' animated backgrounds redraw less often, and only while their window is in front.
 
-## Fix: new servers started with no bots
+## New servers start with 100,000 bots again
 
-*2026-11-13 13:08 UTC*
+*2026-11-13 13:02 UTC*
 
-Since `rmr.yml` stopped coming with the download, a brand-new server built its settings from the defaults inside the server program. Those defaults had **0 bots**, so a fresh install started with an empty New Eden. Account auto-creation and the dashboard's bot controls were also off.
+A fresh server now starts the way the shared setup always did: 100,000 bots in New Eden, accounts made automatically the first time someone logs in, and the bot controls switched on in the dashboard.  Servers that are already set up keep their own rmr.yml, so nothing changes there; the bots count in that file still decides how many fly. To get the new defaults on an existing server, set bots count to 100000 in rmr.yml and restart.  The startup changes from earlier today are also in: the market check now prepares the database before it runs, and Start.bat waits for the server for as long as its log keeps moving instead of giving up after a fixed time.
 
-### Fixed
+## Passwords stored hashed
 
-- **Bots:** new servers start with **100,000** bots again.
-- **Accounts:** made automatically the first time someone logs in with a new name.
-- **Dashboard:** the **Bots** page controls are switched on.
+*2026-11-13 12:04 UTC*
 
-### Already set up?
+**Passwords are now stored hashed.**
 
-A server that already has an `rmr.yml` keeps it, so nothing changes there on its own. If yours shows 0 bots, open `rmr.yml` and set:
+- Game account passwords are kept only as salted **PBKDF2-SHA256** hashes (600,000 iterations). Existing accounts are converted when the server starts.
+- A password typed into `rmr.yml` is hashed at the next start and written back as `passwordHash`, so the file no longer holds it in the clear. Weak passwords get a warning in the server log.
+- `rmr.yml` is now each server's own file: the server writes a default one if there is none.
+- The Dashboard.bat sign-in uses the same hashing and stays in memory only.
 
-- `count: 100000` under `bots:`
-- `dashboardControls: true` under `bots:`
-- `autoCreateAccounts: true` under `server:`
+*Restart Start.bat to rebuild.*
 
-Then restart the server with Start.bat.
+## Dashboard.bat keeps nothing
+
+*2026-11-13 11:55 UTC*
+
+**Dashboard.bat keeps nothing between runs.**
+
+- Each start asks for a new sign-in, address and port.
+- The sign-in goes straight to the dashboard program and stays in its memory only. Nothing is written to disk.
+- The program runs from a temporary copy, and the Windows Firewall opening lasts only for the session.
+- Stop it with **Ctrl+C** and both are removed. If the window was closed with its X instead, the next start cleans up.
+
+*Restart Start.bat once so it rebuilds the dashboard program.*
+
+## Start.bat build fix for PCs without MinGW
+
+*2026-11-13 11:47 UTC*
+
+**Start.bat builds on any PC again.** On PCs without MinGW installed, the first build failed with *dlltool could not create import library*. Rust's toolchain includes `dlltool` but not the GNU assembler (`as.exe`) that `dlltool` needs.
+
+- The download now includes GNU `as.exe` and a matching `dlltool.exe` in `vendor\binutils`, along with the DLLs they need.
+- Start.bat installs them into its tools folder if any are missing or changed, checking each against its checksum. Nothing is installed elsewhere on the PC.
+
+*Download the latest version, or run git pull, and start Start.bat again.*
 
 ## Launcher and dashboard fixes
 
