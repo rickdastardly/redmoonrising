@@ -1148,19 +1148,21 @@ fn think_one(park: &mut Park, id: i64, now: i64, seen: &[Seen], enemies: &HashSe
         .and_then(|t| park.ships.get(&t))
         .filter(|t| t.is_npc())
         .map(|t| t.pos);
-    // In high-sec (0.5 and up) bots start nothing: no war targets, grudges,
-    // raids, fight calls or belt quarrels. They only defend themselves and
-    // their corporation against pilots who opened fire first.
+    // In high-sec (0.5 and up) the only fights a bot starts are with its
+    // war's enemies: no grudges, raids, fight calls or belt quarrels. Beyond
+    // that it only defends itself and its corporation against pilots who
+    // opened fire first (and CONCORD deals with those).
     let defending: Option<HashSet<i64>> = park
         .ships
         .get(&id)
         .filter(|s| s.bot && park.wildlife.security >= crate::concord::HIGH_SEC)
         .map(|s| {
             let (me, corp) = (s.pilot.char_id, s.pilot.corp_id);
+            let side = crate::svc::war::side(&s.pilot);
             let shot_me = |c: i64| s.fight.as_ref().is_some_and(|f| f.damage_log.contains_key(&c));
             seen.iter()
                 .filter(|o| o.id != id)
-                .filter(|o| park.watch.aggressed(o.char_id, me, now) || park.watch.aggressed(o.char_id, corp, now) || shot_me(o.char_id))
+                .filter(|o| enemies.contains(&(side, o.side)) || park.watch.aggressed(o.char_id, me, now) || park.watch.aggressed(o.char_id, corp, now) || shot_me(o.char_id))
                 .map(|o| o.id)
                 .collect()
         });

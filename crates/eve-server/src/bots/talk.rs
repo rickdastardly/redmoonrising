@@ -20,7 +20,7 @@ use tracing::warn;
 use super::behaviour::Role;
 use super::Chatter;
 use crate::combat::Rng;
-use crate::world::{LocalBot, World, WorldState};
+use crate::world::{GroupChannel, LocalBot, World, WorldState};
 
 // ---- who a bot is ------------------------------------------------------------------------------
 
@@ -450,9 +450,23 @@ struct SystemTalk {
     last_battle: Option<Instant>,
 }
 
+/// A line for a corporation or alliance channel.
+struct GroupLine {
+    due: Instant,
+    channel: Value,
+    bot: LocalBot,
+    text: String,
+}
+
 struct Talk {
     rng: Rng,
     queue: Vec<Line>,
+    group_queue: Vec<GroupLine>,
+    /// When each corporation or alliance channel next hears its members talk.
+    group_next: HashMap<(bool, i64), Instant>,
+    /// When a group channel last answered a player, so one hello is not
+    /// answered by the whole corporation.
+    group_answered: HashMap<(bool, i64), Instant>,
     systems: HashMap<i64, SystemTalk>,
     /// Players in conversation with a bot: (system, player) -> bot.
     partners: HashMap<(i64, i64), Partner>,
@@ -475,6 +489,9 @@ fn with_talk<R>(f: impl FnOnce(&mut Talk) -> R) -> Option<R> {
     let talk = guard.get_or_insert_with(|| Talk {
         rng: Rng::seeded(crate::bulkdata::filetime_now() as u64 ^ 0x7a1c),
         queue: Vec::new(),
+        group_queue: Vec::new(),
+        group_next: HashMap::new(),
+        group_answered: HashMap::new(),
         systems: HashMap::new(),
         partners: HashMap::new(),
         names: HashMap::new(),
@@ -819,6 +836,138 @@ pub fn ship_lost(w: &WorldState, system: i64, victim: i64, victim_name: &str, ki
 
 /// Delivers due lines, and starts conversations in watched Local channels.
 /// Runs for the life of the server.
+/// Corporation chat: pilots who fly together, polite, helping each other out.
+/// Each conversation is said in turn by two or three corp mates.
+const CORP_TALK: &[&[&str]] = &[
+    &["morning all o7", "o7, morning!", "hey, good to see you"],
+    &["anyone need anything hauled to the hub? I'm heading there now", "could you take some tritanium for me? happy to pay the freight", "of course, send me a contract", "thanks, much appreciated"],
+    &["just finished a level 3, the agent was generous today", "nice work!", "congrats, which agent?", "the one two jumps out, I'll share the bookmark"],
+    &["heads up, war targets spotted near the gate", "thanks for the warning", "noted, I'll stay docked for a bit", "I'll keep an eye on local and shout if they move"],
+    &["does anyone have a spare fitting for a mining barge?", "I've got one going spare, I'll put it in the corp hangar", "thank you, that's really kind"],
+    &["thanks for the help with those rats earlier", "any time, that's what corp's for", "o7"],
+    &["fleet's forming for ratting in an hour if anyone wants in", "count me in", "I'll bring a logistics ship", "great, see you all there"],
+    &["welcome to everyone who joined this week, just ask if you need anything", "thanks, glad to be here", "welcome aboard!"],
+    &["good mining op today, thank you to everyone who came", "good haul, thanks for organising", "happy to help, same time next week?"],
+    &["what's everyone flying tonight?", "taking the cruiser out for missions", "just mining, nice and relaxed", "sounds good, fly safe both"],
+    &["I've put some spare modules in the corp hangar, help yourselves", "very kind, thank you", "much appreciated"],
+    &["anyone know where drones are cheap at the moment?", "the hub had decent prices this morning", "thanks, I'll have a look"],
+    &["heading off for the night, fly safe everyone", "night!", "o7, see you tomorrow"],
+    &["skill training's done, I can finally fly battlecruisers", "congratulations!", "nice one, welcome to the bigger ships"],
+    &["could someone help me with a mission? the last room's a bit much for me", "sure, I'm undocking now", "I'll come too, send me the location", "you two are the best, thank you"],
+    &["remember to keep your clones up to date, people", "good reminder, thanks", "just did mine"],
+    &["our corp wallet's looking healthy, thanks for paying your taxes everyone", "happy to chip in", "good to hear"],
+    &["lost my ship to a gate camp, lesson learned", "sorry to hear that, need some isk to get back out?", "that's kind, I should be fine, thank you", "shout if you change your mind"],
+];
+
+/// Alliance chat: the same courtesy, between the alliance's corporations.
+const ALLIANCE_TALK: &[&[&str]] = &[
+    &["o7 alliance", "o7", "evening all"],
+    &["our corp's running a mining op tomorrow, other corps welcome", "we'll send a few barges", "thanks, the more the merrier"],
+    &["thanks to everyone who helped defend the system yesterday", "good work all round", "proud to fly with you lot"],
+    &["anyone in the alliance selling cruisers? we're restocking", "we've got a few spare, I'll contract them over", "brilliant, thank you"],
+    &["reminder: be nice to the new corps, they're still finding their feet", "of course", "always happy to help"],
+    &["war targets roaming nearby, keep an eye out", "thanks for the heads up", "we'll watch our side"],
+];
+
+/// A player said something in their corporation or alliance channel: now and
+/// then a corp mate answers, kindly.
+pub fn player_said_to_group(w: &WorldState, channel: &Value, name: &str) {
+    if super::chatter() == Chatter::Off || !super::is_running() {
+        return;
+    }
+    let Some((kind, id)) = crate::world::group_channel(channel) else { return };
+    let corp = kind == GroupChannel::Corporation;
+    let bots = w.online_bots(|b| if corp { b.corp_id == id } else { b.alliance_id == Some(id) });
+    if bots.is_empty() {
+        return;
+    }
+    let now = Instant::now();
+    with_talk(|t| {
+        if t.group_answered.get(&(corp, id)).is_some_and(|at| now.duration_since(*at) < Duration::from_secs(20)) {
+            return;
+        }
+        if t.rng.unit() > 0.6 {
+            return;
+        }
+        t.group_answered.insert((corp, id), now);
+        let first = first_name(name).to_string();
+        let line = pick(&mut t.rng, &["hey {p} o7", "hi {p}, how's it going?", "good to see you {p}", "o7 {p}", "sounds good {p}", "agreed", "happy to help if you need anything, {p}"]);
+        let text = line.replace("{p}", &first);
+        let bot = bots[t.rng.below(bots.len())].clone();
+        let due = now + Duration::from_secs(2) + typing(&text, &mut t.rng);
+        t.group_queue.push(GroupLine { due, channel: channel.clone(), bot, text });
+    });
+}
+
+/// Says the corporation and alliance lines that are due, and now and then
+/// starts a conversation in a group channel someone has open.
+fn group_tick(w: &WorldState, now: Instant, chatter: Chatter) {
+    use crate::svc::chat;
+    let due: Vec<GroupLine> = with_talk(|t| {
+        let (due, later): (Vec<GroupLine>, Vec<GroupLine>) = std::mem::take(&mut t.group_queue).into_iter().partition(|l| l.due <= now);
+        t.group_queue = later;
+        due
+    })
+    .unwrap_or_default();
+    for line in &due {
+        let members = w.channel_members(&line.channel);
+        if members.is_empty() {
+            continue;
+        }
+        let count = chat::channel_population(w, &line.channel, members.len());
+        chat::announce_counted(w, &members, count, &line.channel, "SendMessage", &chat::bot_who(&line.bot), vec![Value::text(line.text.clone())]);
+    }
+    for (kind, id, channel, _) in w.group_channels() {
+        let corp = kind == GroupChannel::Corporation;
+        let ready = with_talk(|t| {
+            let next = *t.group_next.entry((corp, id)).or_insert_with(|| now + Duration::from_secs(30));
+            now >= next
+        })
+        .unwrap_or(false);
+        if !ready {
+            continue;
+        }
+        let bots = w.online_bots(|b| if corp { b.corp_id == id } else { b.alliance_id == Some(id) });
+        with_talk(|t| {
+            // A few minutes between conversations at normal chatter; alliance
+            // chat is a little quieter than corporation chat.
+            let base = if corp { t.rng.range(120.0, 300.0) } else { t.rng.range(240.0, 480.0) };
+            t.group_next.insert((corp, id), now + Duration::from_secs_f64(base / chatter.rate().max(0.1)));
+            if bots.len() < 2 || (chatter == Chatter::Quiet && t.rng.unit() < 0.5) {
+                return;
+            }
+            let talks = if corp { CORP_TALK } else { ALLIANCE_TALK };
+            let lines = talks[t.rng.below(talks.len())];
+            // Two or three corp mates take turns.
+            let mut speakers: Vec<LocalBot> = Vec::new();
+            for _ in 0..8 {
+                let b = bots[t.rng.below(bots.len())].clone();
+                if !speakers.iter().any(|s| s.char_id == b.char_id) {
+                    speakers.push(b);
+                }
+                if speakers.len() == 3 {
+                    break;
+                }
+            }
+            if speakers.len() < 2 {
+                return;
+            }
+            let mut at = now;
+            for (n, line) in lines.iter().enumerate() {
+                // The opener answers last in a longer exchange.
+                let speaker = if n == 0 || (n == lines.len() - 1 && lines.len() > 3) {
+                    speakers[0].clone()
+                } else {
+                    speakers[1 + (n - 1) % (speakers.len() - 1)].clone()
+                };
+                let text = line.to_string();
+                at += Duration::from_secs_f64(t.rng.range(2.0, 6.0)) + typing(&text, &mut t.rng);
+                t.group_queue.push(GroupLine { due: at, channel: channel.clone(), bot: speaker, text });
+            }
+        });
+    }
+}
+
 pub async fn run(world: World, db_url: String) {
     match crate::db::connect(&db_url).await {
         Ok(db) => {
@@ -889,6 +1038,7 @@ fn tick(world: &World) {
     if chatter == Chatter::Off || !super::is_running() {
         return;
     }
+    group_tick(&w, now, chatter);
     for (system, _, members) in &channels {
         if members.is_empty() {
             continue;

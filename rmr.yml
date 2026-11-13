@@ -49,11 +49,11 @@ bots:
   # The most bot ships shown in one system at once, where a player is
   # (RMR_BOTS_SHOWN). More makes bigger battles, and more work for the
   # server and the clients there.
-  shownPerSystem: 200
+  shownPerSystem: 2000
   # Whether bot pirates attack players on sight outside high-sec
   # (RMR_BOTS_PIRATES_ATTACK). Bots whose side a player has angered, and
   # pirates raiding high-sec, attack them anyway.
-  piratesAttackPlayers: false
+  piratesAttackPlayers: true
   # Whether the web dashboard may steer the bots: start events and wars,
   # make a region busier or quieter (RMR_BOTS_CONTROLS). The dashboard has
   # no login, so only turn this on where only you can reach it.
@@ -62,23 +62,26 @@ bots:
   # they still fight back when shot), some (pirates outside high-sec,
   # sides a player has angered, and hunters), or all (every player
   # who is not their friend). The dashboard can change it live.
-  aggression: calm
+  aggression: some
   # How much bots talk in Local: off, quiet, normal or chatty.
-  chat: normal
+  chat: chatty
   # Whether bots trash talk, troll and gloat in Local, not just chat.
   trashTalk: true
   # How often bots apply to join player corporations: off, low, normal
   # or high.
-  joinPlayerCorps: high
+  joinPlayerCorps: extra-high
   # How often bot corporations outside an alliance apply to join player
   # alliances: off, low, normal or high.
-  joinPlayerAlliances: high
+  joinPlayerAlliances: extra-high
   # How bot corporations and alliances answer your applications: closed
   # (turn everyone down), selective (judge your record) or open (take
   # anyone not hostile to them).
   acceptApplications: selective
   # How many bots are online, times normal, from 0.1 to 4.
-  onlineActivity: 1
+  onlineActivity: 4
+  sovWarfare: war
+  battleSize: 3000
+  botMarket: high
 
 # Accounts made, or brought into line with this file, at every start.
 # Accounts not listed here are left as they are; removing one from the

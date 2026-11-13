@@ -491,6 +491,19 @@ impl WorldState {
         self.clients.get(&client_id).and_then(|c| c.presence)
     }
 
+    /// Corporation and alliance channels someone has open: (kind, owner,
+    /// channel ID, listening clients).
+    pub fn group_channels(&self) -> Vec<(GroupChannel, i64, Value, Vec<i64>)> {
+        self.channels
+            .values()
+            .filter(|c| !c.members.is_empty())
+            .filter_map(|c| {
+                let (kind, id) = group_channel(&c.id)?;
+                Some((kind, id, c.id.clone(), c.members.iter().copied().collect()))
+            })
+            .collect()
+    }
+
     /// Everyone who has a chat channel open.
     pub fn channel_members(&self, channel_id: &Value) -> Vec<i64> {
         self.channels

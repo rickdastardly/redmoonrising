@@ -3,3 +3,5 @@ target/
 crates/eve-server/web/node_modules/
 __pycache__/
 _backup_*/
+
+Client.settings.json

@@ -400,6 +400,21 @@ fn body_markdown(body: &str) -> String {
 pub async fn sync_notes(db: &tokio_postgres::Client) -> Result<(), tokio_postgres::Error> {
     let mut notes = read_notes();
     let rows = db.query(r#"SELECT title, body, published_ms FROM "rmrNewsArticles""#, &[]).await?;
+    // A note rewritten in the file (same publication time, new title or text)
+    // replaces what the database holds, so corrections reach the dashboard,
+    // character select and the launchers.
+    let held: std::collections::HashMap<i64, (String, String)> = rows.iter().map(|r| (r.get(2), (r.get(0), r.get(1)))).collect();
+    let mut revised = 0;
+    for note in &notes {
+        if let Some((title, body)) = held.get(&note.published_ms) {
+            if title != &note.title || body != &note.body {
+                db.execute(r#"UPDATE "rmrNewsArticles" SET title = $1, body = $2 WHERE published_ms = $3"#,
+                    &[&note.title, &note.body, &note.published_ms]).await?;
+                revised += 1;
+            }
+        }
+    }
+    let rows = if revised > 0 { db.query(r#"SELECT title, body, published_ms FROM "rmrNewsArticles""#, &[]).await? } else { rows };
     let have: std::collections::HashSet<(i64, String)> = rows.iter().map(|r| (r.get(2), r.get(0))).collect();
     let mut added = 0;
     for note in &notes {
@@ -423,8 +438,8 @@ pub async fn sync_notes(db: &tokio_postgres::Client) -> Result<(), tokio_postgre
             tracing::warn!("writing news/articles.json and NEWS.md: {e}");
         }
     }
-    if added > 0 || recorded > 0 {
-        tracing::info!("news: added {added} patch note(s) from news/articles.json, recorded {recorded} in it");
+    if added > 0 || recorded > 0 || revised > 0 {
+        tracing::info!("news: added {added} patch note(s) from news/articles.json, revised {revised}, recorded {recorded} in it");
     }
     Ok(())
 }

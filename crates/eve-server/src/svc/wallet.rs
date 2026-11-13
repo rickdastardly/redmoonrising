@@ -37,7 +37,7 @@ pub async fn bill_mgr(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         "GetBillTypes" => bill_types(ctx).await,
         "CharGetBills" => bills(ctx, ctx.session.char_id, Side::Payable).await,
         "CharGetBillsReceivable" => bills(ctx, ctx.session.char_id, Side::Receivable).await,
-        "GetCorporationBills" => bills(ctx, ctx.session.corp_id, Side::Payable).await,
+        "GetCorporationBills" => corporation_bills(ctx).await,
         "GetCorporationBillsReceivable" => bills(ctx, ctx.session.corp_id, Side::Receivable).await,
         "CharPayBill" => return Some(pay_bill(ctx, call.arg_id(0), false).await),
         "PayCorporationBill" => return Some(pay_bill(ctx, call.arg_id(0), true).await),
@@ -70,7 +70,82 @@ async fn pay_bill(ctx: &Ctx<'_>, bill_id: i64, corp: bool) -> Outcome {
         ctx.session.char_id
     };
     let Some(debtor) = debtor else { return Outcome::Value(Value::None) };
+    // The executor corporation pays its alliance's bills from its own wallet.
+    if corp {
+        if let Some(alliance) = executor_alliance(ctx).await {
+            let sql = r#"SELECT 1 FROM "billsReceivable" WHERE "billID" = $1 AND "debtorID" = $2 AND "paid" = 0"#;
+            if ctx.query_one(sql, &[&(bill_id as i32), &(alliance as i32)]).await.is_some() {
+                return settle_bill(ctx, bill_id, alliance, debtor).await;
+            }
+        }
+    }
     settle_bill(ctx, bill_id, debtor, debtor).await
+}
+
+/// The caller's alliance, when its corporation is that alliance's executor.
+async fn executor_alliance(ctx: &Ctx<'_>) -> Option<i64> {
+    let (corp, alliance) = (ctx.session.corp_id?, ctx.session.alliance_id.filter(|a| *a != 0)?);
+    let sql = r#"SELECT 1 FROM alliances WHERE "allianceID" = $1 AND "executorCorpID" = $2 AND "deleted" = 0"#;
+    ctx.query_one(sql, &[&(alliance as i32), &(corp as i32)]).await.map(|_| alliance)
+}
+
+/// The corporation wallet's bills: its own, and, for an alliance's executor
+/// corporation, the alliance's (maintenance and war bills), which it pays.
+async fn corporation_bills(ctx: &Ctx<'_>) -> Value {
+    let mut lines = match ctx.session.corp_id {
+        Some(corp) => bill_lines(ctx, corp, Side::Payable).await,
+        None => Vec::new(),
+    };
+    if let Some(alliance) = executor_alliance(ctx).await {
+        lines.extend(bill_lines(ctx, alliance, Side::Payable).await);
+    }
+    rowset(BILL_HEADER, lines)
+}
+
+/// Office rent falls due a month at a time: five days before an office's
+/// paid-up date its corporation gets a Rental Bill from the station's owner.
+/// Paying it extends the office another period. Run by the heartbeat.
+pub async fn bill_offices(db: &tokio_postgres::Client) {
+    const DAY: i64 = 24 * 3600 * 10_000_000;
+    let now = crate::bulkdata::filetime_now();
+    let sql = r#"SELECT r."stationID", r."slotNumber", r."renterID", r."periodCost", r."balanceDueDate",
+                        COALESCE(s."corporationID", 0), COALESCE(s."officeRentalCost", 0)::double precision
+                   FROM "rentalInfo" r
+                   LEFT JOIN "staStations" s ON s."stationID" = r."stationID"
+                  WHERE r."discontinue" = 0 AND r."balanceDueDate" > 0 AND r."balanceDueDate" - $1 < $2
+                    AND NOT EXISTS (SELECT 1 FROM "billsReceivable" b WHERE b."billID" = r."billID" AND b."paid" = 0 AND r."billID" <> 0)
+                    AND NOT EXISTS (SELECT 1 FROM "botGroups" g WHERE g."ownerID" = r."renterID")
+                    AND EXISTS (SELECT 1 FROM "corporation" c WHERE c."corporationID" = r."renterID" AND c."deleted" = 0)"#;
+    let rows = match db.query(sql, &[&now, &(5 * DAY)]).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            error!("reading office rentals to bill: {}", crate::logging::chain(&e));
+            return;
+        }
+    };
+    for r in rows {
+        let (station, slot, renter) = (int(&r, 0).unwrap_or(0), int(&r, 1).unwrap_or(0), int(&r, 2).unwrap_or(0));
+        let due = int(&r, 4).unwrap_or(now);
+        let owner = int(&r, 5).unwrap_or(0);
+        let amount = float(&r, 3).filter(|c| *c > 0.0).or_else(|| float(&r, 6)).unwrap_or(0.0);
+        if owner == 0 || amount <= 0.0 {
+            continue;
+        }
+        let insert = r#"INSERT INTO "billsReceivable" ("billTypeID","debtorID","creditorID","amount","dueDateTime","externalID","externalID2")
+                        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING "billID""#;
+        let params: [&(dyn ToSql + Sync); 7] = [&(BILL_TYPE_RENTAL as i32), &(renter as i32), &(owner as i32), &amount, &due, &(station as i32), &slot.to_string()];
+        match db.query_one(insert, &params).await {
+            Ok(b) => {
+                let bill = int(&b, 0).unwrap_or(0) as i32;
+                let link = r#"UPDATE "rentalInfo" SET "billID" = $1 WHERE "stationID" = $2 AND "slotNumber" = $3 AND "renterID" = $4"#;
+                if let Err(e) = db.execute(link, &[&bill, &(station as i32), &(slot as i32), &(renter as i32)]).await {
+                    error!("linking rental bill {bill}: {}", crate::logging::chain(&e));
+                }
+                info!("corporation {renter} billed {amount} ISK office rent at station {station}");
+            }
+            Err(e) => error!("billing office rent to {renter}: {}", crate::logging::chain(&e)),
+        }
+    }
 }
 
 /// Pays `debtor`'s open bill `bill_id` to its creditor out of `payer`'s
@@ -103,6 +178,13 @@ pub async fn settle_bill(ctx: &Ctx<'_>, bill_id: i64, debtor: i64, payer: i64) -
     let outcome = match move_cash(ctx.db_url, payment).await {
         Ok(()) => {
             info!("bill {bill_id}: {payer} paid {amount} ISK of {debtor}'s to {creditor}");
+            if int(&bill, 2) == Some(BILL_TYPE_RENTAL) {
+                // Paid rent: the office is kept another period.
+                let extend = r#"UPDATE "rentalInfo"
+                                   SET "balanceDueDate" = "balanceDueDate" + GREATEST("rentPeriodInDays", 1)::bigint * 864000000000, "billID" = 0
+                                 WHERE "billID" = $1"#;
+                ctx.execute(extend, &[&(bill_id as i32)]).await;
+            }
             return Outcome::Value(Value::None);
         }
         Err(Transfer::NotEnough { need, have }) => Outcome::not_enough_money(need, have),
@@ -307,11 +389,19 @@ pub enum Side {
 
 /// The open bills `owner` owes (Payable) or is owed (Receivable).
 pub async fn bills(ctx: &Ctx<'_>, owner: Option<i64>, side: Side) -> Value {
-    const HEADER: &[&str] = &[
-        "billID", "billTypeID", "debtorID", "creditorID", "amount", "dueDateTime", "interest",
-        "externalID", "paid", "externalID2",
-    ];
-    let Some(owner) = owner else { return rowset(HEADER, Vec::new()) };
+    match owner {
+        Some(owner) => rowset(BILL_HEADER, bill_lines(ctx, owner, side).await),
+        None => rowset(BILL_HEADER, Vec::new()),
+    }
+}
+
+const BILL_HEADER: &[&str] = &[
+    "billID", "billTypeID", "debtorID", "creditorID", "amount", "dueDateTime", "interest",
+    "externalID", "paid", "externalID2",
+];
+
+/// The open bills `owner` owes (payable) or is owed (receivable).
+async fn bill_lines(ctx: &Ctx<'_>, owner: i64, side: Side) -> Vec<Value> {
 
     let sql = match side {
         Side::Payable => {
@@ -333,8 +423,7 @@ pub async fn bills(ctx: &Ctx<'_>, owner: Option<i64>, side: Side) -> Value {
     };
 
     match ctx.db.query(sql, &[&(owner as i32)]).await {
-        Ok(rows) => {
-            let lines = rows
+        Ok(rows) => rows
                 .iter()
                 .filter(|r| int(r, 8).unwrap_or(0) == 0)
                 .map(|r| {
@@ -351,12 +440,10 @@ pub async fn bills(ctx: &Ctx<'_>, owner: Option<i64>, side: Side) -> Value {
                         Value::Int(text(r, 9).and_then(|s| parse_i64(&s)).unwrap_or(-1)),
                     ])
                 })
-                .collect();
-            rowset(HEADER, lines)
-        }
+                .collect(),
         Err(e) => {
             error!("bills: {err}", err = crate::logging::chain(&e));
-            rowset(HEADER, Vec::new())
+            Vec::new()
         }
     }
 }

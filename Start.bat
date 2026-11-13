@@ -19,6 +19,7 @@ if /i "%~1"=="--client" goto client
 if /i "%~1"=="--game-port" goto gameport
 if /i "%~1"=="--web-port" goto webport
 if /i "%~1"=="--database-port" goto databaseport
+if /i "%~1"=="--host" goto hostaddress
 echo Unknown option. Use --help for usage. 1>&2
 exit /b 2
 :headless
@@ -31,12 +32,14 @@ shift
 goto parse
 :check
 set "RMR_CHECK=1"
+set "RMR_SERVER_ONLY=1"
 set "RMR_NO_CLIENT=1"
 set "RMR_MODE=headless"
 shift
 goto parse
 :serveronly
 set "RMR_NO_CLIENT=1"
+set "RMR_SERVER_ONLY=1"
 set "RMR_MODE=headless"
 shift
 goto parse
@@ -76,17 +79,27 @@ set "RMR_DATABASE_PORT=%RMR_VALUE%"
 shift
 shift
 goto parse
+:hostaddress
+if "%~2"=="" goto missing
+set "RMR_VALUE=%~2"
+if "%RMR_VALUE:~0,2%"=="--" goto missing
+set "RMR_HOST=%RMR_VALUE%"
+shift
+shift
+goto parse
 :missing
 echo An option is missing its value. Use --help for usage. 1>&2
 exit /b 2
 :help
-echo Red Moon Rising launcher
- echo Usage: Start.bat [--headless ^| --server-only ^| --check ^| --stop]
-echo                  [--no-auto-client] [--client "folder"]
-echo                  [--game-port N] [--web-port N] [--database-port N]
-echo No options opens the launcher window. --check tests the server then stops it.
-echo --server-only runs without selecting or starting a game client.
-echo EVE starts automatically when the server is ready. --no-auto-client keeps it closed.
+echo Red Moon Rising server launcher
+echo Usage: Start.bat [--headless ^| --server-only ^| --check ^| --stop]
+echo                  [--host local^|ADDRESS] [--game-port N] [--web-port N] [--database-port N]
+echo No options opens the launcher window, which asks where to host the server.
+echo --host local hosts for this PC only; --host ADDRESS hosts on that IPv4 address
+echo (0.0.0.0 for every address). Without --host the last choice is used.
+echo --server-only runs in this console with the saved choices and asks nothing.
+echo --check tests the server then stops it. Client.bat sets up and starts EVE;
+echo Dashboard.bat puts the dashboard online behind a login.
 echo Default ports: game 26000, web 18080, database 5432; busy ports advance automatically.
 echo Explicit ports must be available. --help displays this text without setup.
 exit /b 0
@@ -103,6 +116,8 @@ exit /b %errorlevel%
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+# The server only: Client.bat prepares and starts the game client.
+$env:RMR_NO_CLIENT = '1'
 $Self = [IO.Path]::GetFullPath($env:RMR_LAUNCHER)
 $Root = [IO.Path]::GetDirectoryName($Self)
 $SourceRoot = $Root
@@ -694,6 +709,177 @@ function Install-PostgresRuntime([string]$Bin) {
     [IO.File]::WriteAllText((Join-Path $Bin 'vclibs-installed.ok'), '14.0.33321.0', $Utf8)
 }
 
+# ---- router port forwarding (UPnP) ---------------------------------------------------------------
+
+# This PC's address on the network its router is on: an up, non-virtual
+# adapter with an IPv4 gateway.
+function Get-RmrLanAddress {
+    try {
+        foreach ($nic in [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+            if ($nic.OperationalStatus -ne 'Up' -or $nic.NetworkInterfaceType -eq 'Loopback') { continue }
+            if (($nic.Description + ' ' + $nic.Name) -match 'Hyper-V|vEthernet|Virtual|WSL|VMware|VirtualBox') { continue }
+            $props = $nic.GetIPProperties()
+            $gateway = @($props.GatewayAddresses | Where-Object { $_.Address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork -and $_.Address.ToString() -ne '0.0.0.0' })
+            if ($gateway.Count -eq 0) { continue }
+            foreach ($unicast in $props.UnicastAddresses) {
+                if ($unicast.Address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork) { return $unicast.Address.ToString() }
+            }
+        }
+    } catch { }
+    return $null
+}
+
+# Asks the router (UPnP) to forward TCP $Port to this PC. Returns Ok, a
+# message, and the router's public address when it says.
+function Set-RmrUpnpForward([int]$Port, [string]$Description) {
+    $lan = Get-RmrLanAddress
+    if (-not $lan) { return [pscustomobject]@{ Ok = $false; Message = 'No network adapter with a router was found.'; External = '' } }
+    try {
+        $nat = New-Object -ComObject HNetCfg.NATUPnP
+        $maps = $null
+        for ($try = 0; $try -lt 4 -and $null -eq $maps; $try++) {
+            $maps = $nat.StaticPortMappingCollection
+            if ($null -eq $maps) { Start-Sleep -Milliseconds 1500 }
+        }
+        if ($null -eq $maps) {
+            return [pscustomobject]@{ Ok = $false; Message = "Your router did not answer UPnP. Turn UPnP on in its settings, or forward TCP $Port to $lan by hand."; External = '' }
+        }
+        $existing = $null
+        try { $existing = $maps.Item($Port, 'TCP') } catch { $existing = $null }
+        if ($null -ne $existing) {
+            if ($existing.InternalClient -eq $lan -and [int]$existing.InternalPort -eq $Port) {
+                return [pscustomobject]@{ Ok = $true; Message = "Router already forwards TCP $Port to $lan."; External = [string]$existing.ExternalIPAddress }
+            }
+            try { $maps.Remove($Port, 'TCP') } catch { }
+        }
+        $mapping = $maps.Add($Port, 'TCP', $Port, $lan, $true, $Description)
+        $external = ''
+        try { $external = [string]$mapping.ExternalIPAddress } catch { }
+        return [pscustomobject]@{ Ok = $true; Message = "Router now forwards TCP $Port to $lan (UPnP)."; External = $external }
+    } catch {
+        return [pscustomobject]@{ Ok = $false; Message = ("The router refused to forward TCP $Port (" + $_.Exception.Message.Trim() + "). Forward it to $lan by hand."); External = '' }
+    }
+}
+
+function Remove-RmrUpnpForward([int]$Port) {
+    try {
+        $nat = New-Object -ComObject HNetCfg.NATUPnP
+        $maps = $nat.StaticPortMappingCollection
+        if ($null -ne $maps) { $maps.Remove($Port, 'TCP') }
+    } catch { }
+}
+
+# ---- where the server is hosted ----------------------------------------------------------------
+
+function Test-RmrLocalAddress([string]$Address) {
+    try {
+        foreach ($nic in [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+            foreach ($unicast in $nic.GetIPProperties().UnicastAddresses) {
+                if ($unicast.Address.ToString() -eq $Address) { return $true }
+            }
+        }
+    } catch { }
+    return $false
+}
+
+# 'local' (or blank) for this PC only, else an IPv4 address. Returns the
+# address to listen on and the one players connect to.
+function Resolve-RmrHost([string]$Text) {
+    $Text = ([string]$Text).Trim()
+    if (-not $Text -or $Text -in @('local', 'localhost', '127.0.0.1', 'this pc')) {
+        return [pscustomobject]@{ Choice = 'local'; Bind = '127.0.0.1'; Advertise = '127.0.0.1'; Note = '' }
+    }
+    if ($Text -in @('0.0.0.0', 'all', '*')) {
+        return [pscustomobject]@{ Choice = '0.0.0.0'; Bind = '0.0.0.0'; Advertise = 'this PC''s address'; Note = '' }
+    }
+    $parsed = $null
+    if (-not [Net.IPAddress]::TryParse($Text, [ref]$parsed) -or $parsed.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or $Text -notmatch '^\d{1,3}(\.\d{1,3}){3}$') {
+        throw "Host address must be 'local' or an IPv4 address such as 192.168.1.20: $Text"
+    }
+    if (Test-RmrLocalAddress $Text) {
+        # Listen on every address, so this PC (127.0.0.1), the LAN and a
+        # forwarded public address all reach it; players are told $Text.
+        return [pscustomobject]@{ Choice = $Text; Bind = '0.0.0.0'; Advertise = $Text; Note = '' }
+    }
+    # A public address belongs to the router: listen on every address here
+    # and let the router forward the game port to this PC.
+    return [pscustomobject]@{ Choice = $Text; Bind = '0.0.0.0'; Advertise = $Text
+        Note = "$Text is not an address of this PC (a router's public address?). Listening on every address; forward the game port to this PC." }
+}
+
+# The launcher window asks before each start; the last answer is offered.
+function Read-RmrHostChoice([string]$Current) {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    $form = New-Object Windows.Forms.Form
+    $form.Text = 'Red Moon Rising - host the server'
+    $form.FormBorderStyle = 'FixedDialog'
+    $form.MaximizeBox = $false; $form.MinimizeBox = $false
+    $form.StartPosition = 'CenterScreen'
+    $form.ClientSize = New-Object Drawing.Size(480, 268)
+    $form.BackColor = [Drawing.Color]::FromArgb(14, 18, 23)
+    $form.ForeColor = [Drawing.Color]::FromArgb(201, 209, 217)
+    $form.Font = New-Object Drawing.Font('Segoe UI', 10)
+    $title = New-Object Windows.Forms.Label
+    $title.Text = 'Where should this server be hosted?'
+    $title.Font = New-Object Drawing.Font('Segoe UI', 12)
+    $title.SetBounds(18, 14, 440, 26)
+    $local = New-Object Windows.Forms.RadioButton
+    $local.Text = 'Locally - only this PC can connect'
+    $local.SetBounds(18, 50, 440, 24)
+    $remote = New-Object Windows.Forms.RadioButton
+    $remote.Text = 'On this IPv4 address (LAN or public; 0.0.0.0 for every address):'
+    $remote.SetBounds(18, 80, 450, 24)
+    $box = New-Object Windows.Forms.TextBox
+    $box.SetBounds(38, 108, 220, 26)
+    $hint = New-Object Windows.Forms.Label
+    # This PC's real network addresses (virtual adapters such as WSL's are
+    # not reachable from other devices).
+    $real = @()
+    try {
+        foreach ($nic in [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+            if ($nic.OperationalStatus -ne 'Up' -or $nic.NetworkInterfaceType -eq 'Loopback') { continue }
+            if (($nic.Description + ' ' + $nic.Name) -match 'Hyper-V|vEthernet|Virtual|WSL|VMware|VirtualBox|Loopback') { continue }
+            foreach ($unicast in $nic.GetIPProperties().UnicastAddresses) {
+                if ($unicast.Address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork) { $real += $unicast.Address.ToString() }
+            }
+        }
+    } catch { }
+    $lan = if ($real.Count -gt 0) { 'This PC on your network: ' + ($real -join ', ') + '. ' } else { '' }
+    $hint.Text = $lan + 'Players point Client.bat at the address you give. For your public address, forward the game port on your router.'
+    $hint.ForeColor = [Drawing.Color]::FromArgb(140, 148, 156)
+    $hint.SetBounds(18, 138, 444, 50)
+    if (-not $Current -or $Current -eq 'local') { $local.Checked = $true; $box.Text = '' } else { $remote.Checked = $true; $box.Text = $Current }
+    $box.Add_TextChanged({ if ($box.Text) { $remote.Checked = $true } })
+    $ok = New-Object Windows.Forms.Button
+    $ok.Text = 'Start server'
+    $ok.DialogResult = 'OK'
+    $ok.SetBounds(262, 224, 110, 30)
+    $ok.FlatStyle = 'Flat'
+    $ok.BackColor = [Drawing.Color]::FromArgb(79, 202, 182)
+    $ok.ForeColor = [Drawing.Color]::FromArgb(6, 18, 15)
+    $cancel = New-Object Windows.Forms.Button
+    $cancel.Text = 'Cancel'
+    $cancel.DialogResult = 'Cancel'
+    $cancel.SetBounds(378, 224, 84, 30)
+    $cancel.FlatStyle = 'Flat'
+    $upnp = New-Object Windows.Forms.CheckBox
+    $upnp.Text = 'Forward the game port on my router automatically (UPnP)'
+    $upnp.Checked = $true
+    $upnp.SetBounds(18, 192, 444, 24)
+    $form.Controls.AddRange(@($title, $local, $remote, $box, $hint, $upnp, $ok, $cancel))
+    $form.AcceptButton = $ok
+    $form.CancelButton = $cancel
+    try {
+        while ($true) {
+            if ($form.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { return $null }
+            $choice = if ($local.Checked) { 'local' } else { $box.Text.Trim() }
+            try { return [pscustomobject]@{ Choice = (Resolve-RmrHost $choice).Choice; Upnp = $upnp.Checked } }
+            catch { [Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Red Moon Rising', 'OK', 'Warning') | Out-Null }
+        }
+    } finally { $form.Dispose() }
+}
+
 function Start-RmrWorker {
     $lock = $null; $server = $null; $databaseOwned = $false; $exitCode = 0
     $gamePort = 26000; $webPort = 18080; $databasePort = 5432
@@ -754,10 +940,10 @@ function Start-RmrWorker {
             if (-not (Test-Path -LiteralPath (Join-Path $Root $required))) { throw "Missing $required. Keep start.bat in the extracted RMR repository." }
         }
         $settingsPath = Join-Path $Runtime 'settings.json'
-        $settings = [pscustomobject]@{ clientPath = ''; gamePort = 26000; webPort = 18080; databasePort = 5432; webPortDefaultVersion = 0 }
+        $settings = [pscustomobject]@{ clientPath = ''; gamePort = 26000; webPort = 18080; databasePort = 5432; webPortDefaultVersion = 0; hostAddress = 'local' }
         if (Test-Path -LiteralPath $settingsPath) {
             $savedSettings = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
-            foreach ($key in @('clientPath','gamePort','webPort','databasePort','webPortDefaultVersion')) {
+            foreach ($key in @('clientPath','gamePort','webPort','databasePort','webPortDefaultVersion','hostAddress')) {
                 if ($savedSettings.PSObject.Properties[$key]) { $settings.$key = $savedSettings.$key }
             }
         }
@@ -773,6 +959,29 @@ function Start-RmrWorker {
         $databasePort = Select-RmrPort 'RMR_DATABASE_PORT' $settings.databasePort 5432 $selectedPorts
         $settings.gamePort = $gamePort; $settings.webPort = $webPort; $settings.databasePort = $databasePort
         $settings.webPortDefaultVersion = 2
+        # Where to host: --host or the launcher window's answer, else (asked in
+        # an interactive console) the last choice.
+        $hostChoice = if ($env:RMR_HOST) { $env:RMR_HOST } else { [string]$settings.hostAddress }
+        if (-not $env:RMR_HOST -and $env:RMR_MODE -eq 'headless' -and $env:RMR_SERVER_ONLY -ne '1' -and [Environment]::UserInteractive) {
+            $typed = Read-Host ("Host the server locally or on an IPv4 address? [local / address, Enter for '" + $hostChoice + "']")
+            if ($typed) { $hostChoice = $typed }
+        }
+        $hosting = Resolve-RmrHost $hostChoice
+        $settings.hostAddress = $hosting.Choice
+        if ($hosting.Note) { Write-Log $hosting.Note }
+        # Hosting beyond this PC: ask the router to forward the game port
+        # (the launcher window's tick box; on by default otherwise).
+        if ($hosting.Choice -ne 'local' -and $env:RMR_UPNP -ne '0') {
+            Set-Status 'Router' ('Asking your router to forward port ' + $gamePort + ' to this PC') 7
+            $forward = Set-RmrUpnpForward $gamePort ('Red Moon Rising game server')
+            Write-Log $forward.Message
+            if ($forward.Ok -and $forward.External) {
+                Write-Log ('Your public address, as the router reports it: ' + $forward.External)
+                if ($hosting.Advertise -match '^\d' -and -not (Test-RmrLocalAddress $hosting.Advertise) -and $forward.External -ne $hosting.Advertise) {
+                    Write-Log ('Note: you chose ' + $hosting.Advertise + ' but the router says your public address is ' + $forward.External + '.')
+                }
+            }
+        }
         [IO.File]::WriteAllText($settingsPath, ($settings | ConvertTo-Json), $Utf8)
         $script:Status.gamePort = $gamePort; $script:Status.webPort = $webPort
         $script:Status['databasePort'] = $databasePort
@@ -783,7 +992,7 @@ function Start-RmrWorker {
         $buildStamp = Join-Path $Runtime 'build.json'
         $fingerprint = Get-RmrBuildFingerprint $Root
         $needsBuild = $true
-        if ((Test-Path -LiteralPath $buildStamp) -and (Test-Path -LiteralPath $serverExe) -and (Test-Path -LiteralPath $fakeClientExe)) {
+        if ((Test-Path -LiteralPath $buildStamp) -and (Test-Path -LiteralPath $serverExe) -and (Test-Path -LiteralPath $fakeClientExe) -and (Test-Path -LiteralPath (Join-Path $binaryDir 'dashboard.exe'))) {
             try {
                 $old = Get-Content -LiteralPath $buildStamp -Raw | ConvertFrom-Json
                 if ($old.fingerprint -eq $fingerprint -and $old.serverHash -eq (Get-RmrFileHash $serverExe) -and $old.clientHash -eq (Get-RmrFileHash $fakeClientExe)) { $needsBuild = $false }
@@ -857,15 +1066,38 @@ function Start-RmrWorker {
                 Invoke-Native $rustup @('component','add','rust-mingw','--toolchain','1.97.0-x86_64-pc-windows-gnu')
             }
             if (-not [IO.File]::Exists((Join-Path $selfContained 'dlltool.exe'))) { throw 'The Rust toolchain is missing dlltool.exe. Delete the .rmr\rustup folder and run start.bat again.' }
-            # Only dlltool goes on PATH, from a folder of its own: with the
+            # dlltool runs the GNU assembler (as.exe) to make each import
+            # library, and the Rust toolchain ships no assembler: on a PC
+            # without MinGW the build failed with "dlltool could not create
+            # import library ... CreateProcess". vendor\binutils carries GNU
+            # binutils' as.exe and a matching dlltool.exe with the DLLs they
+            # need (see its README); any that are missing or changed in the
+            # tools folder are put back, checked against their checksums.
+            # Only these go on PATH, from a folder of their own: with the
             # toolchain's gcc on PATH, rustc takes it for an installed MinGW and
             # stops linking with its own startup files and libraries.
             $dlltoolDir = Join-Path $Runtime 'tools\dlltool'
             [IO.Directory]::CreateDirectory($dlltoolDir) | Out-Null
-            foreach ($name in @('dlltool.exe', 'libwinpthread-1.dll')) {
-                $from = Join-Path $selfContained $name
+            $binutilsDir = Join-Path $Root 'vendor\binutils'
+            $binutilsFiles = [ordered]@{
+                'as.exe' = '5a5049e9834bfcd6efbb6ca0c8e9f3aa87e9c88172f8a26890e09be1e0271143'
+                'x86_64-w64-mingw32-as.exe' = '5a5049e9834bfcd6efbb6ca0c8e9f3aa87e9c88172f8a26890e09be1e0271143'
+                'dlltool.exe' = '757f050a9ff58bb64d485c9f0117c01dcdd988c23b185bfe4318876757eb105c'
+                'libiconv-2.dll' = '132fd32416d08579fd8deaffd7123427efc6598760062abb32f491fc34c5a5bd'
+                'libintl-8.dll' = '1136db298a8ad03c07e56e1088a90dd79707cfd669fd6b40eb9a10681b18b0c5'
+                'libwinpthread-1.dll' = '1b801c9280f6cad8cb2a026bfa48be8c4bea07a0dc78a820d1591f900ee76f0b'
+                'libzstd.dll' = '7443e62559c48209f234795b37b23676eb597ce8bba837af371629c29b698e7d'
+                'zlib1.dll' = '199b05c9f6d42e897c906508c9008a5eb15b821fbc884d5d7ae4176e15bce55e'
+            }
+            foreach ($name in $binutilsFiles.Keys) {
+                $want = $binutilsFiles[$name]
                 $to = Join-Path $dlltoolDir $name
-                if ([IO.File]::Exists($from) -and (-not [IO.File]::Exists($to) -or (Get-RmrFileHash $from) -ne (Get-RmrFileHash $to))) { [IO.File]::Copy($from, $to, $true) }
+                if ([IO.File]::Exists($to) -and (Get-RmrFileHash $to).ToLowerInvariant() -eq $want) { continue }
+                $from = Join-Path $binutilsDir $name
+                if (-not [IO.File]::Exists($from)) { throw "vendor\binutils\$name is missing. Download Red Moon Rising again, or restore that folder from GitHub." }
+                if ((Get-RmrFileHash $from).ToLowerInvariant() -ne $want) { throw "vendor\binutils\$name does not match its expected checksum. Restore that folder from GitHub." }
+                [IO.File]::Copy($from, $to, $true)
+                Write-Log ('Build tools: installed ' + $name)
             }
             $env:PATH = (@($dlltoolDir) + @(($env:PATH -split ';') | Where-Object { $_ -and $_ -ne $selfContained -and $_ -ne $dlltoolDir })) -join ';'
             Invoke-Native $rustup @('run','1.97.0-x86_64-pc-windows-gnu','cargo','build','--release','--locked','-p','eve-server','--bins','--target','x86_64-pc-windows-gnu')
@@ -980,10 +1212,6 @@ function Start-RmrWorker {
         $sqlPath = Join-Path $Runtime 'import.sql'
         if (Test-Path -LiteralPath $sqlPath) { Remove-Item -LiteralPath $sqlPath }
 
-        if ($env:RMR_CHECK -ne '1' -and $env:RMR_NO_CLIENT -ne '1') {
-            Set-Status 'Client' 'Finding and preparing the RMR game client' 87
-            Prepare-RmrGameClient $settings
-        }
 
         Set-Status 'Starting' 'Loading the universe and starting the game server' 92
         $env:RMR_CONFIG = Join-Path $Root 'rmr.yml'
@@ -992,7 +1220,7 @@ function Start-RmrWorker {
         if ($env:RMR_CHECK -eq '1') { $env:RMR_BOTS = '0' }
         $env:RMR_STRINGS = Join-Path $Root 'crates\eve-marshal\tests\data\strings.txt'
         $env:RMR_DATABASE = 'postgres://rmr:' + $password + '@127.0.0.1:' + $databasePort + '/rmr'
-        $env:RMR_BIND = '127.0.0.1:' + $gamePort
+        $env:RMR_BIND = $hosting.Bind + ':' + $gamePort
         $env:RMR_WEB = '127.0.0.1:' + $webPort
         $env:RMR_LOG_FILE = Join-Path $Logs 'server.log'
         $env:RMR_DUMP_DIR = Join-Path $Logs 'dumps'
@@ -1027,17 +1255,9 @@ function Start-RmrWorker {
             if ($server.Process.HasExited) { throw "The server stopped before setup finished. See logs/server.log." }
             [IO.File]::WriteAllText((Join-Path $Runtime 'setup-complete'), (Get-Date -Format s), $Utf8)
             $script:Status.ready = $true
-            Set-Status 'Online' ("Client: 127.0.0.1:{0}   |   Dashboard: http://127.0.0.1:{1}" -f $gamePort,$webPort) 100
+            Set-Status 'Online' ("Players connect to: {0}:{1}   |   Dashboard: http://127.0.0.1:{2}" -f $hosting.Advertise,$gamePort,$webPort) 100
             if (-not $firstStart) { Write-Log 'Server restarted.' }
             Assert-Running
-            if ($firstStart -and $env:RMR_MODE -eq 'worker' -and $env:RMR_NO_AUTO_CLIENT -ne '1' -and $env:RMR_NO_CLIENT -ne '1') {
-                try {
-                    Start-RmrGameClient -ClientPath $script:Status.clientPath -GamePort $gamePort
-                    Write-Log 'EVE client launched.'
-                } catch {
-                    Write-Log ('EVE client did not launch: ' + $_.Exception.Message)
-                }
-            }
             $firstStart = $false
             if ($env:RMR_CHECK -eq '1') {
                 Set-Status 'Checking' 'Testing the server handshake and login' 100
@@ -1178,2663 +1398,7 @@ function Start-RmrWorker {
 }
 
 
-# Client preparation payload. PowerShell 5.1; no runtime dependency on the source tree.
-function Test-RmrClient {
-    param([string]$Path)
-    try {
-        if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
-        $dir = [IO.Path]::GetFullPath($Path)
-        foreach ($file in @('boot.ini', 'bin\exefile.exe', 'script\sys\autoexec.py', 'script\compiled.code', 'res.stuff')) {
-            if (-not (Test-Path -LiteralPath (Join-Path $dir $file) -PathType Leaf)) { return $false }
-        }
-        if (-not (Test-Path -LiteralPath (Join-Path $dir 'lib') -PathType Container)) { return $false }
-        $boot = [IO.File]::ReadAllText((Join-Path $dir 'boot.ini'))
-        $main = [regex]::Match($boot, '(?ims)^\s*\[main\]\s*$([\s\S]*?)(?=^\s*\[|\z)')
-        if (-not $main.Success) { return $false }
-        return ($main.Groups[1].Value -match '(?im)^\s*version\s*=\s*2\.10\s*$' -and
-                $main.Groups[1].Value -match '(?im)^\s*build\s*=\s*3913\s*$' -and
-                $main.Groups[1].Value -match '(?im)^\s*role\s*=\s*client\s*$')
-    } catch { return $false }
-}
-
-function Find-RmrClients {
-    param([string]$InvocationDirectory, [string]$RepositoryRoot, [string]$SavedClientDirectory)
-    if ($SavedClientDirectory -and (Test-RmrClient $SavedClientDirectory)) {
-        return @([IO.Path]::GetFullPath($SavedClientDirectory))
-    }
-    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-    $found = New-Object 'System.Collections.Generic.List[string]'
-    $queue = New-Object 'System.Collections.Generic.Queue[object]'
-    $roots = @($InvocationDirectory, $RepositoryRoot)
-    if ($RepositoryRoot) { $roots += (Split-Path -Parent $RepositoryRoot) }
-    foreach ($root in $roots) {
-        if (-not $root) { continue }
-        try {
-            $full = [IO.Path]::GetFullPath($root).TrimEnd('\')
-            # Never enumerate a drive root or a user profile as a search root.
-            if ($full -eq [IO.Path]::GetPathRoot($full).TrimEnd('\') -or ($env:USERPROFILE -and $full -eq $env:USERPROFILE.TrimEnd('\'))) { continue }
-            if (Test-Path -LiteralPath $full -PathType Container) { $queue.Enqueue(@($full, 0)) }
-        } catch { }
-    }
-    $count = 0; $entries = 0
-    while ($queue.Count -gt 0 -and $count -lt 3000 -and $entries -lt 3000) {
-        $item = $queue.Dequeue(); $dir = [string]$item[0]; $depth = [int]$item[1]
-        if (-not $seen.Add($dir)) { continue }
-        $count++
-        try {
-            $info = Get-Item -LiteralPath $dir -Force -ErrorAction Stop
-            if (($info.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
-            if (Test-RmrClient $dir) { $found.Add($dir); continue }
-            if ($depth -ge 3) { continue }
-            foreach ($childPath in [IO.Directory]::EnumerateDirectories($dir)) {
-                $entries++
-                if ($entries -gt 3000) { break }
-                $child = Get-Item -LiteralPath $childPath -Force -ErrorAction Stop
-                if ($child.Name -in @('.git', '.local', '.rmr', '.build', 'runtime', 'builds', 'trinity', 'node_modules', 'target', 'cache', 'logs', 'capture', '.rmr-backup')) { continue }
-                if (($child.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
-                if ($queue.Count -ge 3000) { break }
-                $queue.Enqueue(@($child.FullName, ($depth + 1)))
-            }
-        } catch { continue }
-    }
-    return $found.ToArray()
-}
-
-function Select-RmrClientFolder {
-    param([string]$InvocationDirectory, [string]$Description)
-    Add-Type -AssemblyName System.Windows.Forms
-    $dialog = New-Object Windows.Forms.FolderBrowserDialog
-    try {
-        $dialog.Description = $Description
-        $dialog.ShowNewFolderButton = $false
-        if (Test-Path -LiteralPath $InvocationDirectory -PathType Container) { $dialog.SelectedPath = $InvocationDirectory }
-        if ($dialog.ShowDialog() -eq [Windows.Forms.DialogResult]::OK) { return $dialog.SelectedPath }
-        return $null
-    } finally { $dialog.Dispose() }
-}
-
-function Resolve-RmrClient {
-    param([string]$InvocationDirectory, [string]$RepositoryRoot, [string]$SavedClientDirectory, [string]$ClientDirectory)
-    if ($ClientDirectory) {
-        if (-not (Test-RmrClient $ClientDirectory)) { throw "Client directory is not an EVE 2.10 build 3913 client with its required files: $ClientDirectory" }
-        return [IO.Path]::GetFullPath($ClientDirectory)
-    }
-    $matches = @(Find-RmrClients -InvocationDirectory $InvocationDirectory -RepositoryRoot $RepositoryRoot -SavedClientDirectory $SavedClientDirectory)
-    if ($matches.Count -eq 1) { return $matches[0] }
-    $description = if ($matches.Count -gt 1) { 'Multiple compatible EVE clients were found. Select the client folder to prepare. Cancel to return to server setup.' } else { 'Select your EVE 2.10 build 3913 client folder. Cancel to return to server setup.' }
-    $selected = Select-RmrClientFolder -InvocationDirectory $InvocationDirectory -Description $description
-    if (-not $selected) { return $null }
-    if (-not (Test-RmrClient $selected)) { throw "Selected folder is not an EVE 2.10 build 3913 client with its required files: $selected" }
-    return [IO.Path]::GetFullPath($selected)
-}
-
-function Save-RmrOriginal {
-    param([string]$ClientDirectory, [string]$RelativePath)
-    $source = Join-Path $ClientDirectory $RelativePath
-    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { return }
-    $base = Join-Path (Join-Path $ClientDirectory '.rmr-backup') $RelativePath
-    $parent = Split-Path -Parent $base
-    if (-not (Test-Path -LiteralPath $parent)) { [void](New-Item -ItemType Directory -Path $parent -Force) }
-    $sourceHash = Get-RmrFileHash $source
-    $destination = $base
-    if (Test-Path -LiteralPath $base) {
-        if ((Get-RmrFileHash $base) -eq $sourceHash) { return }
-        $destination = "$base.$sourceHash"
-        if (Test-Path -LiteralPath $destination) { return }
-    }
-    [IO.File]::Copy($source, $destination, $false)
-}
-
-function Write-RmrFile {
-    param([string]$ClientDirectory, [string]$RelativePath, [byte[]]$Bytes)
-    $path = Join-Path $ClientDirectory $RelativePath
-    if (Test-Path -LiteralPath $path -PathType Leaf) {
-        $existing = [IO.File]::ReadAllBytes($path)
-        if ($existing.Length -eq $Bytes.Length -and [Convert]::ToBase64String($existing) -eq [Convert]::ToBase64String($Bytes)) { return }
-        Save-RmrOriginal -ClientDirectory $ClientDirectory -RelativePath $RelativePath
-    }
-    $parent = Split-Path -Parent $path
-    if (-not (Test-Path -LiteralPath $parent)) { [void](New-Item -ItemType Directory -Path $parent -Force) }
-    $temporary = Join-Path $parent ('.rmr-' + [Guid]::NewGuid().ToString('N') + '.tmp')
-    try {
-        [IO.File]::WriteAllBytes($temporary, $Bytes)
-        if (Test-Path -LiteralPath $path -PathType Leaf) { [IO.File]::Replace($temporary, $path, [System.Management.Automation.Language.NullString]::Value) }
-        else { [IO.File]::Move($temporary, $path) }
-    } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
-}
-
-function Prepare-RmrClient {
-    param([Parameter(Mandatory=$true)][string]$ClientDirectory, [string]$ServerBind = '127.0.0.1', [int]$ServerPort = 26000)
-    if (-not (Test-RmrClient $ClientDirectory)) { throw "Invalid EVE 2.10 build 3913 client: $ClientDirectory" }
-    if ($ServerPort -lt 1 -or $ServerPort -gt 65535) { throw 'Server port must be between 1 and 65535.' }
-    if ($ServerBind -in @('0.0.0.0', '::', '[::]', '*', '')) { $ServerBind = '127.0.0.1' }
-    if ($ServerBind -notmatch '^[A-Za-z0-9.:-]+$') { throw 'Server bind address cannot be used safely in the client launcher.' }
-    $ClientDirectory = [IO.Path]::GetFullPath($ClientDirectory)
-    $autoPath = Join-Path $ClientDirectory 'script\sys\autoexec.py'
-    # Latin-1 round-trips every original byte, including legacy non-ASCII text.
-    $encoding = [Text.Encoding]::GetEncoding(28591)
-    $auto = $encoding.GetString([IO.File]::ReadAllBytes($autoPath))
-    $nl = if ($auto.Contains("`r`n")) { "`r`n" } else { "`n" }
-    $anchor = '        if Hiword(d3d9) == 5 and d3d9 >= Long(5, 3, 1, 904): ver = (9, 0, "c") #NT'
-    $marker = '        if Hiword(d3d9) >= 6: ver = (9, 0, "c")'
-    $knownBlock = @(
-        '    d3d9 = GetFileVersion("d3d9.dll")',
-        '    if (d3d9):',
-        '        ver = (9,0,"")',
-        '        if Hiword(d3d9) == 4 and d3d9 >= Long(4, 9, 0, 902): ver = (9, 0, "b") #win9x',
-        '        if Hiword(d3d9) == 5 and d3d9 >= Long(5, 3, 1, 902): ver = (9, 0, "b") #NT',
-        '',
-        '        if Hiword(d3d9) == 4 and d3d9 >= Long(4, 9, 0, 904): ver = (9, 0, "c") #win9x',
-        $anchor
-    ) -join $nl
-    if ([regex]::Matches($auto, [regex]::Escape($knownBlock)).Count -ne 1 -or [regex]::Matches($auto, [regex]::Escape($anchor)).Count -ne 1) { throw 'The DirectX detector in autoexec.py is unfamiliar; no client files were changed.' }
-    $markers = [regex]::Matches($auto, [regex]::Escape($marker)).Count
-    $patchText = $anchor + $nl + '        # RMR: Modern Windows uses OS DLL versions 6.x / 10.x. Its d3d9' + $nl + '        # runtime supports 9.0c; the old tests misidentified it as 9.0.' + $nl + $marker
-    if ($markers -gt 1 -or ($markers -eq 1 -and -not $auto.Contains($patchText))) { throw 'The DirectX detector has an unfamiliar RMR patch; no client files were changed.' }
-    if ($markers -eq 0) {
-        $auto = $auto.Replace($anchor, $patchText)
-    }
-    $start = $script:RmrClientStart.Replace('set "RMR_SERVER_HOST=127.0.0.1"', ('set "RMR_SERVER_HOST=' + $ServerBind + '"')).Replace('set "RMR_SERVER_PORT=26000"', ('set "RMR_SERVER_PORT=' + $ServerPort + '"'))
-    Write-RmrFile $ClientDirectory 'script\sys\autoexec.py' ($encoding.GetBytes($auto))
-    Write-RmrFile $ClientDirectory 'script\rmr_connection.py' ([Text.Encoding]::ASCII.GetBytes($script:RmrClientConnection))
-    Write-RmrFile $ClientDirectory 'script\rmr_login.py' ([Text.Encoding]::ASCII.GetBytes($script:RmrClientLogin))
-    Write-RmrFile $ClientDirectory 'Start.bat' ([Text.Encoding]::ASCII.GetBytes($start))
-    return [pscustomobject]@{ ClientDirectory = $ClientDirectory; Launcher = (Join-Path $ClientDirectory 'Start.bat') }
-}
-
-function Prepare-RmrGameClient($Settings) {
-    $saved = if ($Settings.PSObject.Properties['clientPath']) { [string]$Settings.clientPath } else { '' }
-    if ($env:RMR_CLIENT_DIRECTORY) {
-        if (-not (Test-RmrClient $env:RMR_CLIENT_DIRECTORY)) { throw 'The --client path is not a complete EVE 2.10 build 3913 client.' }
-        $saved = [IO.Path]::GetFullPath($env:RMR_CLIENT_DIRECTORY)
-    }
-    # Search the real checkout and invocation folder, not the temporary drive alias.
-    $invocation = $env:RMR_INVOCATION_DIRECTORY
-    if (-not $invocation) { $invocation = $SourceRoot }
-    $matches = @(Find-RmrClients -InvocationDirectory $invocation -RepositoryRoot $SourceRoot -SavedClientDirectory $saved)
-    $clientPath = if ($matches.Count -eq 1) { $matches[0] } else { $null }
-    while (-not $clientPath) {
-        Assert-Running
-        if ($env:RMR_MODE -eq 'worker') {
-            $selection = Join-Path $Runtime 'client-selection.txt'
-            if (Test-Path -LiteralPath $selection) { Remove-Item -LiteralPath $selection -Force }
-            $script:Status['needsClient'] = $true
-            $script:Status['clientRequestId'] = [Guid]::NewGuid().ToString('N')
-            $detail = if ($matches.Count -gt 1) { 'Multiple clients found. Select the EVE 2.10 build 3913 client folder.' } else { 'Select your EVE 2.10 build 3913 client folder.' }
-            Set-Status 'Choose your client' $detail 87
-            while (-not (Test-Path -LiteralPath $selection)) { Assert-Running; Start-Sleep -Milliseconds 200 }
-            $selected = [IO.File]::ReadAllText($selection).Trim()
-            $script:Status['needsClient'] = $false
-            if (-not $selected) { throw [OperationCanceledException]::new('Client selection cancelled. Run start.bat when your client is ready.') }
-        } else {
-            $selected = Read-Host 'Path to EVE 2.10 build 3913 (client folder)'
-            if (-not $selected) { throw [OperationCanceledException]::new('Client selection cancelled.') }
-        }
-        if (Test-RmrClient $selected) { $clientPath = [IO.Path]::GetFullPath($selected) }
-        else { Write-Log 'That folder is not a complete EVE 2.10 build 3913 client. Please select another folder.' }
-    }
-    Set-Status 'Preparing client' 'Backing up and configuring your EVE client' 89
-    $port = [int]$script:Status['gamePort']
-    if ($port -lt 1 -or $port -gt 65535) { throw 'The server game port is not ready; cannot configure the client.' }
-    $prepared = Prepare-RmrClient -ClientDirectory $clientPath -ServerBind '127.0.0.1' -ServerPort $port
-    $Settings | Add-Member -NotePropertyName clientPath -NotePropertyValue $prepared.ClientDirectory -Force
-    [IO.File]::WriteAllText((Join-Path $Runtime 'settings.json'), ($Settings | ConvertTo-Json), $Utf8)
-    $script:Status['clientPath'] = $prepared.ClientDirectory
-    Write-Log ('Client ready: ' + $prepared.ClientDirectory + ' (EVE build 3913; 127.0.0.1:' + $port + ')')
-}
-
-function Start-RmrGameClient {
-    param([string]$ClientPath, [int]$GamePort = 0)
-    # Self-contained: the UI stores this function body for its callback.
-    $exe = Join-Path $ClientPath 'bin\exefile.exe'
-    $launcher = Join-Path $ClientPath 'Start.bat'
-    foreach ($path in @($exe, $launcher, (Join-Path $ClientPath 'script\rmr_connection.py'), (Join-Path $ClientPath 'script\rmr_login.py'))) {
-        if (-not [IO.File]::Exists($path)) { throw 'The prepared EVE client is no longer present. Restart setup.' }
-    }
-    if ($GamePort -eq 0) {
-        $match = [regex]::Match([IO.File]::ReadAllText($launcher), '(?im)^if not defined RMR_SERVER_PORT set "RMR_SERVER_PORT=(\d+)"\s*$')
-        if (-not $match.Success) { throw 'The prepared client launcher has no recognized server port. Restart setup.' }
-        $GamePort = [int]$match.Groups[1].Value
-    }
-    if ($GamePort -lt 1 -or $GamePort -gt 65535) { throw 'Invalid server game port.' }
-    $logs = Join-Path $ClientPath 'logs'
-    if (-not [IO.Directory]::Exists($logs)) { [void][IO.Directory]::CreateDirectory($logs) }
-    $start = [Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = $exe
-    $start.WorkingDirectory = $ClientPath
-    $start.Arguments = '/nosplash /noconsole "script:/rmr_connection.py" "script:/rmr_login.py"'
-    $start.UseShellExecute = $false
-    $start.EnvironmentVariables['RMR_LOGIN_SCALE'] = '200'
-    $start.EnvironmentVariables['RMR_SERVER_HOST'] = '127.0.0.1'
-    $start.EnvironmentVariables['RMR_SERVER_PORT'] = [string]$GamePort
-    $start.EnvironmentVariables['__COMPAT_LAYER'] = 'HIGHDPIAWARE'
-    if ($env:RMR_ORIGINAL_TEMP) { $start.EnvironmentVariables['TEMP'] = $env:RMR_ORIGINAL_TEMP }
-    if ($env:RMR_ORIGINAL_TMP) { $start.EnvironmentVariables['TMP'] = $env:RMR_ORIGINAL_TMP }
-    if ($env:RMR_ORIGINAL_PATH) { $start.EnvironmentVariables['PATH'] = $env:RMR_ORIGINAL_PATH }
-    [Diagnostics.Process]::Start($start) | Out-Null
-}
-
-$script:RmrClientStart = @'
-@echo off
-setlocal
-rem Double-click for a 200%% login UI (1440 x 920 on a large enough display).
-rem Optional: Start.bat [scale-percent] [server-address] [port]
-rem Example for this machine's alternate server: Start.bat 200 127.0.0.1 26004
-set "RMR_LOGIN_SCALE=200"
-if not "%~1"=="" set "RMR_LOGIN_SCALE=%~1"
-rem Connection overrides are inherited by this game process only.
-if not defined RMR_SERVER_HOST set "RMR_SERVER_HOST=127.0.0.1"
-if not defined RMR_SERVER_PORT set "RMR_SERVER_PORT=26000"
-if not "%~2"=="" set "RMR_SERVER_HOST=%~2"
-if not "%~3"=="" set "RMR_SERVER_PORT=%~3"
-
-if not exist "%~dp0bin\exefile.exe" (
-    echo Cannot find bin\exefile.exe beside Start.bat.
-    pause
-    exit /b 1
-)
-if not exist "%~dp0script\rmr_login.py" (
-    echo Cannot find script\rmr_login.py beside Start.bat.
-    pause
-    exit /b 1
-)
-if not exist "%~dp0script\rmr_connection.py" (
-    echo Cannot find script\rmr_connection.py beside Start.bat.
-    pause
-    exit /b 1
-)
-
-rem A clean extracted client has no logs directory until its first launch.
-if not exist "%~dp0logs" mkdir "%~dp0logs"
-
-rem Fonts are rendered at the larger size by the game, without bitmap DPI blur.
-rem This compatibility setting applies only to this launch and its child process.
-set "__COMPAT_LAYER=HIGHDPIAWARE"
-rem The old eve.exe discards command-line arguments. Start the game directly.
-start "" /D "%~dp0" "%~dp0bin\exefile.exe" /nosplash /noconsole "script:/rmr_connection.py" "script:/rmr_login.py"
-exit /b %errorlevel%
-
-'@
-
-$script:RmrClientConnection = @'
-# Launch-only connection settings and real LLV status for Python 2.3 / build 3913.
-# Loaded explicitly by Start.bat. No connection defaults are written to disk.
-import blue
-import form
-import sys
-import uthread
-
-
-def _rmrconn_log(message):
-    try:
-        handle = file(blue.os.rootpath + 'logs/rmr-connection.txt', 'a')
-        try:
-            handle.write(str(message) + '\n')
-        finally:
-            handle.close()
-    except:
-        sys.exc_clear()
-
-
-def _rmrconn_overlay(obj, read_name, write_name, initial):
-    # Patch this instance so aliases to it see the same session-only settings.
-    # The real IniFile.lines / Section.__values remain untouched, including when
-    # the game saves other preferences or the process exits without cleanup.
-    if '_rmrconn_values' in obj.__dict__:
-        return obj.__dict__['_rmrconn_values']
-    values = initial.copy()
-    protected = initial.copy()
-    read_original = getattr(obj, read_name)
-    write_original = getattr(obj, write_name)
-
-    def read(key, *args, **kwargs):
-        if key in protected:
-            if key in values:
-                return values[key]
-            if args:
-                default = args[0]
-            elif 'default' in kwargs:
-                default = kwargs['default']
-            else:
-                raise KeyError(key)
-            if kwargs.get('flushDef') or (len(args) > 1 and args[1]):
-                values[key] = default
-            return default
-        return read_original(key, *args, **kwargs)
-
-    def write(key, value, *args, **kwargs):
-        if key in protected:
-            values[key] = value
-            return
-        return write_original(key, value, *args, **kwargs)
-
-    obj.__dict__[read_name] = read
-    obj.__dict__[write_name] = write
-    obj.__dict__['_rmrconn_values'] = values
-    if read_name == 'GetValue':
-        has_original = obj.HasKey
-        delete_original = obj.DeleteValue
-        keys_original = obj.GetKeys
-
-        def has(key):
-            if key in protected:
-                return key in values
-            return has_original(key)
-
-        def delete(key):
-            if key in protected:
-                if key in values:
-                    del values[key]
-                return
-            return delete_original(key)
-
-        def keys(beginWith=None):
-            result = [key for key in keys_original() if key not in protected]
-            result.extend(values.keys())
-            if beginWith is not None:
-                result = [key for key in result if key.startswith(beginWith)]
-            return result
-
-        obj.__dict__['HasKey'] = has
-        obj.__dict__['DeleteValue'] = delete
-        obj.__dict__['GetKeys'] = keys
-    return values
-
-
-def _rmrconn_endpoint(self):
-    if not getattr(self, 'server', None) or not getattr(self, 'portedit', None):
-        return None
-    host = self.GetServerIP(self.server.GetValue()).strip()
-    port = int(self.portedit.GetValue())
-    if not host or port < 1 or port > 65535:
-        raise ValueError('Invalid server address or port')
-    return (host, port)
-
-
-def _rmrconn_status_current(self, serial, endpoint):
-    if getattr(self, '_rmrconn_serial', None) != serial:
-        return False
-    if not getattr(self, 'serverStatusText', None):
-        return False
-    try:
-        return _rmrconn_endpoint(self) == endpoint
-    except:
-        sys.exc_clear()
-        return False
-
-
-def _rmrconn_status(self, server_name=None):
-    if not getattr(self, 'serverStatusText', None):
-        return
-    serial = getattr(self, '_rmrconn_serial', 0) + 1
-    self._rmrconn_serial = serial
-    try:
-        endpoint = _rmrconn_endpoint(self)
-    except (ValueError, TypeError):
-        self.serverStatusText.text = 'INVALID SERVER ADDRESS OR PORT'
-        return
-    if endpoint is None:
-        return
-    host, port = endpoint
-    self.lastServerStatus = self.server.GetValue()
-    self._rmrconn_last_endpoint = endpoint
-    self.serverStatus[host] = None
-    self.serverStatusText.text = 'CHECKING %s:%s...' % endpoint
-    try:
-        state, details = eve.LocalSvc('machoNet').GetServerStatus('%s:%s' % endpoint)
-    except:
-        sys.exc_clear()
-        state, details = 'OFFLINE', None
-    if not _rmrconn_status_current(self, serial, endpoint):
-        return
-    if state == 'OK' and details and len(details) >= 4:
-        count, version, build, codename = details[:4]
-        self.serverStatus[host] = (count, version, build, str(codename))
-        # This server currently sends a fixed user count, so do not present it
-        # as a live population. Connectivity/version come from the real probe.
-        self.serverStatusText.text = 'ONLINE %s:%s<br>VERSION %.2f.%s' % (host, port, version, build)
-    elif state == 'Incompatible':
-        self.serverStatusText.text = 'INCOMPATIBLE SERVER %s:%s' % endpoint
-    else:
-        self.serverStatusText.text = 'OFFLINE / UNAVAILABLE<br>%s:%s' % endpoint
-    _rmrconn_log('Status %s:%s: %s' % (host, port, state))
-
-
-def _rmrconn_focus(self, *args):
-    if not getattr(self, 'serverStatusText', None):
-        return
-    try:
-        endpoint = _rmrconn_endpoint(self)
-    except:
-        sys.exc_clear()
-        endpoint = None
-    if endpoint != getattr(self, '_rmrconn_last_endpoint', None) or not self.serverStatusText.text:
-        uthread.new(self.GetServerStatus)
-
-
-def _rmrconn_poll(self):
-    # One polling tasklet per login view, also refreshing after server restarts.
-    while getattr(self, 'serverStatusText', None) is not None:
-        blue.pyos.synchro.Sleep(10000)
-        if getattr(self, 'serverStatusText', None) is None:
-            return
-        if not getattr(self, 'connecting', 0):
-            self.GetServerStatus()
-
-
-def _rmrconn_open(self, *args, **kwargs):
-    # gameui creates settings.ui after the command-line helper is loaded.
-    _rmrconn_overlay(settings.ui, 'Get', 'Set',
-                     {'server': _rmrconn_host, 'usedServers': [_rmrconn_host]})
-    result = _rmrconn_original_open(self, *args, **kwargs)
-    self.portedit.OnFocusLost = self.OnServerFocusLost
-    self.portedit.OnAnyChar = self.ClearServerStatus
-    uthread.new(_rmrconn_poll, self)
-    _rmrconn_log('Launch-only connection: %s:%s; UI %s:%s; advanced=%s' %
-                 (_rmrconn_host, _rmrconn_port, self.server.GetValue(),
-                  self.portedit.GetValue(), prefs.networkAdvanced))
-    return result
-
-
-def _rmrconn_install():
-    global _rmrconn_host, _rmrconn_port, _rmrconn_original_open
-    if getattr(form.Login, '_rmrconn_installed', False):
-        return
-    environment = blue.pyos.GetEnv()
-    _rmrconn_host = environment['RMR_SERVER_HOST'].strip()
-    _rmrconn_port = int(environment.get('RMR_SERVER_PORT', '26000'))
-    if not _rmrconn_host or _rmrconn_port < 1 or _rmrconn_port > 65535:
-        raise ValueError('Start.bat has an invalid RMR_SERVER_HOST / RMR_SERVER_PORT')
-    _rmrconn_overlay(prefs.__dict__['ini'], 'GetValue', 'SetValue',
-                     {'networkAdvanced': 1, 'port': _rmrconn_port})
-    _rmrconn_original_open = form.Login.OnOpenView
-    form.Login.OnOpenView = _rmrconn_open
-    form.Login.GetServerStatus = _rmrconn_status
-    form.Login.OnServerFocusLost = _rmrconn_focus
-    form.Login._rmrconn_installed = True
-    _rmrconn_log('Launch-only connection hook installed.')
-
-
-if blue.pyos.GetEnv().get('RMR_SERVER_HOST'):
-    _rmrconn_install()
-
-'@
-
-$script:RmrClientLogin = @'
-# Launch-only login scaling and session-wide pacing for Python 2.3 / build 3913.
-# Loaded explicitly by Start.bat; normal eve.exe startup remains available.
-# No original resources, compiled code, preferences, or server settings are edited.
-import blue
-import form
-import types
-import sys
-import traceback
-
-
-def _rmr_log(message):
-    try:
-        handle = file(blue.os.rootpath + 'logs/rmr-login.txt', 'a')
-        handle.write(str(message) + '\n')
-        handle.close()
-    except:
-        sys.exc_clear()
-
-
-def _rmr_windowed_settings(device, requested):
-    # Get a driver-supported windowed presentation for the saved adapter and
-    # size, then retain settings that are independent of fullscreen mode.
-    adapter = requested.Adapter
-    if adapter not in device.adapters:
-        adapter = device.adapters[0]
-    width = max(1, min(requested.BackBufferWidth, device.desktopMode.Width - 64))
-    height = max(1, min(requested.BackBufferHeight, device.desktopMode.Height - 96))
-    creation = device.GetFailsafeMode(adapter, 1, (width, height))
-    if creation is None:
-        return None
-    safe = device.CreationToSettings(creation)
-    values = requested.__dict__.copy()
-    for key in ('Adapter', 'Windowed', 'BackBufferWidth', 'BackBufferHeight',
-                'BackBufferFormat', 'AutoDepthStencilFormat',
-                'FullScreen_RefreshRateInHz'):
-        values[key] = safe.__dict__[key]
-    safe.__dict__.update(values)
-    return safe
-
-
-class _RmrDeviceSettings:
-    pass
-
-
-def _rmr_paced_set(device, requested, set_device, *args, **kwargs):
-    # SetDevice otherwise replaces the interval with IMMEDIATE when advanced
-    # device settings are disabled. Override only its in-memory read, retaining
-    # any existing connection overlay and restoring it even after an error.
-    ini = prefs.__dict__['ini']
-    old_get = ini.GetValue
-    advanced = bool(old_get('advancedDevice', 0))
-    had_get = 'GetValue' in ini.__dict__
-    instance_get = ini.__dict__.get('GetValue')
-    had_set = 'SetDevice' in device.__dict__
-    instance_set = device.__dict__.get('SetDevice')
-    original_fixup = device.FixupPresentation
-    had_fixup = 'FixupPresentation' in device.__dict__
-    instance_fixup = device.__dict__.get('FixupPresentation')
-    attempts = [0]
-    active_request = [None]
-    if len(args) > 3:
-        startup_hide_title = args[3]
-    else:
-        startup_hide_title = kwargs.get('hideTitle', 1)
-    if len(args) > 2:
-        requested_keep = args[2]
-    else:
-        requested_keep = kwargs.get('keepSettings', 1)
-    section = None
-    old_section_set = None
-    had_section_set = False
-    instance_section_set = None
-    old_interval_present = False
-    old_interval = None
-    if requested_keep:
-        try:
-            section = settings.user.ui
-            previous_settings = section.Get('DeviceSettings', None)
-            if previous_settings is not None:
-                old_interval_present = 'PresentationInterval' in previous_settings
-                if old_interval_present:
-                    old_interval = previous_settings['PresentationInterval']
-            old_section_set = section.Set
-            had_section_set = 'Set' in section.__dict__
-            instance_section_set = section.__dict__.get('Set')
-        except:
-            # Never persist the forced interval when settings are unavailable.
-            section = None
-            requested_keep = 0
-            sys.exc_clear()
-
-    def save_without_pacing(key, value, *save_args, **save_kwargs):
-        if key == 'DeviceSettings':
-            value = value.copy()
-            if old_interval_present:
-                value['PresentationInterval'] = old_interval
-            else:
-                value.pop('PresentationInterval', None)
-        return old_section_set(key, value, *save_args, **save_kwargs)
-
-    def get_value(key, *get_args, **get_kwargs):
-        if key == 'advancedDevice':
-            return 1
-        return old_get(key, *get_args, **get_kwargs)
-
-    def invoke(settings, call_args, call_kwargs):
-        attempts[0] += 1
-        if attempts[0] > 4:
-            _rmr_log('Windowed device retry limit reached.')
-            return
-        paced = _RmrDeviceSettings()
-        paced.__dict__.update(settings.__dict__)
-        paced.PresentationInterval = device.d3dconst.D3DPRESENT_INTERVAL_ONE
-        if not advanced:
-            paced.MultiSampleType = 0
-            paced.MultiSampleQuality = 0
-        names = ('tryAgain', 'fallback', 'keepSettings', 'hideTitle')
-        defaults = (1, 0, 1, 1)
-        options = list(call_args)
-        call_kwargs = call_kwargs.copy()
-        while len(options) < 4:
-            index = len(options)
-            options.append(call_kwargs.pop(names[index], defaults[index]))
-        # Native retries must retain the caller's persistence choice.
-        options[2] = requested_keep
-        call_kwargs.pop('keepSettings', None)
-        previous = active_request[0]
-        active_request[0] = paced
-        try:
-            return set_device(paced, *options, **call_kwargs)
-        finally:
-            active_request[0] = previous
-
-    def fixup(adapter, presentation):
-        result = original_fixup(adapter, presentation)
-        # FixupPresentation may substitute a new failsafe presentation whose
-        # default interval is IMMEDIATE, or fall back to fullscreen.
-        if active_request[0].Windowed and not result['Windowed']:
-            raise RuntimeError('Windowed presentation unavailable')
-        result['PresentationInterval'] = device.d3dconst.D3DPRESENT_INTERVAL_ONE
-        return result
-
-    def retry(settings, *retry_args, **retry_kwargs):
-        # Native fallback can request fullscreen; keep this startup attempt
-        # windowed and never let it persist the fallback settings.
-        if not settings.Windowed:
-            settings = _rmr_windowed_settings(device, settings)
-            if settings is None:
-                _rmr_log('Windowed device retry unavailable.')
-                return
-        retry_args = list(retry_args)
-        if len(retry_args) > 3:
-            retry_args[3] = startup_hide_title
-        else:
-            retry_kwargs['hideTitle'] = startup_hide_title
-        return invoke(settings, retry_args, retry_kwargs)
-
-    ini.__dict__['GetValue'] = get_value
-    device.__dict__['SetDevice'] = retry
-    device.__dict__['FixupPresentation'] = fixup
-    if section is not None:
-        section.__dict__['Set'] = save_without_pacing
-    try:
-        result = invoke(requested, args, kwargs)
-    finally:
-        if section is not None:
-            if had_section_set:
-                section.__dict__['Set'] = instance_section_set
-            else:
-                del section.__dict__['Set']
-        if had_fixup:
-            device.__dict__['FixupPresentation'] = instance_fixup
-        else:
-            del device.__dict__['FixupPresentation']
-        if had_set:
-            device.__dict__['SetDevice'] = instance_set
-        else:
-            del device.__dict__['SetDevice']
-        if had_get:
-            ini.__dict__['GetValue'] = instance_get
-        else:
-            del ini.__dict__['GetValue']
-    try:
-        _rmr_log('Actual presentation interval after device change: %s' %
-                 device.GetSettings().PresentationInterval)
-    except:
-        sys.exc_clear()
-    return result
-
-
-def _rmr_install_pacing(device, state):
-    original_set = device.SetDevice
-
-    def paced_set(requested, *args, **kwargs):
-        before = None
-        if not state['preparing']:
-            try:
-                before = device.GetSettings().Windowed
-            except:
-                sys.exc_clear()
-        result = _rmr_paced_set(device, requested, original_set, *args, **kwargs)
-        if not state['preparing'] and before is not None and before != requested.Windowed:
-            try:
-                if device.GetSettings().Windowed == requested.Windowed:
-                    state['manual_windowed'] = requested.Windowed
-            except:
-                sys.exc_clear()
-        return result
-
-    device.__dict__['SetDevice'] = paced_set
-
-
-def _rmr_install_windowed(device, state):
-    # PrepareMain is called by the intro or character selection after login.
-    # It normally restores and saves the account's fullscreen DeviceSettings.
-    original_prepare = device.PrepareMain
-    def prepare_windowed(*args, **kwargs):
-        original_set = device.SetDevice
-        had_set = 'SetDevice' in device.__dict__
-        old_set = device.__dict__.get('SetDevice')
-
-        def set_windowed(requested, *set_args, **set_kwargs):
-            try:
-                if state['manual_windowed'] is None or state['manual_windowed']:
-                    safe = _rmr_windowed_settings(device, requested)
-                else:
-                    safe = requested
-            except:
-                _rmr_log('Could not prepare windowed mode: ' +
-                         ''.join(traceback.format_exception(*sys.exc_info())))
-                sys.exc_clear()
-                return
-            if safe is None:
-                _rmr_log('Windowed mode unavailable; retaining the login device.')
-                return
-            # SetDevice's positional defaults are tryAgain, fallback,
-            # keepSettings, hideTitle. Replace those two even on retries.
-            options = list(set_args)
-            names = ('tryAgain', 'fallback', 'keepSettings', 'hideTitle')
-            defaults = (1, 0, 1, 1)
-            while len(options) < 4:
-                index = len(options)
-                options.append(set_kwargs.pop(names[index], defaults[index]))
-            options[2] = 0
-            options[3] = not safe.Windowed
-            set_kwargs.pop('keepSettings', None)
-            set_kwargs.pop('hideTitle', None)
-            return original_set(safe, *options, **set_kwargs)
-
-        device.__dict__['SetDevice'] = set_windowed
-        state['preparing'] += 1
-        try:
-            return original_prepare(*args, **kwargs)
-        finally:
-            state['preparing'] -= 1
-            if had_set:
-                device.__dict__['SetDevice'] = old_set
-            else:
-                del device.__dict__['SetDevice']
-
-    device.__dict__['PrepareMain'] = prepare_windowed
-
-
-def _rmr_number(value):
-    return type(value) in (types.IntType, types.LongType, types.FloatType)
-
-
-def _rmr_snapshot(node, result):
-    geometry = {}
-    for key in ('left', 'top', 'width', 'height', 'setWidth', 'resetTop',
-                'fixedWidth', 'fixedHeight', 'tabMargin', 'specialIndent'):
-        value = getattr(node, key, None)
-        if _rmr_number(value):
-            geometry[key] = value
-    font = None
-    if hasattr(node, 'GetParams') and hasattr(node, 'Layout'):
-        params = node.GetParams()
-        font = (params.fontSize or 9, getattr(node, 'letterSpacing', 0) or 0,
-                getattr(node, 'linespace', 0) or 0)
-    result.append((node, geometry, font))
-    for child in list(getattr(node, 'children', [])):
-        _rmr_snapshot(child, result)
-
-
-def _rmr_apply(records, scale):
-    # Parent geometry first; glyphs are freshly rasterized by ULabel's font API.
-    labels = []
-    for node, geometry, font in records:
-        if font is not None:
-            node.busy = 1
-        for key, value in geometry.items():
-            setattr(node, key, int(round(value * scale)))
-        if font is not None:
-            node.fontSize = max(1, int(round(font[0] * scale)))
-            node.letterSpacing = int(round(font[1] * scale))
-            node.linespace = int(round(font[2] * scale))
-            node.busy = 0
-            labels.append(node)
-    for node in labels:
-        node.Layout()
-    return len(labels)
-
-
-_rmr_original_open = form.Login.OnOpenView
-_rmr_original_motd = form.Login.ShowMotd
-
-
-def _rmr_open(self, *args, **kwargs):
-    _rmr_log('Opening scaled login.')
-    self._rmr_scale = 1.0
-    try:
-        result = _rmr_original_open(self, *args, **kwargs)
-        _rmr_log('Original login constructed.')
-        return _rmr_resize(self, result)
-    except:
-        _rmr_log(''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-        return
-
-
-def _rmr_resize(self, result):
-    records = []
-    try:
-        requested = float(blue.pyos.GetEnv().get('RMR_LOGIN_SCALE', '200')) / 100.0
-        requested = max(1.0, min(3.0, requested))
-    except (ValueError, TypeError):
-        requested = 2.0
-    # LocalSvc returns a remote-call wrapper, including for attribute accesses.
-    # Startup's service manager returns the actual local device service.
-    device = sm.StartService('device')
-    _rmr_log('Device ready.')
-    old = device.GetSettings()
-    if not old.Windowed:
-        try:
-            safe = _rmr_windowed_settings(device, old)
-            if safe is not None:
-                device.SetDevice(safe, keepSettings=0, hideTitle=0)
-                old = device.GetSettings()
-        except:
-            _rmr_log('Login windowed mode failed: ' +
-                     ''.join(traceback.format_exception(*sys.exc_info())))
-            sys.exc_clear()
-    _rmr_log('Current backbuffer: %sx%s' % (old.BackBufferWidth, old.BackBufferHeight))
-    base_width = old.BackBufferWidth
-    base_height = old.BackBufferHeight
-    # Reserve room for the taskbar; retain the original login's aspect ratio.
-    scale = min(requested,
-                max(1.0, (device.desktopMode.Width - 64.0) / base_width),
-                max(1.0, (device.desktopMode.Height - 96.0) / base_height))
-    width = int(round(base_width * scale))
-    height = int(round(base_height * scale))
-    _rmr_log('Requested login: %sx%s, scale %.3f' % (width, height, scale))
-    if scale <= 1.0:
-        try:
-            device.SetDevice(old, keepSettings=0, hideTitle=1)
-        except:
-            _rmr_log('Login pacing failed: ' +
-                     ''.join(traceback.format_exception(*sys.exc_info())))
-            sys.exc_clear()
-        return result
-    try:
-        # Capture the original layout before the resize can move anchored items.
-        for child in list(self.layer.uiwindow.children):
-            _rmr_snapshot(child, records)
-        creation = device.GetFailsafeMode(old.Adapter, 1, (width, height))
-        if creation is None:
-            _rmr_log('Windowed mode unavailable; retaining original login.')
-            device.SetDevice(old, keepSettings=0, hideTitle=1)
-            return result
-        device.SetDevice(device.CreationToSettings(creation), keepSettings=0, hideTitle=1)
-        actual = device.GetSettings()
-        if (actual.BackBufferWidth, actual.BackBufferHeight) != (width, height):
-            _rmr_log('Device rejected resize; retaining original layout.')
-            device.SetDevice(old, keepSettings=0, hideTitle=1)
-            return result
-        count = _rmr_apply(records, scale)
-        self._rmr_scale = scale
-        eve.triapp.uilib.desktop.Update()
-        _rmr_log('Applied login: %sx%s; %s native text labels.' %
-                 (actual.BackBufferWidth, actual.BackBufferHeight, count))
-    except:
-        self._rmr_scale = 1.0
-        _rmr_log('Scaling failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        # Keep a usable original login if a driver or UI object rejects scaling.
-        sys.exc_clear()
-        try:
-            device.SetDevice(old, keepSettings=0, hideTitle=1)
-            _rmr_apply(records, 1.0)
-            eve.triapp.uilib.desktop.Update()
-        except:
-            _rmr_log('Original-layout recovery failed: ' + str(sys.exc_info()[1]))
-            sys.exc_clear()
-    return result
-
-
-def _rmr_motd(self, *args, **kwargs):
-    result = _rmr_original_motd(self, *args, **kwargs)
-    scale = getattr(self, '_rmr_scale', 1.0)
-    if scale > 1.0:
-        records = []
-        for child in list(self.step2[0].children):
-            if child.name.startswith('servernote'):
-                _rmr_snapshot(child, records)
-        _rmr_apply(records, scale)
-    return result
-
-
-form.Login.OnOpenView = _rmr_open
-form.Login.ShowMotd = _rmr_motd
-_rmr_device = sm.StartService('device')
-_rmr_device_state = {'preparing': 0, 'manual_windowed': None}
-_rmr_install_pacing(_rmr_device, _rmr_device_state)
-_rmr_install_windowed(_rmr_device, _rmr_device_state)
-_rmr_log('Session-wide presentation pacing installed.')
-_rmr_log('Start.bat login scaling hook loaded.')
-try:
-    # Character selection's OpenNews uses this exact historical URL. Redirect
-    # only that request; other in-game browser pages retain their normal URLs.
-    import xtriui
-    _rmr_original_news_goto = xtriui.VirtualEdit.GoTo
-    def _rmr_news_goto(self, url, *args, **kwargs):
-        if url == 'http://myeve.eve-online.com/mb/news.asp':
-            url = 'http://127.0.0.1:18080/client-news'
-        return _rmr_original_news_goto(self, url, *args, **kwargs)
-    xtriui.VirtualEdit.GoTo = _rmr_news_goto
-    _rmr_log('Character selection news uses the local dashboard.')
-except:
-    _rmr_log('Local news hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-    sys.exc_clear()
-try:
-    # cfg.const is read-only; override only this lookup in its Python class.
-    _rmr_const_class = const.__class__
-    _rmr_original_const_getattr = _rmr_const_class.__getattr__
-    def _rmr_warp_const_getattr(self, name):
-        if self is const and name == 'minWarpInDistance':
-            return 0
-        return _rmr_original_const_getattr(self, name)
-    _rmr_const_class.__getattr__ = _rmr_warp_const_getattr
-    if const.minWarpInDistance != 0:
-        raise RuntimeError('Warp range lookup did not change')
-    _rmr_log('Warp-to-zero default range enabled.')
-except:
-    _rmr_warp_error = ''.join(traceback.format_exception(*sys.exc_info()))
-    if '_rmr_const_class' in globals() and '_rmr_original_const_getattr' in globals():
-        try:
-            _rmr_const_class.__getattr__ = _rmr_original_const_getattr
-        except:
-            sys.exc_clear()
-    _rmr_log('Warp range setup failed: ' + _rmr_warp_error)
-    sys.exc_clear()
-
-def _rmr_install_self_info():
-    # infosvc.ShowInfo routes one's own character to the character sheet.
-    # Use its ordinary info-window path for the same itemID instead.
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        # LocalSvc returns a ServiceConnection proxy. StartService returns
-        # the service instance in this client build.
-        info = sm.StartService('info')
-        cls = info.__class__
-        if getattr(cls, '_rmr_self_info_installed', False):
-            return
-        original = cls.ShowInfo
-        def show_info(self, typeID, itemID=None, new=0, rec=None, parentID=None, headerOnly=0):
-            if itemID != eve.session.charid:
-                return original(self, typeID, itemID, new, rec, parentID, headerOnly)
-            modal = eve.LocalSvc('ui').GetModalWindow()
-            wnd = self.GetWnd(new, modal)
-            if wnd.destroyed:
-                wnd = self.GetWnd(1, modal)
-            wnd.IsBrowser = 1
-            wnd.GoTo = self.GoTo
-            self.FormatWnd(wnd, typeID, itemID, rec=rec, parentID=parentID, headerOnly=headerOnly)
-            wnd.Maximize()
-            return None
-        cls.ShowInfo = show_info
-        cls._rmr_self_info_installed = True
-        _rmr_log('Own-character Show Info opens the normal character info window.')
-    except:
-        _rmr_log('Own-character Show Info hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-import uthread
-uthread.new(_rmr_install_self_info)
-
-def _rmr_install_scan_results():
-    # The System Scanner subtracts the ship's position straight from each
-    # result's position, which needs a vector rather than a tuple.
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        import foo
-        import xtriui
-        svc = sm.StartService('scanservice')
-        cls = svc.__class__
-        if getattr(cls, '_rmr_scan_results_installed', False):
-            return
-        original = cls.GetScans
-        def get_scans(self, *args, **kwargs):
-            scans = original(self, *args, **kwargs)
-            if not scans:
-                return scans
-            probes, results = scans
-            fixed = []
-            for each in results or []:
-                try:
-                    pos = each[2]
-                    if isinstance(pos, (tuple, list)):
-                        pos = foo.Vector3(float(pos[0]), float(pos[1]), float(pos[2]))
-                    if len(each) >= 5 and each[4]:
-                        # List the site's name where the result ID was;
-                        # the ID rides along at the end for Warp To.
-                        each = (each[4], each[1], pos, each[3], each[0])
-                    else:
-                        each = (each[0], each[1], pos, each[3])
-                except:
-                    sys.exc_clear()
-                fixed.append(each)
-            return (probes, fixed)
-        cls.GetScans = get_scans
-        cls._rmr_scan_results_installed = True
-        scanner = xtriui.SystemScanner
-        original_refresh = scanner.Refresh
-        def refresh(self, *args, **kwargs):
-            try:
-                return original_refresh(self, *args, **kwargs)
-            except:
-                _rmr_log('System Scanner refresh failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-                sys.exc_clear()
-        scanner.Refresh = refresh
-        original_warp = scanner.WarpTo
-        def warp_to(self, scanResult, *args, **kwargs):
-            if len(scanResult) >= 5:
-                scanResult = (scanResult[4],) + tuple(scanResult[1:4])
-            return original_warp(self, scanResult, *args, **kwargs)
-        scanner.WarpTo = warp_to
-        _rmr_log('System Scanner results use vector positions and site names.')
-    except:
-        _rmr_log('System Scanner results hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-uthread.new(_rmr_install_scan_results)
-
-def _rmr_install_alliance_logos():
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        import uix
-        import zlib
-        cls = form.AlliancesHome
-        if getattr(cls, '_rmr_alliance_logos', None):
-            return
-        original_logo = uix.GetAllianceLogo
-        cached = {}
-
-        class AllianceLogoUpdates:
-            __notifyevents__ = ['OnAllianceLogoChanged']
-
-            def OnAllianceLogoChanged(self, allianceID):
-                cached.pop(allianceID, None)
-
-        def get_logo(allianceID, *args, **kwargs):
-            logo = original_logo(allianceID, *args, **kwargs)
-            if not eve.session.charid:
-                return logo
-            try:
-                if allianceID not in cached:
-                    data = eve.RemoteSvc('allianceRegistry').GetAllianceLogoImage(allianceID)
-                    path = None
-                    if data:
-                        name = 'rmr-alliance-%d-%08x.png' % (allianceID, zlib.crc32(data) & 4294967295)
-                        handle = file(blue.os.cachepath + name, 'wb')
-                        try:
-                            handle.write(data)
-                        finally:
-                            handle.close()
-                        path = 'cache:/' + name
-                    cached[allianceID] = path
-                path = cached[allianceID]
-                if path:
-                    # Use the alpha-blended UI pass for the RGBA logo.
-                    logo.tripass = eve.rot.GetInstance('res:/ui/pass/linear.blue')
-                    logo.texture.pixels = path
-                    logo.rectLeft = logo.rectTop = 0
-                    logo.rectWidth = logo.rectHeight = 128
-            except:
-                _rmr_log('Alliance logo load failed: ' + str(sys.exc_info()[1]))
-                sys.exc_clear()
-            return logo
-
-        def edit_alliance(self, *args):
-            alliance = eve.LocalSvc('alliance').GetAlliance()
-            registry = eve.RemoteSvc('allianceRegistry')
-            current = registry.GetAllianceLogoUrl() or ''
-            fields = [
-                {'type': 'btline'},
-                {'type': 'push', 'frame': 1},
-                {'type': 'edit', 'key': 'url', 'label': 'URL', 'labelwidth': 104,
-                 'setvalue': alliance.url or '', 'frame': 1, 'maxLength': 2048},
-                {'type': 'push', 'frame': 1},
-                {'type': 'edit', 'key': 'logoUrl', 'label': 'Logo Image URL', 'labelwidth': 104,
-                 'setvalue': current, 'frame': 1, 'maxLength': 2048},
-                {'type': 'push', 'frame': 1},
-                {'type': 'textedit', 'key': 'description', 'label': 'Description',
-                 'setvalue': alliance.description or '', 'frame': 1, 'maxLength': 5000},
-                {'type': 'push', 'frame': 1},
-                {'type': 'bbline'}]
-            desktop = eve.triapp.uilib.desktop
-            pos = [(desktop.width - 500) // 2, (desktop.height - 400) // 2]
-            result = uix.HybridWnd(fields, 'Update Alliance', 1, None, uix.OKCANCEL, pos, 500, 190)
-            if result is not None:
-                logo_url = result['logoUrl'].strip()
-                if logo_url != current:
-                    registry.UpdateAlliance(result['description'], result['url'], logo_url)
-                    cached.pop(alliance.allianceID, None)
-                else:
-                    eve.LocalSvc('alliance').UpdateAlliance(result['description'], result['url'])
-
-        updates = AllianceLogoUpdates()
-        sm.RegisterNotify(updates)
-        uix.GetAllianceLogo = get_logo
-        cls.EditAllianceForm = edit_alliance
-        cls._rmr_alliance_logos = updates
-    except:
-        _rmr_log('Alliance logo setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-uthread.new(_rmr_install_alliance_logos)
-
-def _rmr_editable_focus(ui):
-    import xtriui
-    focus = ui.GetFocus()
-    if isinstance(focus, (xtriui.SingleLineEdit, xtriui.VirtualEdit)) and not getattr(focus, 'readonly', False):
-        return focus
-    return None
-
-
-def _rmr_install_directional_scan(cmd_class):
-    import listentry
-    import state as state_flags
-    import trinity
-    import uix
-    import util
-    import xtriui
-
-    max_km = 2109329976
-    scanner = xtriui.SystemScanner
-    nav = form.InflightNav
-    state_class = sm.StartService('state').__class__
-    original_startup = scanner.Startup
-    original_mouse_up = nav._OnMouseUp
-    original_set_state = state_class.SetState
-    armed = [None]
-
-    def start_scanner(self, *args):
-        result = original_startup(self, *args)
-        if not self.destroyed and hasattr(self, 'dir_rangeinput'):
-            self.dir_rangeinput.IntMode(1, max_km)
-            saved = settings.user.ui.Get('dir_scanrange', max_km)
-            self.dir_rangeinput.SetValue(min(max_km, max(1, int(saved))))
-        return result
-
-    def space_camera():
-        scene = eve.triapp.tridev.scene
-        return getattr(scene, 'camera', None)
-
-    def scan(self, direction=None):
-        if self.destroyed or self.searching or not eve.session.solarsystemid:
-            return
-        if direction is None:
-            camera = space_camera()
-            if not hasattr(camera, 'rotationAroundParent'):
-                return
-            direction = trinity.TriVector(0, 0, 1)
-            direction.TransformQuaternion(camera.rotationAroundParent)
-            direction.Normalize()
-        park = eve.LocalSvc('michelle').GetRemotePark()
-        if not park:
-            return
-        window = uix.GetWindowAbove(self)
-        self.searching = True
-        try:
-            window.ShowLoad()
-            km = min(max_km, max(1, self.dir_rangeinput.GetValue()))
-            angle = self.sr.scanangle
-            records = park.ConeScan(angle, float(km) * 1000.0, direction.x, direction.y, direction.z)
-            if self.destroyed:
-                return
-            settings.user.ui.Set('dir_scanrange', km)
-            groups = None
-            if self.sr.useoverview.checked:
-                groups = eve.LocalSvc('tactical').GetGroups()
-            entries = []
-            for rec in records:
-                if groups is not None and rec.groupID not in groups:
-                    continue
-                type_name = cfg.invtypes.Get(rec.typeID).name
-                name = rec.name or type_name
-                distance = util.FmtDist(rec.distance, maxdemicals=1)
-                data = util.KeyVal()
-                data.name = data.sort_name = data.hint = name
-                data.sort_dist = rec.distance
-                data.sort_type = type_name
-                data.label = '%s<t>%s<t>%s' % (name, type_name, distance)
-                data.itemID = rec.id
-                data.typeID = rec.typeID
-                entries.append(listentry.Get('Generic', data=data))
-            self.listtype = 'location'
-            if entries:
-                self.SetHint()
-            else:
-                self.SetHint('Nothing found')
-            self.sr.dirscroll.Load(fixedEntryHeight=18, contentList=entries, headers=['name', 'type', 'dist'])
-        finally:
-            self.searching = False
-            if not window.destroyed:
-                window.HideLoad()
-
-    def direction_search(self, *args):
-        scan(self)
-
-    def context():
-        return (eve.session.solarsystemid, eve.session.shipid)
-
-    def awaiting_click():
-        pending = armed[0]
-        return pending and pending[0] == context() and blue.os.GetTime() < pending[1]
-
-    def toward(item_id):
-        park = eve.LocalSvc('michelle').GetBallpark()
-        if not park:
-            return None
-        ship = park.GetBall(eve.session.shipid)
-        item = park.GetBall(item_id)
-        if ship is not None and item is not None:
-            return trinity.TriVector(item.x - ship.x, item.y - ship.y, item.z - ship.z)
-
-    def aim_and_scan(direction, expected):
-        if expected != context() or not direction.Length():
-            return
-        direction.Normalize()
-        camera = space_camera()
-        if not hasattr(camera, 'rotationAroundParent'):
-            return
-        camera.rotationOfInterest.SetIdentity()
-        rotation = camera.rotationAroundParent
-        if direction.z < -0.999999:
-            rotation.SetYawPitchRoll(3.141592653589793, 0, 0)
-        else:
-            rotation.SetRotationArc(trinity.TriVector(0, 0, 1), direction)
-        windows = eve.LocalSvc('window')
-        window = windows.GetWindow('scanner')
-        if window is None or window.destroyed:
-            eve.LocalSvc('cmd').OpenScanner()
-            window = windows.GetWindow('scanner')
-        if window is not None and not window.destroyed and expected == context():
-            window.Maximize()
-            if window.sr.tabs.GetSelectedArgs() != 'system':
-                window.sr.tabs.SelectByIdx(0, False)
-            scan(window.sr.systemscanner, direction)
-
-    def queue_scan(direction):
-        if direction is not None and direction.Length():
-            armed[0] = None
-            uthread.new(aim_and_scan, direction, context())
-
-    def select_object(self, item_id, flag, value, *args):
-        result = original_set_state(self, item_id, flag, value, *args)
-        if value and flag == state_flags.selected and awaiting_click():
-            queue_scan(toward(item_id))
-        return result
-
-    def click_space(self, button, *args):
-        direction = None
-        if button == 0 and awaiting_click() and (self.GetMouseTravel() or 0) <= 5:
-            lib = eve.triapp.uilib
-            scene = eve.triapp.tridev.scene
-            if not lib.rightbtn and scene and scene.camera:
-                _, picked = self.GetPick()
-                curve = getattr(picked, 'translationCurve', None)
-                item_id = getattr(curve, 'id', None)
-                if item_id is not None:
-                    direction = toward(item_id)
-                if direction is None or not direction.Length():
-                    direction = scene.PickInfinity(lib.x, lib.y, scene.camera.projection, scene.camera.view)
-        if direction is not None:
-            armed[0] = None
-        result = original_mouse_up(self, button, *args)
-        queue_scan(direction)
-        return result
-
-    def rescan_open_window(window, expected):
-        # V with the scanner already open repeats the scan along the camera
-        # and refreshes the result list in place.
-        if window.destroyed or expected != context():
-            return
-        window.Maximize()
-        if window.sr.tabs.GetSelectedArgs() != 'system':
-            window.sr.tabs.SelectByIdx(0, False)
-        scan(window.sr.systemscanner)
-
-    def directional_scan(self):
-        # V, then a click in space (or on anything in it): the camera turns
-        # that way and the scanner scans along it, open or not. V twice
-        # scans straight along the camera as it points now.
-        if not eve.session.solarsystemid or not eve.session.shipid:
-            return
-        if _rmr_editable_focus(eve.LocalSvc('ui')) is not None:
-            return
-        if awaiting_click():
-            armed[0] = None
-            window = eve.LocalSvc('window').GetWindow('scanner')
-            if window is None or window.destroyed:
-                eve.LocalSvc('cmd').OpenScanner()
-                window = eve.LocalSvc('window').GetWindow('scanner')
-            if window is not None and not window.destroyed:
-                uthread.new(rescan_open_window, window, context())
-            return
-        armed[0] = (context(), blue.os.GetTime() + 300000000)
-        try:
-            eve.Message('CustomNotify', {'notify': 'Directional scan: click where to scan (V again scans where the camera faces).'})
-        except:
-            sys.exc_clear()
-
-    scanner.Startup = start_scanner
-    scanner.DirectionSearch = direction_search
-    nav._OnMouseUp = click_space
-    state_class.SetState = select_object
-    cmd_class.CmdDirectionalScan = directional_scan
-
-
-def _rmr_install_shortcuts():
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        import uix
-        cmd = sm.StartService('cmd')
-        cls = cmd.__class__
-        if not getattr(cls, '_rmr_shortcuts_installed', False):
-            original_reload = cls.ReloadcommandsByFunc
-            shortcut_defaults = (('CmdBookmarkCurrentLocation', (1, 0, 0, 'b')),
-                                 ('CmdDronesEngage', (0, 0, 0, 'f')),
-                                 ('CmdReturnDrones', (0, 0, 1, 'r')),
-                                 ('CmdDirectionalScan', (0, 0, 0, 'v')))
-            shortcut_names = tuple([name for name, key in shortcut_defaults])
-
-            def bookmark_current_location(self):
-                if _rmr_editable_focus(eve.LocalSvc('ui')) is not None:
-                    return
-                return eve.LocalSvc('addressbook').BookmarkCurrentLocation()
-
-            def order_drones(engage):
-                session = eve.session
-                if not session.solarsystemid or not session.shipid:
-                    return
-                if _rmr_editable_focus(eve.LocalSvc('ui')) is not None:
-                    return
-                michelle = eve.LocalSvc('michelle')
-                park = michelle.GetBallpark()
-                drones = michelle.GetDrones()
-                if park is None or not drones:
-                    return
-                ids = []
-                for drone_id in drones:
-                    drone = drones[drone_id]
-                    if drone.ownerID != session.charid or drone.controllerID != session.shipid:
-                        continue
-                    if engage:
-                        item = park.slimItems.get(drone_id)
-                        if item is None or item.groupID in (const.groupMiningDrone, const.groupUnanchoringDrone):
-                            continue
-                    ids.append(drone_id)
-                if ids:
-                    menu = eve.LocalSvc('menu')
-                    if engage:
-                        menu.EngageTarget(ids)
-                    else:
-                        menu.ReturnToDroneBay(ids)
-
-            def drones_engage(self):
-                return order_drones(True)
-
-            def return_drones(self):
-                return order_drones(False)
-
-            def reload_shortcuts(self):
-                result = original_reload(self)
-                for name, key in shortcut_defaults:
-                    if not hasattr(self, name):
-                        continue
-                    self.defaultcmds[name] = key
-                    if name not in self.commandsByFunc:
-                        self.LoadCmd(name, self.GetCustomCmd(name) or key)
-                return result
-
-            # LocalSvc returns a proxy; patch the service that owns charHandler.
-            ui = sm.StartService('ui')
-            ui_class = ui.__class__
-            original_char = ui_class.OnGlobalChar
-
-            def on_global_char(self, char, flag):
-                # The legacy character handler drops accelerator keys before
-                # forwarding characters to chat, even if the action did nothing.
-                focus = _rmr_editable_focus(self)
-                if focus is not None and 32 <= char <= 126:
-                    key = eve.triapp.uilib.Key
-                    if not key(uix.VK_CONTROL) and not key(uix.VK_MENU):
-                        name = chr(char).replace(' ', 'space').upper()
-                        vkey = getattr(uix, 'VK_' + name, None)
-                        shortcut = (0, 0, key(uix.VK_SHIFT), vkey)
-                        current_cmd = sm.services.get('cmd')
-                        if current_cmd and current_cmd.GetFuncByShortcut(shortcut) in shortcut_names:
-                            focus.OnChar(char, flag)
-                            return
-                return original_char(self, char, flag)
-
-            ui_class.OnGlobalChar = on_global_char
-            eve.triapp.uilib.charHandler = ui.OnGlobalChar
-
-            cls.CmdBookmarkCurrentLocation = bookmark_current_location
-            cls.CmdDronesEngage = drones_engage
-            cls.CmdReturnDrones = return_drones
-            cls.ReloadcommandsByFunc = reload_shortcuts
-            cls._rmr_shortcuts_installed = True
-        if not getattr(cls, 'CmdDirectionalScan', None):
-            try:
-                _rmr_install_directional_scan(cls)
-            except:
-                _rmr_log('Directional scanner setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-                sys.exc_clear()
-        cmd.ReloadcommandsByFunc()
-        _rmr_log('RMR shortcuts registered in Escape shortcuts.')
-    except:
-        _rmr_log('Shortcut setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-uthread.new(_rmr_install_shortcuts)
-
-def _rmr_install_reload_all():
-    # A weapon's right-click menu in space gets "Reload all": every fitted
-    # module of that kind refills from the cargo hold with the charge it
-    # already uses (or, empty, the first that fits). The server's reload
-    # flag fills without swapping charges (svc/fitting.rs FLAG_RELOAD).
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        import xtriui
-        cls = getattr(xtriui, 'ModuleButton', None)
-        if cls is None or not hasattr(cls, 'GetMenu'):
-            _rmr_log('Reload all: the module button has no menu to extend.')
-            return
-        if getattr(cls, '_rmr_reload_all', False):
-            return
-        original_menu = cls.GetMenu
-        reload_flag = -9
-
-        def add_to_modules(inv, stack):
-            try:
-                inv.Add(stack.itemID, stack.locationID, flag=reload_flag)
-            except TypeError:
-                inv.Add(stack.itemID, flag=reload_flag)
-
-        def reload_all(button):
-            try:
-                info = button.sr.moduleInfo
-                ship = eve.session.shipid
-                if not ship:
-                    return
-                inv = eve.GetInventoryFromId(ship)
-                items = inv.List()
-                group = getattr(info, 'groupID', None)
-                slots = [i.flag for i in items if i.categoryID == 7 and i.groupID == group]
-                loaded = [i for i in items if i.categoryID == 8 and i.flag in slots]
-                mine = getattr(info, 'flagID', None)
-                types = [i.typeID for i in loaded if i.flag == mine] + [i.typeID for i in loaded]
-                cargo = [i for i in items if i.categoryID == 8 and i.flag == 5]
-                done = []
-                for t in types:
-                    if t in done:
-                        continue
-                    done.append(t)
-                    for stack in [c for c in cargo if c.typeID == t]:
-                        try:
-                            add_to_modules(inv, stack)
-                        except:
-                            sys.exc_clear()
-                            break
-                if not types:
-                    for stack in cargo:
-                        try:
-                            add_to_modules(inv, stack)
-                            break
-                        except:
-                            sys.exc_clear()
-            except:
-                _rmr_log('Reload all failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-                sys.exc_clear()
-
-        def get_menu(self, *args, **kwargs):
-            menu = original_menu(self, *args, **kwargs)
-            try:
-                if eve.session.solarsystemid and getattr(self.sr, 'moduleInfo', None) is not None:
-                    labels = [str(entry[0]).lower() for entry in (menu or []) if entry and isinstance(entry, tuple)]
-                    if not [l for l in labels if 'reload all' in l]:
-                        menu = list(menu or [])
-                        menu.append(None)
-                        menu.append(('Reload all', reload_all, (self,)))
-            except:
-                _rmr_log('Reload all menu failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-                sys.exc_clear()
-            return menu
-
-        cls.GetMenu = get_menu
-        cls._rmr_reload_all = True
-        _rmr_log('Reload all added to module menus.')
-    except:
-        _rmr_log('Reload all setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-uthread.new(_rmr_install_reload_all)
-
-def _rmr_install_grid_recovery():
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        import state
-        target = sm.StartService('target')
-        cls = target.__class__
-        if getattr(cls, '_rmr_grid_recovery', None):
-            return
-        original_clear = cls.DoBallClear
-
-        class GridRecovery:
-            __notifyevents__ = ['OnNewState']
-            active = None
-            park = None
-            reported = False
-
-            # This client sends OnNewState(park) with no hint.
-            def OnNewState(self, park, *args):
-                uthread.new(self.DedupeOverview, park)
-                if self.park is not park:
-                    return
-                active = self.active
-                self.park = None
-                self.active = None
-                uthread.new(self.RestoreLocks, park, active)
-
-            def DedupeOverview(self, park):
-                # A resynchronised grid (SetState) is added to the overview
-                # beside the rows already there: drop rows for balls that are
-                # gone, and every row but one per item.
-                try:
-                    blue.pyos.synchro.Sleep(750)
-                    if eve.LocalSvc('michelle').GetBallpark() is not park:
-                        return
-                    tactical = eve.LocalSvc('tactical')
-                    overview = getattr(getattr(tactical, 'sr', None), 'overview', None)
-                    if overview is None or overview.destroyed:
-                        return
-                    scroll = overview.sr.scroll
-                    balls = getattr(park, 'balls', None) or {}
-                    kept = {}
-                    stale = []
-                    for node in scroll.sr.entries[:]:
-                        item_id = getattr(node, 'itemID', None)
-                        if item_id is None:
-                            continue
-                        if item_id not in balls:
-                            stale.append(node)
-                            continue
-                        ball = getattr(node, 'ball', None)
-                        try:
-                            if callable(ball):
-                                ball = ball()
-                        except:
-                            sys.exc_clear()
-                        current = ball is None or ball is balls.get(item_id)
-                        if item_id not in kept:
-                            kept[item_id] = (node, current)
-                        elif current and not kept[item_id][1]:
-                            stale.append(kept[item_id][0])
-                            kept[item_id] = (node, current)
-                        else:
-                            stale.append(node)
-                    if stale:
-                        scroll.RemoveEntries(stale)
-                    if stale and not self.reported:
-                        self.reported = True
-                        _rmr_report('grid recovery: removed %d stale overview row(s) after a resync' % len(stale))
-                except:
-                    _rmr_report('grid recovery: overview cleanup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-                    sys.exc_clear()
-
-            def RestoreLocks(self, park, active):
-                try:
-                    if eve.LocalSvc('michelle').GetBallpark() is not park:
-                        return
-                    eve.LocalSvc('godma').GetStateManager().RefreshTargets()
-                    if active in target.GetTargets() and eve.LocalSvc('michelle').GetBallpark() is park:
-                        eve.LocalSvc('state').SetState(active, state.activeTarget, 1)
-                except:
-                    _rmr_log('Grid lock refresh failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-                    sys.exc_clear()
-
-        recovery = GridRecovery()
-
-        def clear_grid(self, solitem):
-            try:
-                park = eve.LocalSvc('michelle').GetBallpark()
-                # A reset of an already populated grid leaves old UI rows behind.
-                if park is not None and park.ego == eve.session.shipid and park.slimItems:
-                    recovery.park = park
-                    recovery.active = self.GetActiveTargetID()
-                    for target_id in list(self.targetsByID):
-                        self.ClearTarget(target_id)
-                    self.pendingTargets = []
-                    self.pendingTargeters = []
-                    self.targetedBy = []
-                    tactical = eve.LocalSvc('tactical')
-                    sr = getattr(tactical, 'sr', None)
-                    overview = getattr(sr, 'overview', None)
-                    if overview is not None and not overview.destroyed:
-                        scroll = overview.sr.scroll
-                        scroll.RemoveEntries(scroll.sr.entries[:])
-            except:
-                _rmr_log('Grid clear failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-                sys.exc_clear()
-            return original_clear(self, solitem)
-
-        cls.DoBallClear = clear_grid
-        sm.RegisterNotify(recovery)
-        cls._rmr_grid_recovery = recovery
-    except:
-        _rmr_log('Grid recovery setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-uthread.new(_rmr_install_grid_recovery)
-
-
-def _rmr_install_overview_dedupe():
-    # tactical.py adds an overview row for every ball in an AddBalls or
-    # SetState without looking for one already there, and DoBallRemove takes
-    # away only the first row it finds. A ball sent twice (or a grid
-    # resynchronised) therefore leaves a second row behind, with a stale
-    # distance, for as long as the pilot stays on grid. Keep one row per item.
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        cls = sm.StartService('tactical').__class__
-        if getattr(cls, '_rmr_overview_dedupe', False):
-            return
-        original_added = cls._DoBallsAdded
-        original_remove = cls.DoBallRemoveThread
-        counts = {'rows': 0}
-
-        def overview_scroll(self):
-            sr = getattr(self, 'sr', None)
-            overview = getattr(sr, 'overview', None)
-            if overview is None or getattr(overview, 'destroyed', 0):
-                return None
-            return getattr(overview.sr, 'scroll', None)
-
-        def drop_rows(self, item_ids):
-            scroll = overview_scroll(self)
-            if scroll is None or not item_ids:
-                return 0
-            rows = [e for e in scroll.sr.entries[:] if getattr(e, 'itemID', None) in item_ids]
-            if rows:
-                scroll.RemoveEntries(rows)
-            return len(rows)
-
-        def balls_added(self, lst):
-            try:
-                ids = {}
-                for each in lst:
-                    try:
-                        ids[each[1].itemID] = 1
-                    except:
-                        sys.exc_clear()
-                dropped = drop_rows(self, ids)
-                if dropped and not counts['rows']:
-                    _rmr_report('overview dedupe: replaced %d existing overview row(s) for re-added balls' % dropped)
-                counts['rows'] += dropped
-            except:
-                _rmr_log('Overview dedupe (add) failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-                sys.exc_clear()
-            return original_added(self, lst)
-
-        def ball_removed(self, ball, slimItem, terminal):
-            result = original_remove(self, ball, slimItem, terminal)
-            try:
-                if ball is not None:
-                    drop_rows(self, {ball.id: 1})
-            except:
-                _rmr_log('Overview dedupe (remove) failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-                sys.exc_clear()
-            return result
-
-        cls._DoBallsAdded = balls_added
-        cls.DoBallRemoveThread = ball_removed
-        cls._rmr_overview_dedupe = True
-        _rmr_report('overview dedupe: installed on %s' % cls.__name__)
-    except:
-        _rmr_report('overview dedupe: setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-
-uthread.new(_rmr_install_overview_dedupe)
-
-def _rmr_install_local_roster():
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    reported = {}
-
-    def report_once(key, message):
-        # Problems go to the server log once each, where they can be read.
-        if reported.get(key) != message:
-            reported[key] = message
-            try:
-                _rmr_report('local roster: ' + message)
-            except:
-                sys.exc_clear()
-                _rmr_log('local roster: ' + message)
-
-    try:
-        import listentry
-        import state
-        import uix
-        cls = listentry.ChatUser
-        if getattr(cls, '_rmr_local_roster', False):
-            return
-        original_load = cls.Load
-        current = [None, {}]
-
-        def local_channel():
-            return (('solarsystemid2', eve.session.solarsystemid2),)
-
-        def is_local(channel_id):
-            try:
-                return channel_id[0][0] == 'solarsystemid2'
-            except:
-                sys.exc_clear()
-                return False
-
-        def war_badge(entry):
-            import draw
-            flags = eve.LocalSvc('state')
-            flag_id = state.flagAtWarCanFight
-            props = flags.GetStateProps(flag_id)
-            badge = eve.rot.GetCopy('res:/UI/Component/flag.blue')
-            badge.children[0].rectLeft = (props[4] + 1) * 10
-            background = draw.Fill(badge, getInstance=0)
-            background.color.SetRGB(*flags.GetStateColor(flag_id))
-            badge.align = uix.UI_ALNONE
-            badge.state = uix.UI_DISABLED
-            badge.width = badge.height = 10
-            badge.left = entry.sr.picture.left + 22
-            badge.top = entry.sr.picture.top + 22
-            entry.children.insert(0, badge)
-            return badge
-
-        def client_at_war(node):
-            # The client's own war relationship, as its overview flags war
-            # targets: the pilot's alliance, else corporation.
-            try:
-                war = sm.StartService('war')
-                for owner in (getattr(node, 'allianceID', None), getattr(node, 'corpID', None)):
-                    if owner and war.GetRelationship(owner) == const.warRelationshipAtWarCanFight:
-                        return True
-            except:
-                report_once('client war', 'client war check failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-                sys.exc_clear()
-            return False
-
-        def load(self, node, *args):
-            result = original_load(self, node, *args)
-            try:
-                if self.destroyed or self.sr.node is not node:
-                    return result
-                owner = getattr(node, 'allianceID', None) or getattr(node, 'corpID', None)
-                badge = getattr(self.sr, 'rmrWarBadge', None)
-                # War targets are flagged wherever they are listed: by the
-                # client's own war data (as the overview flags them), else by
-                # the server's list of hostile wars.
-                enemy = client_at_war(node) or (owner is not None and owner in current[1])
-                if not enemy:
-                    if badge is not None and not badge.destroyed:
-                        badge.Close()
-                    self.sr.rmrWarBadge = None
-                elif badge is None or badge.destroyed:
-                    self.sr.rmrWarBadge = war_badge(self)
-            except:
-                report_once('badge', 'war badge failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-                sys.exc_clear()
-            return result
-
-        def find_channel(lsc):
-            channels = getattr(lsc, 'channels', None)
-            if not hasattr(channels, 'get'):
-                report_once('channels', 'no channel table on the LSC service (%s); its channel attributes: %s' % (
-                    type(channels).__name__, ', '.join([n for n in dir(lsc) if 'hannel' in n.lower()])))
-                return local_channel(), None
-            key = local_channel()
-            # The LSC channel table's get() wants a default as well.
-            try:
-                channel = channels.get(key, None)
-            except TypeError:
-                sys.exc_clear()
-                channel = None
-            if channel is None:
-                # The table keeps its channels in an 'items' dict, which hides
-                # the usual items() method.
-                table = getattr(channels, 'items', None)
-                if isinstance(table, dict):
-                    pairs = table.items()
-                else:
-                    pairs = channels.items()
-                for k, v in pairs:
-                    if is_local(k) and k[0][1] == eve.session.solarsystemid2:
-                        return k, v
-            return key, channel
-
-        def refresh():
-            # eve.LocalSvc returns a call proxy; the channel table lives on
-            # the service object itself.
-            lsc = sm.StartService('LSC')
-            channel_id, channel = find_channel(lsc)
-            # The war list comes with the roster, for this system's Local,
-            # whether or not the client's channel table could be read.
-            result = eve.RemoteSvc('LSC').GetLocalRoster(channel_id)
-            if result is None:
-                report_once('roster', 'the server gave no roster for %r' % (channel_id,))
-                return 5000
-            members, enemies = result
-            updated = members.Index('charID')
-            war_flags = dict([(owner, True) for owner in enemies])
-            war_changed = current != [channel_id, war_flags]
-            current[:] = [channel_id, war_flags]
-            if channel is None:
-                if 'ok' not in reported:
-                    report_once('ok', 'war list only: %d war enemies (Local window not found)' % len(war_flags))
-                return 10000
-            for pilot_id in updated:
-                if pilot_id not in cfg.eveowners and updated[pilot_id].extra:
-                    cfg.eveowners.Hint(pilot_id, updated[pilot_id].extra)
-            channel.memberList = updated
-            try:
-                lsc._LargeScaleChat__SetEstimatedMemberCount(channel, len(updated))
-            except:
-                sys.exc_clear()
-            window = getattr(channel, 'window', None)
-            if window is not None and not window.destroyed:
-                entries = getattr(getattr(getattr(window, 'userlist', None), 'sr', None), 'entries', None)
-                if entries is not None:
-                    shown = dict([(node.charID, (node.corpID, node.allianceID)) for node in entries])
-                    expected = dict([(pilot_id, (updated[pilot_id].corpID, updated[pilot_id].allianceID)) for pilot_id in updated])
-                    if shown != expected or war_changed:
-                        window.InitUsers(0)
-                window.UpdateCaption()
-            if 'ok' not in reported:
-                report_once('ok', 'working: %d pilots in Local, %d war enemies' % (len(updated), len(war_flags)))
-            return 10000
-
-        cls.Load = load
-        cls._rmr_local_roster = True
-    except:
-        report_once('setup', 'setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-        return
-
-    while 1:
-        delay = 10000
-        if eve.session.charid and eve.session.solarsystemid2:
-            try:
-                delay = refresh()
-            except:
-                report_once('refresh', 'refresh failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-                sys.exc_clear()
-        blue.pyos.synchro.Sleep(delay)
-
-uthread.new(_rmr_install_local_roster)
-
-def _rmr_install_bookmark_warp_menu():
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        cls = sm.StartService('menu').__class__
-        if getattr(cls, '_rmr_bookmark_warp_installed', False):
-            return
-        original = cls.ParseMenu
-
-        def adjust_bookmark_warp_range(self, entries):
-            for entry in entries:
-                if entry and len(entry) == 5 and entry[1] == self.ApproachLocation:
-                    bookmark = entry[2][0]
-                    break
-            else:
-                return entries
-            system = eve.session.solarsystemid
-            if not system or bookmark.locationID != system or getattr(bookmark, 'agentID', None):
-                return entries
-            park = eve.LocalSvc('michelle').GetBallpark()
-            if not park:
-                return entries
-            coordinate = bookmark.typeID == const.typeSolarSystem and bookmark.itemID == system and bookmark.x is not None
-            ball_id = bookmark.itemID
-            if coordinate:
-                ball_id = eve.session.shipid
-            if ball_id not in park.balls:
-                return entries
-            ball = park.balls[ball_id]
-            if coordinate:
-                dx, dy, dz = ball.x - bookmark.x, ball.y - bookmark.y, ball.z - bookmark.z
-                in_range = dx * dx + dy * dy + dz * dz > const.minWarpDistance ** 2
-            else:
-                in_range = ball.surfaceDist > const.minWarpDistance
-            # Build 3913 uses a separate 1,000 km check for the bookmark warp
-            # entries. Keep the native menu and replace only that distance check.
-            adjusted = list(entries)
-            for index, entry in enumerate(entries):
-                if entry and len(entry) == 5 and entry[4] == 'warp' and entry[3]:
-                    checks = list(entry[3])
-                    for offset in range(0, len(checks), 2):
-                        if checks[offset][1:] == ['Within range', 'Not in range']:
-                            checks[offset] = [in_range, 'You are in warp range', 'You are not in warp range']
-                    adjusted[index] = list(entry)
-                    adjusted[index][3] = tuple(checks)
-            return adjusted
-
-        def parse_menu(self, menuEntries, showInactive=0, filterFunc=None):
-            try:
-                menuEntries = adjust_bookmark_warp_range(self, menuEntries)
-            except:
-                _rmr_log('Bookmark warp menu failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-                sys.exc_clear()
-            return original(self, menuEntries, showInactive, filterFunc)
-
-        cls.ParseMenu = parse_menu
-        cls._rmr_bookmark_warp_installed = True
-    except:
-        _rmr_log('Bookmark warp setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-uthread.new(_rmr_install_bookmark_warp_menu)
-
-def _rmr_install_warp_distance():
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        cls = sm.StartService('space').__class__
-        if getattr(cls, '_rmr_warp_distance_installed', False):
-            return
-        original_call = cls.OnBallparkCall
-        original_confirm = cls.ConfirmWarpDestination
-
-        def own_warp_destination(self, name, args):
-            # Keep the native movement for other ships without changing our HUD.
-            if name == 'WarpTo' and args[0] != eve.session.shipid:
-                return
-            return original_call(self, name, args)
-
-        def confirm_landing_point(self):
-            original_confirm(self)
-            # Use the actual WarpTo coordinates, including the selected range.
-            self.warpDestinationCache[4] = self.warpDestinationCache[3]
-
-        cls.OnBallparkCall = own_warp_destination
-        cls.ConfirmWarpDestination = confirm_landing_point
-        cls._rmr_warp_distance_installed = True
-    except:
-        _rmr_log('Warp distance setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-uthread.new(_rmr_install_warp_distance)
-
-class _RmrSpaceQueue:
-    def __init__(self, broker, queue):
-        self.broker = broker
-        self.queue = queue
-
-    def put(self, stop):
-        # Michelle.Stop uses this to pass its None sentinel.
-        return self.queue.put(stop)
-
-    def non_blocking_put(self, work):
-        return self.queue.non_blocking_put((self.broker._Michelle__bp, work))
-
-    def get(self):
-        while True:
-            queued = self.queue.get()
-            if queued is None:
-                return None
-            if len(queued) == 5:
-                # The dispatcher's wake-up or work queued during setup.
-                park, work = self.broker._Michelle__bp, queued
-            else:
-                park, work = queued
-            if park is None or park is not self.broker._Michelle__bp:
-                continue
-            owners, corps, alliances, balls, new_state = work
-            # These lookups can yield while docking tears down the park.
-            if owners:
-                cfg.eveowners.Prime(owners)
-            if corps:
-                cfg.corptickernames.Prime(corps)
-            if alliances:
-                cfg.allianceshortnames.Prime(alliances)
-            if park is self.broker._Michelle__bp:
-                return (None, None, None, balls, new_state)
-
-
-def _rmr_install_space_queue():
-    try:
-        broker = sm.StartService('michelle')
-        queue = broker.ballQueue
-        if not isinstance(queue, _RmrSpaceQueue):
-            broker.ballQueue = _RmrSpaceQueue(broker, queue)
-            # Wake the native dispatcher if it is already waiting on get().
-            queue.non_blocking_put((None, None, None, (), None))
-    except:
-        _rmr_log('Space update queue setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-uthread.new(_rmr_install_space_queue)
-
-def _rmr_install_mission_agent_contacts():
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        chat = sm.StartService('LSC')
-        cls = chat.__class__
-        if getattr(cls, '_rmr_mission_agents_installed', False):
-            return
-        original_buddies = cls.GetBuddies
-        def buddies_with_mission_agents(self):
-            buddies = original_buddies(self)
-            try:
-                missions = eve.LocalSvc('journal').GetMyAgentJournalDetails()[0]
-                for mission in missions:
-                    agent_id = mission[4]
-                    if agent_id not in buddies:
-                        buddies.append(agent_id)
-            except:
-                _rmr_log('Mission agent contact refresh failed: ' +
-                         ''.join(traceback.format_exception(*sys.exc_info())))
-                sys.exc_clear()
-            return buddies
-        cls.GetBuddies = buddies_with_mission_agents
-        cls._rmr_mission_agents_installed = True
-        _rmr_log('Active mission agents appear in People and Places.')
-    except:
-        _rmr_log('Mission agent contact setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-uthread.new(_rmr_install_mission_agent_contacts)
-
-_RMR_AGENT_PRIME = 400
-
-def _rmr_prime_owners(ids):
-    # One GetOwners round trip per few hundred names instead of one per agent.
-    ids = [i for i in ids if i]
-    for start in range(0, len(ids), _RMR_AGENT_PRIME):
-        try:
-            cfg.eveowners.Prime(ids[start:start + _RMR_AGENT_PRIME])
-        except:
-            sys.exc_clear()
-
-def _rmr_owner_name(ownerID, fallback):
-    try:
-        return cfg.eveowners.Get(ownerID).name
-    except:
-        sys.exc_clear()
-        return fallback
-
-def _rmr_by_name(a, b):
-    return cmp(a[0].lower(), b[0].lower())
-
-def _rmr_agent_group(label, ident, items, sublevel, content):
-    import listentry
-    data = {
-        'GetSubContent': content,
-        'label': label,
-        'id': ident,
-        'items': items,
-        'headers': ['name'],
-        'iconMargin': 18,
-        'showlen': 0,
-        'state': None,
-        'npc': 1,
-        'allowCopy': 1,
-        'showicon': '_22_41',
-        'posttext': ' [%s]' % len(items),
-        'sublevel': sublevel,
-        'allowGuids': ['listentry.User', 'listentry.Sender'],
-    }
-    return listentry.Get('Group', data)
-
-def _rmr_agent_people(nodedata, *args):
-    import listentry
-    ids = list(getattr(nodedata, 'items', None) or [])
-    _rmr_prime_owners(ids)
-    named = []
-    for agentID in ids:
-        try:
-            named.append((cfg.eveowners.Get(agentID).name, agentID))
-        except:
-            sys.exc_clear()
-    named.sort(_rmr_by_name)
-    sublevel = getattr(nodedata, 'sublevel', 0) + 1
-    entries = []
-    for name, agentID in named:
-        entries.append(listentry.Get('User', {
-            'charID': agentID,
-            'info': cfg.eveowners.Get(agentID),
-            'sublevel': sublevel,
-        }))
-    return entries
-
-def _rmr_agent_corps(nodedata, *args):
-    # Faction -> its corporations, each a group of that corporation's agents.
-    agents = sm.StartService('agents').GetAgentsByID()
-    corps = {}
-    for agentID in getattr(nodedata, 'items', None) or []:
-        if agentID not in agents:
-            continue
-        agent = agents[agentID]
-        corps.setdefault(agent.corporationID, []).append(agentID)
-    _rmr_prime_owners(corps.keys())
-    named = [(_rmr_owner_name(corpID, 'Corporation %s' % corpID), corpID) for corpID in corps.keys()]
-    named.sort(_rmr_by_name)
-    sublevel = getattr(nodedata, 'sublevel', 0) + 1
-    return [_rmr_agent_group(name, nodedata.id + (corpID,), corps[corpID], sublevel, _rmr_agent_people)
-            for name, corpID in named]
-
-def _rmr_agent_factions(nodedata, *args):
-    # Level -> the factions with agents at that level for this pilot.
-    agents = sm.StartService('agents').GetAgentsByID()
-    factions = {}
-    for agentID in getattr(nodedata, 'items', None) or []:
-        if agentID not in agents:
-            continue
-        agent = agents[agentID]
-        factions.setdefault(agent.factionID or 0, []).append(agentID)
-    _rmr_prime_owners([f for f in factions.keys() if f])
-    named = [(_rmr_owner_name(factionID, 'Independent'), factionID) for factionID in factions.keys()]
-    named.sort(_rmr_by_name)
-    sublevel = getattr(nodedata, 'sublevel', 0) + 1
-    return [_rmr_agent_group(name, nodedata.id + (factionID,), factions[factionID], sublevel, _rmr_agent_corps)
-            for name, factionID in named]
-
-def _rmr_available_agent_groups():
-    # The server lists every mission agent that would work with this pilot on
-    # the personal channel's contacts. Arrange them like the Character Sheet:
-    # by level, then faction, then corporation, names fetched per group.
-    import util
-    agents = sm.StartService('agents').GetAgentsByID()
-    levels = {}
-    for buddyID in eve.LocalSvc('LSC').GetBuddies():
-        if not util.IsNPC(buddyID):
-            continue
-        if buddyID not in agents:
-            continue
-        agent = agents[buddyID]
-        levels.setdefault(agent.level or 1, []).append(buddyID)
-    keys = levels.keys()
-    keys.sort()
-    groups = []
-    for level in keys:
-        groups.append(_rmr_agent_group('Level %s agents available to you' % level,
-                                       ('agentgroups', 'rmr_available', level),
-                                       levels[level], 0, _rmr_agent_factions))
-    return groups
-
-def _rmr_install_available_agents():
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        book = sm.StartService('addressbook')
-        cls = book.__class__
-        if getattr(cls, '_rmr_available_agents_installed', False):
-            return
-        original_show = cls.ShowPersonal
-        original_sub = cls.GetBuddiesSubContent
-        def show_personal(self, npc):
-            result = original_show(self, npc)
-            if not npc:
-                return result
-            try:
-                wnd = self.wnd
-                if wnd is None or wnd.destroyed:
-                    return result
-                groups = _rmr_available_agent_groups()
-                if groups:
-                    wnd.sr.scroll.AddEntries(-1, groups)
-                    self.SetHint()
-            except:
-                _rmr_log('Available agent groups failed: ' +
-                         ''.join(traceback.format_exception(*sys.exc_info())))
-                sys.exc_clear()
-            return result
-        def buddies_sub_content(self, nodedata, *args):
-            # Fetch all the names in one go before the list builds its rows.
-            try:
-                if getattr(nodedata, 'npc', 0):
-                    _rmr_prime_owners(list(getattr(nodedata, 'items', None) or []))
-            except:
-                sys.exc_clear()
-            return original_sub(self, nodedata, *args)
-        cls.ShowPersonal = show_personal
-        cls.GetBuddiesSubContent = buddies_sub_content
-        cls._rmr_available_agents_installed = True
-        _rmr_log('People and Places lists every agent available to you.')
-    except:
-        _rmr_log('Available agents hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-uthread.new(_rmr_install_available_agents)
-
-def _rmr_install_area_doomsday():
-    # An area doomsday has no targetID. The old confirmation path tries to
-    # read that missing target's ownerID before Activate reaches the server.
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        consider = sm.StartService('consider')
-        cls = consider.__class__
-        if getattr(cls, '_rmr_area_doomsday_installed', False):
-            return
-        original = cls.DoAttackConfirmations
-        def confirm(self, targetID, *args, **kwargs):
-            # Drone Engage calls this with only targetID. Forward the exact
-            # arguments it supplied so the original confirmation still runs.
-            effect = kwargs.get('effect')
-            if args:
-                effect = args[0]
-            if targetID is None and getattr(effect, 'effectID', None) == 2071:
-                _rmr_log('Area doomsday confirmation accepted without a target.')
-                return 1
-            return original(self, targetID, *args, **kwargs)
-        cls.DoAttackConfirmations = confirm
-        cls._rmr_area_doomsday_installed = True
-        _rmr_log('Area doomsday client activation enabled.')
-    except:
-        _rmr_log('Area doomsday hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-uthread.new(_rmr_install_area_doomsday)
-
-# /moveme is a GM command. The server asks this client to choose one of its
-# allowlisted stations; the selection goes back through the normal slash RPC.
-_rmr_hubs = [
-    ('HIGHSEC  |  Jita', 'jita'),
-    ('HIGHSEC  |  Amarr', 'amarr'),
-    ('HIGHSEC  |  Rens', 'rens'),
-    ('HIGHSEC  |  Dodixie', 'dodixie'),
-    ('HIGHSEC  |  Hek', 'hek'),
-    ('NULLSEC  |  T22-QI', 't22-qi'),
-    ('NULLSEC  |  FD-MLJ', 'fd-mlj'),
-    ('NULLSEC  |  X-7OMU', 'x-7omu'),
-    ('NULLSEC  |  VFK-IV', 'vfk-iv'),
-    ('NULLSEC  |  6NJ8-V', '6nj8-v'),
-    ('NULLSEC  |  NOL-M9', 'nol-m9')
-]
-
-def _rmr_moveme_key(value, depth=0):
-    if value is None or depth > 3:
-        return None
-    for label, key in _rmr_hubs:
-        if value == label or value == key:
-            return key
-    if type(value) in (types.ListType, types.TupleType):
-        for part in value:
-            key = _rmr_moveme_key(part, depth + 1)
-            if key:
-                return key
-    else:
-        for field in ('value', 'returnValue', 'itemID', 'id', 'data'):
-            try:
-                key = _rmr_moveme_key(getattr(value, field), depth + 1)
-                if key:
-                    return key
-            except:
-                sys.exc_clear()
-    return None
-
-def _rmr_show_moveme():
-    try:
-        import uix
-        choice = uix.ListWnd(_rmr_hubs, 'generic', 'Move Me - market hubs', ordered=1)
-        key = _rmr_moveme_key(choice)
-        _rmr_log('Move Me selection: ' + repr(choice) + ' -> ' + repr(key))
-        if key:
-            eve.RemoteSvc('slash').SlashCmd('/moveme ' + key)
-    except:
-        _rmr_log('Move Me dialog failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-def _rmr_install_moveme():
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        # MachoNet sends OnRemoteMessage directly to eve.Message, not to a
-        # service subscribed through sm.RegisterNotify.
-        original = eve.Message
-        def message(key, *args, **kwargs):
-            if key == 'RmrMoveMe':
-                uthread.new(_rmr_show_moveme)
-                return None
-            return original(key, *args, **kwargs)
-        try:
-            eve.Message = message
-            _rmr_log('Move Me dialog hook installed on eve.Message.')
-        except:
-            sys.exc_clear()
-            cls = eve.__class__
-            original_method = cls.Message
-            def class_message(self, key, *args, **kwargs):
-                if key == 'RmrMoveMe':
-                    uthread.new(_rmr_show_moveme)
-                    return None
-                return original_method(self, key, *args, **kwargs)
-            cls.Message = class_message
-            _rmr_log('Move Me dialog hook installed on Eve.Message.')
-    except:
-        _rmr_log('Move Me hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-uthread.new(_rmr_install_moveme)
-
-
-def _rmr_stream_agent_standings(sheet, key, generation):
-    # Build 200 entries at a time. The original Character Sheet builds every
-    # standing and every skill bonus before it shows anything, freezing at
-    # /maxstandings scale. The server keeps that old cache small and pages the
-    # complete agent relationships here.
-    try:
-        import listentry
-        blue.pyos.synchro.Sleep(10)
-        wnd = sheet.GetWnd()
-        if wnd is None or wnd.destroyed:
-            return
-        scroll = wnd.sr.scroll
-        standing = sm.StartService('standing')
-        has_header = 0
-        for node in scroll.GetNodes():
-            if getattr(node, 'label', None) == 'Agents':
-                has_header = 1
-                break
-        offset = 0
-        positive = key == 'mystandings_to_positive'
-        while 1:
-            if (getattr(sheet, '_rmr_agent_standings_generation', None) != generation or
-                    sheet.showing != key or wnd.destroyed or wnd.sr.scroll is not scroll):
-                return
-            page = eve.RemoteSvc('standing2').GetAgentStandingsPage(offset, int(positive))
-            if not page:
-                break
-            ids = [record.agentID for record in page]
-            cfg.eveowners.Prime(ids)
-            entries = []
-            if not has_header:
-                entries.append(listentry.Get('Header', {'label': 'Agents'}))
-                has_header = 1
-            for record in page:
-                # A direct +10 is already at the effective-standing cap;
-                # calculating skill bonuses for thousands of agents is wasted.
-                calculate_bonuses = record.standing < 10.0
-                entries.append(standing.GetStandingEntry(
-                    record.agentID, record.agentID, eve.session.charid,
-                    record.standing, int(calculate_bonuses)))
-            if (getattr(sheet, '_rmr_agent_standings_generation', None) != generation or
-                    sheet.showing != key or wnd.destroyed):
-                return
-            scroll.AddEntries(-1, entries, checkTabstops=0)
-            offset += len(page)
-            if len(page) < 200:
-                break
-            blue.pyos.synchro.Sleep(10)
-        _rmr_log('Character Sheet streamed %s additional agent standings.' % offset)
-    except:
-        _rmr_log('Agent standings stream failed: ' +
-                 ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-
-def _rmr_install_agent_standings():
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        sheet = sm.StartService('charactersheet')
-        cls = sheet.__class__
-        if getattr(cls, '_rmr_agent_standings_installed', False):
-            return
-        original = cls.ShowStandings
-        def show_standings(self, key):
-            generation = getattr(self, '_rmr_agent_standings_generation', 0) + 1
-            self._rmr_agent_standings_generation = generation
-            result = original(self, key)
-            if key in ('mystandings_to_positive', 'mystandings_to_negative'):
-                uthread.new(_rmr_stream_agent_standings, self, key, generation)
-            return result
-        cls.ShowStandings = show_standings
-        cls._rmr_agent_standings_installed = True
-        _rmr_log('Paged Character Sheet agent standings installed.')
-    except:
-        _rmr_log('Agent standings hook failed: ' +
-                 ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-
-uthread.new(_rmr_install_agent_standings)
-
-def _rmr_install_rush_job():
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        import uix
-        cls = form.Manufacturing
-        if getattr(cls, '_rmr_rush_job_installed', False):
-            return
-        original = cls.ShowJobDetails
-        # CCP, GM and BH carry role 8; ISD BH carries 2048. Matches the server's RUSH_JOB_ROLES.
-        gm_role = 8 | 2048
-
-        def show_job_details(self, job):
-            result = original(self, job)
-            if (eve.session.role & gm_role and job and not job.completed
-                    and job.installedItemOwnerID == eve.session.charid
-                    and job.endProductionTime > blue.os.GetTime()):
-                def rush_job(*args):
-                    eve.ProxySvc('ramProxy').RushJob(job.jobID)
-                    button.Close()
-                    self.LoadJobs()
-
-                # Cancel Job is anchored 10 pixels from the bottom.
-                button = uix.GetButton(self.sr.details, 'Rush Job', func=rush_job, left=12, top=32)
-                button.anchors = uix.UI_ANCHRIGHT | uix.UI_ANCHBOTTOM
-            return result
-
-        cls.ShowJobDetails = show_job_details
-        cls._rmr_rush_job_installed = True
-    except:
-        _rmr_log('Rush Job hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-
-uthread.new(_rmr_install_rush_job)
-
-
-def _rmr_install_station_management():
-    # form.StationManagement.Startup calls dlg.Show() but the dialog's
-    # Show(self, show) has no default, so opening the window ends in a
-    # TypeError after it is built. Give 'show' its obvious default.
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        dialog = form.StationManagement.Startup.im_func.func_globals.get('StationManagementDialog')
-        if dialog is None or getattr(dialog, '_rmr_show_installed', False):
-            return
-        original = dialog.Show
-
-        def show(self, show=1):
-            return original(self, show)
-
-        dialog.Show = show
-        dialog._rmr_show_installed = True
-    except:
-        _rmr_log('Station management hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-
-
-uthread.new(_rmr_install_station_management)
-
-def _rmr_install_manufacturing_menu():
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        cls = form.Manufacturing
-        if getattr(cls, '_rmr_manufacturing_menu_installed', False):
-            return
-        original = cls.GetMenu
-
-        # menu.GetSingleMenu calls GetMenu() with no arguments when the
-        # window background is right-clicked; the client's own method needs one.
-        def get_menu(self, *args):
-            if not args:
-                return []
-            return original(self, *args)
-
-        cls.GetMenu = get_menu
-        cls._rmr_manufacturing_menu_installed = True
-    except:
-        _rmr_log('Manufacturing menu hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-
-uthread.new(_rmr_install_manufacturing_menu)
-
-
-def _rmr_report(message):
-    _rmr_log(message)
-    try:
-        eve.RemoteSvc('factory').RmrReport(str(message)[:2000])
-    except:
-        sys.exc_clear()
-
-
-class _RmrQuietFlag:
-    # Off when tested, and does nothing if called.
-    def __call__(self, *args, **kwargs):
-        return None
-
-    def __nonzero__(self):
-        return False
-
-
-def _rmr_install_tactical_logme():
-    # Right-clicking a location reaches tactical.GetDefaultGroups, which reads
-    # self.logme; the service never sets it, so every such menu failed.
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        cls = None
-        try:
-            cls = getattr(__import__('svc'), 'TacticalSvc', None)
-        except:
-            sys.exc_clear()
-        if cls is None:
-            cls = sm.StartService('tactical').__class__
-        if hasattr(cls, 'logme'):
-            _rmr_report('tactical logme: already defined on %s' % cls)
-        else:
-            cls.logme = _RmrQuietFlag()
-            _rmr_report('tactical logme: default installed on %s' % cls)
-    except:
-        _rmr_report('tactical logme hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-
-uthread.new(_rmr_install_tactical_logme)
-
-
-def _rmr_outpost_item(values):
-    # The platform the menu is for: a slim item (space) or an inventory row.
-    for value in values:
-        try:
-            typeID = getattr(value, 'typeID', None)
-            itemID = getattr(value, 'itemID', None)
-            if typeID and itemID and cfg.invtypes.Get(typeID).groupID == 307:
-                return itemID
-        except:
-            sys.exc_clear()
-    return None
-
-
-def _rmr_menu_item(values):
-    # The item a menu is for: a slim item (space) or an inventory row.
-    for value in values:
-        typeID = getattr(value, 'typeID', None)
-        itemID = getattr(value, 'itemID', None)
-        if typeID and itemID:
-            return itemID, typeID
-    return None, None
-
-
-def _rmr_slash_notify(command):
-    reply = eve.RemoteSvc('slash').SlashCmd(command)
-    try:
-        eve.Message('CustomNotify', {'notify': reply})
-    except:
-        sys.exc_clear()
-        _rmr_log(command + ': ' + str(reply))
-
-
-def _rmr_notify_text(text):
-    try:
-        eve.Message('CustomNotify', {'notify': text})
-    except:
-        sys.exc_clear()
-
-
-def _rmr_time_left(seconds):
-    seconds = max(0, int(seconds))
-    if seconds >= 3600:
-        return '%dh %02dm' % (seconds / 3600, seconds % 3600 / 60)
-    if seconds >= 60:
-        return '%dm %02ds' % (seconds / 60, seconds % 60)
-    return '%ds' % seconds
-
-
-def _rmr_structure_timer(itemID):
-    # (label, seconds left) of a structure's running timer, from its slim item.
-    try:
-        park = sm.StartService('michelle').GetBallpark()
-        slim = park and park.slimItems.get(itemID)
-        ends = slim and getattr(slim, 'rmrStepEnds', None)
-        if not ends:
-            return None, None
-        left = (ends - blue.os.GetTime()) / 10000000
-        if left <= 0:
-            return None, None
-        return getattr(slim, 'rmrStepName', None) or 'Timer', left
-    except:
-        sys.exc_clear()
-        return None, None
-
-
-def _rmr_outpost_mats(itemID):
-    reply = eve.RemoteSvc('slash').SlashCmd('/outpostmats %d' % itemID)
-    try:
-        eve.Message('CustomNotify', {'notify': reply})
-    except:
-        sys.exc_clear()
-        _rmr_log('Outpost materials: ' + str(reply))
-
-
-def _rmr_install_outpost_gm_menu():
-    # GM / WM Extras on an outpost construction platform: fill its resource
-    # hold with whatever Show Info's Material Requirements says is missing.
-    while not getattr(eve.session, 'charid', None):
-        blue.pyos.synchro.Sleep(1000)
-    try:
-        cls = sm.StartService('menu').__class__
-        if getattr(cls, '_rmr_outpost_menu_installed', False):
-            return
-        original = getattr(cls, 'GetGMMenu', None)
-        if original is None:
-            _rmr_report('outpost GM menu: the menu service has no GetGMMenu')
-            return
-
-        def get_gm_menu(self, *args, **kwargs):
-            menu = original(self, *args, **kwargs)
-            try:
-                values = list(args) + kwargs.values()
-                itemID, typeID = _rmr_menu_item(values)
-                if itemID is None or not menu:
-                    return menu
-                entries = []
-                step, left = _rmr_structure_timer(itemID)
-                if step:
-                    import time
-                    ends = time.strftime('%H:%M', time.gmtime(time.time() + left))
-                    label = '%s: %s left (%s EVE)' % (step, _rmr_time_left(left), ends)
-                    entries.append((label, _rmr_notify_text, (label,)))
-                    entries.append(('Rush %s' % step.lower(), _rmr_slash_notify, ('/rushanchor %d' % itemID,)))
-                if _rmr_outpost_item(values) is not None:
-                    entries.append(('Spawn outpost materials', _rmr_outpost_mats, (itemID,)))
-                if not entries:
-                    return menu
-                for item in menu:
-                    if (type(item) in (types.TupleType, types.ListType) and len(item) >= 2 and
-                            type(item[1]) is types.ListType and 'GM' in str(item[0]).upper()):
-                        item[1].append(None)
-                        item[1].extend(entries)
-                        return menu
-                menu.extend(entries)
-            except:
-                _rmr_report('outpost GM menu entry failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-                sys.exc_clear()
-            return menu
-
-        cls.GetGMMenu = get_gm_menu
-        cls._rmr_outpost_menu_installed = True
-        _rmr_report('outpost GM menu: installed on %s' % cls)
-    except:
-        _rmr_report('outpost GM menu hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
-        sys.exc_clear()
-
-
-uthread.new(_rmr_install_outpost_gm_menu)
-
-
-'@
+# The game client is set up by Client.bat (beside this file), not by the server.
 
 function Start-LauncherUi {
     # Copy these into the function scope so event-handler closures retain them.
@@ -4184,10 +1748,37 @@ namespace Rmr {
     $layout.Controls.Add($footer, 0, 4)
     $layout.Controls.Add($connectionLabel, 0, 5)
     $tooltip = New-Object System.Windows.Forms.ToolTip
-    $launchClient = $null
-    if (Get-Command Start-RmrGameClient -ErrorAction SilentlyContinue) {
-        $launchClient = ${function:Start-RmrGameClient}
-    }
+    # Each start from this window asks where to host, offering the last answer.
+    $readHostChoice = ${function:Read-RmrHostChoice}
+    $savedHost = 'local'
+    try {
+        $savedSettingsPath = Join-Path $Runtime 'settings.json'
+        if ([IO.File]::Exists($savedSettingsPath)) {
+            $savedJson = [IO.File]::ReadAllText($savedSettingsPath) | ConvertFrom-Json
+            if ($savedJson.PSObject.Properties['hostAddress'] -and $savedJson.hostAddress) { $savedHost = [string]$savedJson.hostAddress }
+        }
+    } catch { }
+    # Once per port: an inbound rule for the game port (asks for administrator).
+    $openFirewall = {
+        try {
+            $gamePort = 26000
+            try { $gamePort = [int]([IO.File]::ReadAllText((Join-Path $Runtime 'settings.json')) | ConvertFrom-Json).gamePort } catch { }
+            if ($gamePort -lt 1) { $gamePort = 26000 }
+            $ruleName = 'Red Moon Rising game server (TCP ' + $gamePort + ')'
+            if (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue) { return }
+            $answer = [System.Windows.Forms.MessageBox]::Show(('Let other computers reach the server through Windows Firewall on port ' + $gamePort + '? Windows will ask for administrator permission.' + [Environment]::NewLine + [Environment]::NewLine + 'Players outside your network also need port ' + $gamePort + ' forwarded to this PC on your router.'), 'Red Moon Rising', 'YesNo', 'Question')
+            if ($answer -ne 'Yes') { return }
+            $command = "New-NetFirewallRule -DisplayName '$ruleName' -Direction Inbound -Protocol TCP -LocalPort $gamePort -Action Allow -Profile Any | Out-Null"
+            Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-Command', $command) -Verb RunAs -Wait -WindowStyle Hidden
+        } catch { }
+    }.GetNewClosure()
+    # Launch EVE runs Client.bat, which asks which server to connect to.
+    $clientLauncher = Join-Path $SourceRoot 'Client.bat'
+    $launchClient = {
+        param([string]$ClientPath, [int]$GamePort = 0)
+        if (-not [IO.File]::Exists($clientLauncher)) { throw 'Client.bat is missing beside Start.bat.' }
+        Start-Process -FilePath $clientLauncher -WorkingDirectory ([IO.Path]::GetDirectoryName($clientLauncher)) | Out-Null
+    }.GetNewClosure()
 
     $state = @{
         Process = $null
@@ -4273,7 +1864,7 @@ namespace Rmr {
     $setReadyState = {
         param([bool]$Ready, [string]$DisabledText = 'Preparing...')
         $state.Ready = $Ready -and -not $state.StopRequested -and -not $state.Exited
-        $clientButton.Enabled = $state.Ready -and [bool]$state.ClientPath
+        $clientButton.Enabled = $state.Ready
         $dashboardButton.Enabled = $state.Ready
         $restartButton.Enabled = $state.Ready
         if ($state.Ready) {
@@ -4446,13 +2037,13 @@ namespace Rmr {
                         $statusEyebrow.Text = 'SETUP COMPLETE'
                         $stageLabel.Text = 'READY TO LAUNCH'
                         $messageLabel.Text = 'All setup is complete. Your server is online.'
-                        if ($state.ClientPath) { $messageLabel.Text += ' Click Launch EVE below to play.' }
+                        $messageLabel.Text += ' Click Launch EVE below to play.'
                         $tooltip.SetToolTip($messageLabel, $messageLabel.Text)
                         $progressCaption.Text = 'READY TO LAUNCH'
                         $progressPercent.Text = 'READY'
                         $progressTrack.Value = 100
                         $setupHint.Text = 'No more downloads or setup steps remain.'
-                        $connectionLabel.Text = 'ONLINE  /  127.0.0.1:' + [string]$status.gamePort
+                        $connectionLabel.Text = 'ONLINE  /  ' + ([string]$status.message -replace '^Players connect to: ([^ ]+).*$', '$1')
                         if ($state.ClientPath) { $connectionLabel.Text += '    |    Client: ' + [IO.Path]::GetFileName($state.ClientPath.TrimEnd('\')) }
                         $form.Text = 'Red Moon Rising | READY TO LAUNCH'
                     }
@@ -4603,7 +2194,7 @@ namespace Rmr {
             if ([IO.File]::Exists($state.StatusPath)) {
                 $online = [IO.File]::ReadAllText($state.StatusPath) | ConvertFrom-Json
                 if ($online.ready -and -not $online.stopped -and -not $online.error -and $online.gamePort) {
-                    $listener = Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort ([int]$online.gamePort) -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+                    $listener = Get-NetTCPConnection -LocalPort ([int]$online.gamePort) -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
                     if ($listener) {
                         $running = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
                         if ($running -and $running.ProcessName -eq 'eve-server') {
@@ -4612,21 +2203,18 @@ namespace Rmr {
                             $state.RunId = [string]$online.runId
                             $state.ServerOnly = -not [bool]$online.clientPath
                             $timer.Start()
-                            if ($online.clientPath -and $env:RMR_NO_AUTO_CLIENT -ne '1') {
-                                $clientPath = [string]$online.clientPath
-                                $clientOpen = @(Get-Process -Name exefile -ErrorAction SilentlyContinue | Where-Object {
-                                    $_.Path -and [string]::Equals($_.Path, (Join-Path $clientPath 'bin\exefile.exe'), [StringComparison]::OrdinalIgnoreCase)
-                                }).Count -gt 0
-                                if (-not $clientOpen) {
-                                    try { & $launchClient -ClientPath $clientPath -GamePort ([int]$online.gamePort) }
-                                    catch { $messageLabel.Text = 'Could not launch EVE: ' + $_.Exception.Message }
-                                }
-                            }
                             return
                         }
                     }
                 }
             }
+            # Ask where to host before each start from this window.
+            $hostAnswer = & $readHostChoice $savedHost
+            if ($null -eq $hostAnswer) { $state.CloseRequested = $true; $form.Close(); return }
+            $env:RMR_HOST = $hostAnswer.Choice
+            $env:RMR_UPNP = if ($hostAnswer.Upnp) { '1' } else { '0' }
+            # Hosting for other computers: Windows Firewall must let them in.
+            if ($hostAnswer.Choice -ne 'local') { & $openFirewall }
             & $startWorker
             $timer.Start()
         } catch {

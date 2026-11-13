@@ -65,6 +65,8 @@ pub async fn lsc(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
                     if let Some(system) = local_system(channel) {
                         let said = message.as_string().unwrap_or_default();
                         crate::bots::talk::player_said(&world, system, ctx.session.char_id.unwrap_or(0), &ctx.session.char_name, &said);
+                    } else if group_channel(channel).is_some() {
+                        crate::bots::talk::player_said_to_group(&world, channel, &ctx.session.char_name);
                     }
                 } else {
                     warn!("SendMessage to a channel the speaker has not joined");
@@ -128,6 +130,11 @@ pub async fn lsc(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
     Some(Outcome::Value(value))
 }
 
+/// The inbox lists only this many of the newest mails: the client builds a
+/// row, an owner lookup and a sender name for every one when the Mail window
+/// opens, and thousands of killmails made opening it crawl.
+const INBOX_LIMIT: i64 = 250;
+
 async fn get_my_messages(ctx: &Ctx<'_>) -> Value {
     const HEADER: &[&str] =
         &["channelID", "messageID", "senderID", "subject", "created", "read"];
@@ -142,9 +149,15 @@ async fn get_my_messages(ctx: &Ctx<'_>) -> Value {
                                           FROM "channelChars" cc
                                           JOIN "channels" c ON c."channelID" = cc."channelID"
                                          WHERE cc."charID" = $2 AND c."mailingList" <> 0)
-                  ORDER BY "created" DESC, "messageID" DESC"#;
-    match ctx.db.query(sql, &[&mailboxes, &(char_id as i32)]).await {
-        Ok(rows) => {
+                  ORDER BY "created" DESC, "messageID" DESC
+                  LIMIT $3"#;
+    let limit = INBOX_LIMIT + 1;
+    match ctx.db.query(sql, &[&mailboxes, &(char_id as i32), &limit]).await {
+        Ok(mut rows) => {
+            if rows.len() as i64 > INBOX_LIMIT {
+                rows.truncate(INBOX_LIMIT as usize);
+                tracing::info!("LSC.GetMyMessages({char_id}): showing the newest {INBOX_LIMIT} mails only");
+            }
             rowset(HEADER, rows.iter().map(|r| Value::List(crate::svc::rows::line(r))).collect())
         }
         Err(e) => {
@@ -632,9 +645,16 @@ async fn get_members(ctx: &Ctx<'_>, arg: Option<&Value>) -> Value {
 /// A fresh Local roster and the caller's currently hostile war opponents.
 async fn get_local_roster(ctx: &Ctx<'_>, arg: Option<&Value>) -> Value {
     let Some(channel) = arg else { return Value::None };
-    let Some(system) = local_system(channel) else { return Value::None };
-    if Some(system) != ctx.session.solar_system_id2 || ctx.session.char_id.is_none() {
+    if ctx.session.char_id.is_none() {
         return Value::None;
+    }
+    // The client keeps its corporation and alliance channels' member lists
+    // fresh through here too (Start.bat's local roster hook).
+    match (group_channel(channel), local_system(channel)) {
+        (Some((GroupChannel::Corporation, id)), _) if Some(id) == ctx.session.corp_id => {}
+        (Some((GroupChannel::Alliance, id)), _) if Some(id) == ctx.session.alliance_id.filter(|a| *a != 0) => {}
+        (None, Some(system)) if Some(system) == ctx.session.solar_system_id2 => {}
+        _ => return Value::None,
     }
     let me = self_member(ctx).await;
     let Some(members) = local_members(ctx, channel, me.as_ref()).await else { return Value::None };

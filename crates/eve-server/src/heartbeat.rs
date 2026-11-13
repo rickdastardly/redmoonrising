@@ -184,6 +184,7 @@ pub async fn run(server: Arc<Server>) {
         if pulses % AFFAIRS_EVERY == 1 {
             crate::svc::alliance::take_effect(&server.world, &mut db, server.alliance_join_delay_secs).await;
             crate::svc::alliance::bill_alliances(&db).await;
+            crate::svc::wallet::bill_offices(&db).await;
             crate::svc::war::bill_wars(&server.world, &db).await;
             let loaded: Vec<i32> = server.world.lock().parks.keys().map(|id| *id as i32).collect();
             if let Err(e) = crate::pos::finish_unloaded(&db, &loaded).await {

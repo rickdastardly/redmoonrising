@@ -620,13 +620,13 @@ async fn change_bots(server: &Server, body: &[u8]) -> EditResult {
         said.push(if on { "Bots trash talk and troll." } else { "Bots keep it polite." }.to_string());
     }
     if let Some(word) = input["joinPlayerCorps"].as_str() {
-        let r = Rate::parse(word).ok_or_else(|| choice("Applications to player corporations", "off, low, normal or high"))?;
+        let r = Rate::parse(word).ok_or_else(|| choice("Applications to player corporations", "off, low, normal, high or extra-high"))?;
         crate::bots::set_recruiting(r);
         save_bots_setting("joinPlayerCorps", r.as_str())?;
         said.push(format!("Bots apply to player corporations: {}.", r.as_str()));
     }
     if let Some(word) = input["joinPlayerAlliances"].as_str() {
-        let r = Rate::parse(word).ok_or_else(|| choice("Applications to player alliances", "off, low, normal or high"))?;
+        let r = Rate::parse(word).ok_or_else(|| choice("Applications to player alliances", "off, low, normal, high or extra-high"))?;
         crate::bots::set_alliance_applying(r);
         save_bots_setting("joinPlayerAlliances", r.as_str())?;
         said.push(format!("Bot corporations apply to player alliances: {}.", r.as_str()));

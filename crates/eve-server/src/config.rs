@@ -238,9 +238,9 @@ impl Config {
             chatter: crate::bots::Chatter::parse(&file.bots.chat).ok_or_else(|| bad("chat", "off, quiet, normal or chatty", &file.bots.chat))?,
             trash_talk: file.bots.trash_talk,
             recruiting: crate::bots::Rate::parse(&file.bots.join_player_corps)
-                .ok_or_else(|| bad("joinPlayerCorps", "off, low, normal or high", &file.bots.join_player_corps))?,
+                .ok_or_else(|| bad("joinPlayerCorps", "off, low, normal, high or extra-high", &file.bots.join_player_corps))?,
             alliance_applying: crate::bots::Rate::parse(&file.bots.join_player_alliances)
-                .ok_or_else(|| bad("joinPlayerAlliances", "off, low, normal or high", &file.bots.join_player_alliances))?,
+                .ok_or_else(|| bad("joinPlayerAlliances", "off, low, normal, high or extra-high", &file.bots.join_player_alliances))?,
             door: crate::bots::Door::parse(&file.bots.accept_applications)
                 .ok_or_else(|| bad("acceptApplications", "closed, selective or open", &file.bots.accept_applications))?,
             activity: file.bots.online_activity.clamp(crate::bots::ACTIVITY_RANGE.0, crate::bots::ACTIVITY_RANGE.1),

@@ -2,6 +2,99 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Launcher and dashboard fixes
+
+*2026-11-13 01:32 UTC*
+
+- **Launcher:** EVE is given exactly the server address you pick, and the online/offline lights check that address as entered.
+- **Dashboard.bat** keeps nothing between runs. Every start asks for a new sign-in, which is held only in memory, and closing the window forgets it.
+
+## New EVE-style launcher
+
+*2026-11-13 01:13 UTC*
+
+**Client.bat** is now a launcher laid out like today's EVE launcher:
+
+- **Servers** on the left: *This PC* plus any you add, each with a live online/offline light. Add, Edit and Remove are under the list.
+- **News** from the chosen server in the middle. Double-click a story to read it.
+- A big **PLAY** button that points your EVE client at the chosen server and starts it.
+- An **EVE client** panel to change the client folder or *Repair client* (re-apply the patches), and an option to close the launcher when EVE starts.
+
+## Start.bat, Client.bat and Dashboard.bat
+
+*2026-11-13 01:02 UTC*
+
+The launcher is now three files, each with one job.
+
+- **Start.bat** runs the server. It no longer touches the game client, and its **Launch EVE** button opens Client.bat.
+- **Client.bat** sets up and starts the game: it finds and backs up your EVE 2.10 client, points it at the server, and starts it.
+- **Dashboard.bat** puts this dashboard behind a sign-in. Five wrong passwords lock an address out for 15 minutes.
+
+*Run Start.bat once first so it builds the dashboard program.*
+
+## Agents tab and channel member fixes
+
+*2026-11-13 00:49 UTC*
+
+- **People & Places, Agents tab:** a broken agent group saved by an earlier version stopped the tab loading partway, so the **Level N agents available to you** groups never appeared. That group is now removed while the tab loads, and the level groups always get added.
+- **Corp and alliance chat members:** the member-list refresh was reading the wrong object for those channels and failing. It now uses the same lookup as Local.
+
+*Restart the game from Start.bat to pick this up.*
+
+## People & Places agents no longer freeze
+
+*2026-11-13 00:45 UTC*
+
+The real cause of the People & Places freeze: the Agents tab was building one stock **All agents** group holding every agent you can use, all **10,006** of them. An old saved group also made the tab error out halfway through loading.
+
+- The stock list now holds only your real contacts and the agents you have missions with.
+- Every other agent is in the **Level N agents available to you** groups. These open one level, faction and corporation at a time, so only a small batch of names loads at once, much like the Character Sheet's agent standings.
+- The broken saved group is cleared automatically.
+
+*Restart the game from Start.bat to pick this up.*
+
+## High-sec, chat stars, corp chatter and bills
+
+*2026-11-13 00:43 UTC*
+
+### High-sec is safe unless you're at war
+
+In 0.5 and above, bots now only start fights with their **war targets**. Grudges, raids, fight calls and belt quarrels all stay out of high-sec. Beyond that, a bot only fights back against someone who shot it first, and CONCORD deals with them.
+
+### Chat
+
+- Corporation mates show a **green star** and alliance mates a **blue star** in Local, corp and alliance chat, like the red star for war targets.
+- Corp and alliance chat now fill in their member lists (alliance chat was showing none) and keep them up to date.
+- Bots in your corporation and alliance now chat to each other: friendly, polite talk about ops, hauling, missions and warnings, and now and then they answer you.
+
+### Wallet
+
+- If your corporation is its alliance's executor, the corp wallet's **Bills** now lists the alliance's maintenance and war bills, and you can pay them from there.
+- Corporation offices now get a **Rental Bill** five days before their rent runs out. Paying it keeps the office another period.
+
+### Dashboard
+
+- The overview now uses wide screens: server status sits beside server health, wars beside pilots online, and news runs along the bottom.
+- Bot settings: an **Extra high** option for bots applying to your corporations and alliances, which means many more applicants waiting at once.
+
+*Restart the game from Start.bat for the chat icons and member lists. Press Ctrl+F5 on the dashboard to load the new layout.*
+
+## Faster agent lists and mail
+
+*2026-11-13 00:30 UTC*
+
+Two sources of client lag are gone.
+
+### People & Places agent lists
+
+The **Level N agents available to you** groups now list each agent as a plain row: name and home station. Before, every row was a contact card, and the client drew the agent's face in 3D on the spot. Most of those faces failed to draw, so they were never cached and were redrawn every time you scrolled. Right-click still gives the agent's normal menu, and double-click starts a conversation.
+
+### Mail
+
+The inbox now loads your **newest 250 mails** instead of every mail you have ever received; killmails had piled into the thousands. Older mails show up again as you delete newer ones.
+
+*Restart the game from Start.bat to pick up the client change. The mail limit is already live.*
+
 ## 2,500 m to loot, jump and take acceleration gates
 
 *2026-11-12 23:54 UTC*

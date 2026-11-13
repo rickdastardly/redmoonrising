@@ -168,6 +168,8 @@ pub enum Rate {
     Low = 1,
     Normal = 2,
     High = 3,
+    /// Many times high: for a server that wants its inbox full.
+    ExtraHigh = 4,
 }
 
 impl Rate {
@@ -177,16 +179,17 @@ impl Rate {
             "low" | "rare" => Some(Rate::Low),
             "normal" | "default" => Some(Rate::Normal),
             "high" | "often" => Some(Rate::High),
+            "extra-high" | "extra high" | "extrahigh" | "extra_high" | "very high" => Some(Rate::ExtraHigh),
             _ => None,
         }
     }
 
     pub fn as_str(self) -> &'static str {
-        ["off", "low", "normal", "high"][self as usize]
+        ["off", "low", "normal", "high", "extra-high"][self as usize]
     }
 
     pub fn factor(self) -> f64 {
-        [0.0, 0.35, 1.0, 3.0][self as usize]
+        [0.0, 0.35, 1.0, 3.0, 12.0][self as usize]
     }
 }
 
@@ -264,6 +267,7 @@ fn rate_of(v: u8) -> Rate {
         0 => Rate::Off,
         1 => Rate::Low,
         3 => Rate::High,
+        4 => Rate::ExtraHigh,
         _ => Rate::Normal,
     }
 }

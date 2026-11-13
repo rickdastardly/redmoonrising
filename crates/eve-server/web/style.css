@@ -257,9 +257,18 @@ a { color: var(--link); }
 .metrics article span { color: var(--dim); font-family: var(--display); font-size: 10px; letter-spacing: 0.24em; text-transform: uppercase; }
 .metrics article strong { font-family: var(--display); font-size: clamp(22px, 2.6vw, 32px); font-weight: 400; color: var(--bright); font-variant-numeric: tabular-nums; line-height: 1.2; }
 .metrics article small { color: var(--faint); font-size: 11px; }
+/* The overview fills wide screens: status beside health, wars beside the
+   pilots online, news across the bottom; windows in a row share a height. */
+body[data-page="home"] .desktop { max-width: calc(var(--sidebar-width) + 2400px); }
 @media (min-width: 1080px) {
-  body[data-page="home"] .desktop { grid-template-columns: minmax(0, 4fr) minmax(0, 6fr); }
+  body[data-page="home"] .desktop { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); align-items: stretch; }
+  body[data-page="home"] #w-health,
   body[data-page="home"] #w-wars { grid-column: auto; }
+  body[data-page="home"] #w-wars { grid-column: 1; }
+  body[data-page="home"] #w-pilots { grid-column: 2; }
+  body[data-page="home"] #w-news { grid-column: 1 / -1; }
+  body[data-page="home"] .page-heading,
+  body[data-page="home"] .metrics { align-self: start; }
 }
 
 /* ---- status window --------------------------------------------------------- */
@@ -656,7 +665,7 @@ button:disabled { color: var(--faint); border-color: var(--edge); background: tr
 
 /* ---- server health ----------------------------------------------------------- */
 
-.health-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.health-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
 .health-tile { padding: 10px 12px; background: var(--panel-raised); border: 1px solid var(--edge); }
 .health-tile small { display: block; color: var(--accent); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; }
 .health-tile strong { display: block; margin-top: 4px; color: var(--bright); font-family: var(--display); font-weight: 500; font-size: 22px; }

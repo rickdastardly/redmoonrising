@@ -49,6 +49,7 @@ fn limits(rate: Rate) -> (usize, usize, usize) {
         Rate::Low => (120, 30, 25),
         Rate::Normal => (400, 100, 60),
         Rate::High => (1_000, 250, 150),
+        Rate::ExtraHigh => (2_000, 500, 300),
     }
 }
 

@@ -816,7 +816,8 @@ pub async fn apply_to_alliances(db: &Client, world: &crate::world::World, p: &Po
         let (alliance, pending) = (int(&row, 0).unwrap_or(0), int(&row, 1).unwrap_or(0));
         // The more space an alliance holds, the more corporations want in.
         let pull = 1.0 + p.held.get(&(alliance as i32)).copied().unwrap_or(0) as f64 / 4.0;
-        if pending >= PENDING || rng.unit() >= (CHANCE * factor * pull).min(0.5) {
+        let pending_max = if super::alliance_applying() == super::Rate::ExtraHigh { 12 } else { PENDING };
+        if pending >= pending_max || rng.unit() >= (CHANCE * factor * pull).min(0.6) {
             continue;
         }
         let corp = free[rng.below(free.len())];
@@ -948,7 +949,9 @@ pub async fn recruit(
                     AND NOT EXISTS (SELECT 1 FROM "botGroups" g WHERE g."ownerID" = co."corporationID")"#;
     for row in db.query(sql, &[]).await? {
         let (corp, region, pending) = (int(&row, 0).unwrap_or(0) as i32, int(&row, 1).unwrap_or(0) as i32, int(&row, 2).unwrap_or(0));
-        if pending >= PENDING_MAX || rng.unit() >= APPLY_CHANCE * super::recruiting().factor() {
+        // Extra high: a crowd of applicants waiting at once, not three.
+        let pending_max = if super::recruiting() == super::Rate::ExtraHigh { 25 } else { PENDING_MAX };
+        if pending >= pending_max || rng.unit() >= (APPLY_CHANCE * super::recruiting().factor()).min(0.6) {
             continue;
         }
         // A bot of an NPC corporation, living in the region if one does.
