@@ -2,6 +2,17 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Your game no longer drowns in a big battle
+
+*2026-11-13 21:19 UTC*
+
+A game that can't keep up in a big battle now gets fewer ships on its own, instead of falling behind until it crashes.
+
+- **The server backs off by itself.** If your game asks for the whole grid again within 30 seconds of the last time, it is sent 40% fewer ships, down to 60, until it stops falling behind. While it keeps up, it gets a quarter more every 45 seconds, back up to the setting.
+- **"Ships your client is sent" on the Bots page is now the most your game is sent**, not a fixed number. 250 suits most PCs.
+
+Before this, a game set to 500 asked for the whole grid 13 times in a minute, every time getting all 500 ships rebuilt, until it ran out and closed.
+
 ## Big battles without the teleporting
 
 *2026-11-13 21:07 UTC*

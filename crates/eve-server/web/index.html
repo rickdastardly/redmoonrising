@@ -448,7 +448,7 @@
               <input id="bots-client" type="number" min="50" max="20000" step="10" required>
               <button type="submit">Apply</button>
             </form>
-            <p class="note">The most ships one player's game is sent at once, up to 20,000. Battles are never limited by this: every ship fights. Your game is sent the ships that matter most to it first: anything that has you targeted or that you have targeted, your drones, other players, then capitals, then the nearest. Past this many your game stalls for seconds at a time, falls behind and asks the server for the whole grid again, which is the ship snapping about and the overview rebuilding. 250 suits most PCs; raise it a little at a time if your game keeps up.</p>
+            <p class="note">The most ships one player's game is sent at once, up to 20,000. Battles are never limited by this: every ship fights. Your game is sent the ships that matter most to it first: anything that has you targeted or that you have targeted, your drones, other players, then capitals, then the nearest. This is the most a game is sent: if a game keeps falling behind (asking the server for the whole grid again, which is the ship snapping about and the overview rebuilding), the server sends that game fewer ships on its own, down to 60, and more again while it keeps up. 250 suits most PCs.</p>
           </fieldset>
         </div>
         <p id="bots-reply" class="note" role="status"></p>

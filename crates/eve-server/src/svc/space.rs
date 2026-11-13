@@ -77,6 +77,7 @@ pub async fn beyonce(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         }
         // michelle.RequestReset: the client lost sync and wants the world again.
         "UpdateStateRequest" => {
+            client_resynced(ctx.client_id);
             push_set_state(ctx).await;
             Value::None
         }
@@ -513,6 +514,55 @@ pub fn client_ships() -> usize {
     CLIENT_SHIPS.load(Ordering::Relaxed)
 }
 
+/// Each client's own share of the setting, cut when it keeps losing sync
+/// and grown back while it keeps up: (ships, when it last asked for the
+/// whole grid again, when the share last changed).
+static CLIENT_SHARE: std::sync::Mutex<BTreeMap<i64, (usize, std::time::Instant, std::time::Instant)>> = std::sync::Mutex::new(BTreeMap::new());
+/// A client asking for the grid again this soon after the last time is
+/// falling behind: it gets this share of the ships it had ...
+const RESYNC_SOON: std::time::Duration = std::time::Duration::from_secs(30);
+const RESYNC_CUT: f64 = 0.6;
+/// ... and never fewer than this.
+const CLIENT_SHIPS_FLOOR: usize = 60;
+/// Keeping up this long, it gets a quarter more again, up to the setting.
+const CLIENT_GROW_EVERY: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// The most ships `client` is sent now: the setting, or less while its game
+/// has been falling behind.
+fn ships_for(client: i64) -> usize {
+    let most = client_ships();
+    let Ok(mut shares) = CLIENT_SHARE.lock() else { return most };
+    let Some((share, last_resync, changed)) = shares.get_mut(&client) else { return most };
+    let now = std::time::Instant::now();
+    while *share < most && now.duration_since(*last_resync) >= CLIENT_GROW_EVERY && now.duration_since(*changed) >= CLIENT_GROW_EVERY {
+        *share = (*share + (most / 4).max(10)).min(most);
+        *changed += CLIENT_GROW_EVERY;
+        tracing::info!("client {client} keeps up: sent up to {share} ships");
+    }
+    (*share).min(most)
+}
+
+/// `client` asked for the whole grid again (UpdateStateRequest). Asked again
+/// soon after the last time, its game cannot keep up with what it is sent:
+/// it is sent fewer ships, so it stops stalling, losing sync and asking
+/// again, each time with the grid's every ship rebuilt.
+pub fn client_resynced(client: i64) {
+    let most = client_ships();
+    let Ok(mut shares) = CLIENT_SHARE.lock() else { return };
+    let now = std::time::Instant::now();
+    let entry = shares.entry(client).or_insert((most, now - RESYNC_SOON * 2, now));
+    let soon = now.duration_since(entry.1) < RESYNC_SOON;
+    entry.1 = now;
+    if soon {
+        let before = entry.0.min(most);
+        entry.0 = ((before as f64 * RESYNC_CUT) as usize).max(CLIENT_SHIPS_FLOOR).min(most);
+        entry.2 = now;
+        if entry.0 < before {
+            tracing::info!("client {client} keeps losing sync (asked for the grid again within {}s): sent up to {} ships for now, from {before}", RESYNC_SOON.as_secs(), entry.0);
+        }
+    }
+}
+
 pub fn set_client_ships(n: usize) {
     CLIENT_SHIPS.store(n.clamp(CLIENT_SHIPS_RANGE.0, CLIENT_SHIPS_RANGE.1), Ordering::Relaxed);
 }
@@ -540,7 +590,7 @@ fn drawn_ship_ids(park: &Park, ego: i64, kept: Option<&BTreeSet<i64>>) -> BTreeS
         .values()
         .filter(|ship| !crate::drones::in_transit(ship) && (ship.id == ego || within_overview_range(park, ego, ship.id)))
         .collect();
-    let budget = client_ships();
+    let budget = park.ships.get(&ego).map_or_else(client_ships, |me| ships_for(me.client_id));
     let Some(me) = park.ships.get(&ego).filter(|_| in_range.len() > budget) else {
         return in_range.iter().map(|s| s.id).collect();
     };
@@ -710,7 +760,7 @@ pub fn add_ball_entries_for_nearby(park: &mut Park, ship_id: i64) -> Vec<(i64, V
     for (client, ego) in viewers {
         // A client with its fill of ships gets this one, if at all, when the
         // next second's visibility pass makes room for it.
-        let full = !is_player_ship && park.visible_ships.get(&client).is_some_and(|seen| seen.len() >= client_ships());
+        let full = !is_player_ship && park.visible_ships.get(&client).is_some_and(|seen| seen.len() >= ships_for(client));
         if (is_player_ship && client == owner)
             || full
             || !within_overview_range(park, ego, ship_id)
@@ -848,7 +898,7 @@ pub fn add_ship(world: &mut WorldState, system: i64, ship: Ship) {
         .filter(|client| *client != owner && park.visible_ships.contains_key(client))
         // A client with its fill of ships gets this one when the next
         // visibility pass makes room.
-        .filter(|client| park.visible_ships.get(client).is_some_and(|seen| seen.len() < client_ships()))
+        .filter(|client| park.visible_ships.get(client).is_some_and(|seen| seen.len() < ships_for(*client)))
         .filter(|client| {
             park.ships
                 .values()
