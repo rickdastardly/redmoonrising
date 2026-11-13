@@ -2,6 +2,13 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Item and skill attributes show their real values
+
+*2026-11-13 15:02 UTC*
+
+- **Negative numbers in Show Info are right again.** The item data the game reads had small negative values stored as if they could not go below zero, so Gunnery's *-2%* turret speed bonus showed as *254%*, and a few large ones (such as -20,000) showed as 18-digit numbers. All 680 affected values, on skills, modules, ships and charges, now show and work as intended.
+- **Skills work the way the game shows them.** Where the server's copy of a skill differed from what Show Info says (training rank, prerequisites, bonuses), the server now uses what you see. Training times match the skill's listed rank, and no skill asks for a prerequisite its info sheet does not list.
+
 ## Skill training, skill prerequisites, fitting requirements and clones
 
 *2026-11-13 14:53 UTC*

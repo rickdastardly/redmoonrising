@@ -340,5 +340,11 @@
     "publishedMs": 1794581615744,
     "title": "Skill training, skill prerequisites, fitting requirements and clones",
     "body": "<h3>Skill training</h3>\n<ul>\n<li><b>Skills train.</b> Starting a skill now begins real training: it finishes at the time shown, whether you are logged in or not, and the skill goes up a level. Starting a different skill, or stopping, keeps the skill points earned so far.</li>\n<li>A skill whose prerequisites you do not have cannot be started; the message says which skills and levels you need.</li>\n<li>Training speed comes from your attributes: the skill's primary attribute plus half its secondary, with implants and learning skills counted.</li>\n</ul>\n<h3>Prerequisites</h3>\n<ul>\n<li><b>New pilots get the skills their starting skills need</b>, such as Gunnery for a turret skill.</li>\n<li>Pilots made before this get any prerequisite skills they are missing the next time the server starts.</li>\n</ul>\n<h3>Fitting</h3>\n<ul>\n<li><b>Modules need their skills.</b> A module cannot be fitted unless you have its required skills; the message names the ones you are missing.</li>\n</ul>\n<h3>Clones</h3>\n<ul>\n<li><b>A clone bought as an item is used up</b> when it becomes your clone, instead of staying in your hangar. Only the clone you have installed counts for the skill points you keep.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-13 15:02 UTC",
+    "publishedMs": 1794582123380,
+    "title": "Item and skill attributes show their real values",
+    "body": "<ul>\n<li><b>Negative numbers in Show Info are right again.</b> The item data the game reads had small negative values stored as if they could not go below zero, so Gunnery's <i>-2%</i> turret speed bonus showed as <i>254%</i>, and a few large ones (such as -20,000) showed as 18-digit numbers. All 680 affected values, on skills, modules, ships and charges, now show and work as intended.</li>\n<li><b>Skills work the way the game shows them.</b> Where the server's copy of a skill differed from what Show Info says (training rank, prerequisites, bonuses), the server now uses what you see. Training times match the skill's listed rank, and no skill asks for a prerequisite its info sheet does not list.</li>\n</ul>"
   }
 ]
