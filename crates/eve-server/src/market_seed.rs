@@ -12,6 +12,11 @@ const ISOTOPE_TYPES: &[i32] = &[16258, 16259, 16260, 16261, 16274, 17887, 17888,
 const CATEGORIES: &[i32] = &[4, 5, 6, 7, 8, 9, 16, 17, 18, 20, 22, 23, 24, 25];
 
 pub async fn ensure(db: &mut Client) -> Result<(), Error> {
+    // A freshly imported universe has no planner statistics yet, and without
+    // them the regional seeding below can run for many minutes. ANALYZE takes
+    // seconds and makes it quick.
+    info!("market: checking NPC sell orders in every region (a first start takes longer)");
+    db.batch_execute(r#"ANALYZE market_orders; ANALYZE "invTypes"; ANALYZE "invGroups"; ANALYZE "invMetaTypes"; ANALYZE "staStations""#).await?;
     let tx = db.transaction().await?;
 
     // The old catalog marks many real Tech II ships, drones and modules as

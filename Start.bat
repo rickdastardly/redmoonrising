@@ -1232,7 +1232,13 @@ function Start-RmrWorker {
             # Each dump and its checkpoint commit together, so interrupted setup resumes safely.
             Invoke-Native $psql ($dbArgs + @('-q','-o','NUL','--single-transaction','-f',$sqlPath)) -Timeout 900
         }
-        if (-not $completed.ContainsKey('__rmr_complete__')) { Invoke-Native $psql ($dbArgs + @('-q','-c',"INSERT INTO public.rmr_launcher_imports(name) VALUES ('__rmr_complete__')")) }
+        if (-not $completed.ContainsKey('__rmr_complete__')) {
+            # Planner statistics for the freshly imported tables, so the
+            # server's first-start queries run in seconds, not minutes.
+            Set-Status 'Database' 'Optimizing the imported universe' 86
+            Invoke-Native $psql ($dbArgs + @('-q','-c','ANALYZE')) -Timeout 1800
+            Invoke-Native $psql ($dbArgs + @('-q','-c',"INSERT INTO public.rmr_launcher_imports(name) VALUES ('__rmr_complete__')"))
+        }
         $sqlPath = Join-Path $Runtime 'import.sql'
         if (Test-Path -LiteralPath $sqlPath) { Remove-Item -LiteralPath $sqlPath }
 
@@ -1268,11 +1274,19 @@ function Start-RmrWorker {
             $restartServer = $false
             if ([IO.File]::Exists($env:RMR_SHUTDOWN_FILE)) { Remove-Item -LiteralPath $env:RMR_SHUTDOWN_FILE -Force }
             $server = New-NativeProcess (Join-Path $binaryDir 'eve-server.exe') @()
-            $watch = [Diagnostics.Stopwatch]::StartNew()
+            # A first start prepares a new universe (market seeding and the
+            # rest), which can take many minutes on a slower PC. Wait as long
+            # as the server keeps working; only a long stretch with nothing new
+            # in its log counts as stuck.
+            $quiet = [Diagnostics.Stopwatch]::StartNew()
+            $lastLogSize = -1L
             while (-not (Test-RmrOwnedPort $gamePort $server.Process.Id) -or -not (Test-RmrOwnedPort $webPort $server.Process.Id)) {
                 Assert-Running; Read-NativeOutput $server
-                if ($server.Process.HasExited) { Read-NativeOutput $server; throw "Server exited with code $($server.Process.ExitCode). See logs/launcher.log." }
-                if ($watch.Elapsed.TotalSeconds -gt 180) { throw 'Server startup timed out. See logs/server.log.' }
+                if ($server.Process.HasExited) { Read-NativeOutput $server; throw "Server exited with code $($server.Process.ExitCode). See logs/server.log." }
+                $logSize = -1L
+                try { $logSize = (New-Object IO.FileInfo($env:RMR_LOG_FILE)).Length } catch { }
+                if ($logSize -ne $lastLogSize) { $lastLogSize = $logSize; $quiet.Restart() }
+                if ($quiet.Elapsed.TotalMinutes -gt 30) { throw 'The server stopped making progress while starting (nothing new in its log for 30 minutes). See logs/server.log.' }
                 Start-Sleep -Milliseconds 200
             }
             Assert-Running
