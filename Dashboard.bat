@@ -4,11 +4,11 @@ rem Red Moon Rising dashboard, behind a sign-in, for your local network: point a
 rem browser on another device at this PC's network address and only you can get
 rem in. When the game server is down it offers to start it. It is for your own
 rem PC and local network only.
-rem Nothing is kept between runs: each start asks for the sign-in and address
-rem afresh, and closing the window forgets them.
+rem It keeps NOTHING: every start asks for a new sign-in, address and port, the
+rem sign-in lives only in the running program's memory, and closing it removes
+rem everything it set up (its temporary program copy, the firewall opening).
 rem The game server's own dashboard stays on 127.0.0.1; this sits in front of it.
 set "RMR_ROOT=%~dp0"
-set "RMR_SETUP="
 if /i "%~1"=="--help" goto help
 if /i "%~1"=="-h" goto help
 if /i "%~1"=="--allow-public" set "RMR_ALLOW_PUBLIC=1"
@@ -26,27 +26,11 @@ exit /b %errorlevel%
 echo Red Moon Rising dashboard
 echo Usage: Dashboard.bat
 echo Every start asks for a sign-in name and password and the address and port to
-echo serve on (default: every network address of this PC, port 18080, sharing the
-echo port with the game server's own dashboard on 127.0.0.1). Nothing is kept:
-echo closing the window forgets the sign-in. Run Start.bat once first: it builds this too.
+echo serve on (default: every local-network address of this PC, port 18080). Nothing
+echo is saved: stop it with Ctrl+C and everything it set up is removed again.
+echo Run Start.bat once first: it builds the dashboard program too.
 exit /b 0
 #==RMR_POWERSHELL==
-
-$ErrorActionPreference = 'Stop'
-$Root = $env:RMR_ROOT.TrimEnd('\')
-$Utf8 = New-Object Text.UTF8Encoding($false)
-$built = Join-Path $Root 'target\x86_64-pc-windows-gnu\release\dashboard.exe'
-if (-not (Test-Path -LiteralPath $built)) {
-    throw 'The dashboard has not been built yet. Run Start.bat once: it builds the dashboard along with the server.'
-}
-# Run a copy, so Start.bat can rebuild while the dashboard stays up.
-$runDir = Join-Path $Root '.rmr\dashboard'
-[IO.Directory]::CreateDirectory($runDir) | Out-Null
-$exe = Join-Path $runDir 'rmr-dashboard.exe'
-if (-not (Test-Path -LiteralPath $exe) -or (Get-FileHash -LiteralPath $exe).Hash -ne (Get-FileHash -LiteralPath $built).Hash) {
-    try { Copy-Item -LiteralPath $built -Destination $exe -Force }
-    catch { throw 'Could not update the dashboard program; is another Dashboard.bat still running? Close it and try again.' }
-}
 
 # Red Moon Rising is for your own PC and your local network: localhost, or a
 # private IPv4 address (10.x, 172.16-31.x, 192.168.x; 100.64-127.x for a
@@ -120,79 +104,85 @@ function Remove-RmrUpnpForward([int]$Port) {
     } catch { }
 }
 
-# ---- sign-in ----
-$loginPath = Join-Path $Root '.rmr\dashboard-login.json'
-$hostPath = Join-Path $Root '.rmr\dashboard-host.json'
-# A fresh start every time: whatever an earlier run left is gone.
-foreach ($old in @($loginPath, $hostPath)) { if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force } }
-if ($true) {
-    Write-Host ''
-    Write-Host 'Choose this session''s sign-in. Only this name and password will get in, until you close this window.' -ForegroundColor Cyan
-    $user = ''
-    while (-not $user) { $user = (Read-Host 'Name').Trim() }
-    while ($true) {
-        $first = Read-Host 'Password (at least 8 characters)' -AsSecureString
-        $again = Read-Host 'Password again' -AsSecureString
-        $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($first))
-        $check = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($again))
-        if ($plain -ne $check) { Write-Host 'Those did not match. Try again.' -ForegroundColor Yellow; continue }
-        if ($plain.Length -lt 8) { Write-Host 'Use at least 8 characters.' -ForegroundColor Yellow; continue }
-        break
-    }
-    $start = New-Object Diagnostics.ProcessStartInfo
-    $start.FileName = $exe
-    $start.Arguments = '--root "' + $Root + '" --set-login'
-    $start.UseShellExecute = $false
-    $start.RedirectStandardInput = $true
-    $process = [Diagnostics.Process]::Start($start)
-    $process.StandardInput.WriteLine($user)
-    $process.StandardInput.WriteLine($plain)
-    $process.StandardInput.Close()
-    $process.WaitForExit()
-    $plain = $null; $check = $null
-    if ($process.ExitCode -ne 0) { throw 'The sign-in could not be saved.' }
+$ErrorActionPreference = 'Stop'
+$Root = $env:RMR_ROOT.TrimEnd('\')
+$built = Join-Path $Root 'target\x86_64-pc-windows-gnu\release\dashboard.exe'
+# The program runs from a temporary copy (so Start.bat can rebuild meanwhile),
+# deleted again when the dashboard stops.
+$exe = Join-Path ([IO.Path]::GetTempPath()) 'rmr-dashboard-session.exe'
+$ruleName = 'Red Moon Rising dashboard (this session)'
+
+function Invoke-RmrElevated([string]$Command) {
+    Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-Command', $Command) -Verb RunAs -Wait -WindowStyle Hidden
 }
+
+# ---- leftovers from a run that was closed with the window's X ----
+foreach ($old in @((Join-Path $Root '.rmr\dashboard-login.json'), (Join-Path $Root '.rmr\dashboard-host.json'), $exe)) {
+    if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue }
+}
+$oldDir = Join-Path $Root '.rmr\dashboard'
+if (Test-Path -LiteralPath $oldDir) { Remove-Item -LiteralPath $oldDir -Recurse -Force -ErrorAction SilentlyContinue }
+$staleRule = @(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'Red Moon Rising dashboard*' })
+if ($staleRule.Count -gt 0) {
+    Write-Host 'Removing the firewall opening an earlier dashboard left behind (asks for administrator)...' -ForegroundColor Yellow
+    try { Invoke-RmrElevated "Get-NetFirewallRule | Where-Object { `$_.DisplayName -like 'Red Moon Rising dashboard*' } | Remove-NetFirewallRule" } catch { }
+}
+
+if (-not (Test-Path -LiteralPath $built)) {
+    throw 'The dashboard has not been built yet. Run Start.bat once: it builds the dashboard along with the server.'
+}
+$source = Join-Path $Root 'crates\eve-server\src\bin\dashboard.rs'
+if ((Test-Path -LiteralPath $source) -and (Get-Item -LiteralPath $source).LastWriteTimeUtc -gt (Get-Item -LiteralPath $built).LastWriteTimeUtc) {
+    throw 'The dashboard program is out of date. Restart Start.bat once so it rebuilds it, then run Dashboard.bat again.'
+}
+
+# ---- this session's sign-in (memory only) ----
+Write-Host ''
+Write-Host 'Choose this session''s sign-in. Nothing is saved: the next start asks again.' -ForegroundColor Cyan
+$user = ''
+while (-not $user) { $user = (Read-Host 'Name').Trim() }
+while ($true) {
+    $first = Read-Host 'Password (at least 8 characters)' -AsSecureString
+    $again = Read-Host 'Password again' -AsSecureString
+    $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($first))
+    $check = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($again))
+    if ($plain -ne $check) { Write-Host 'Those did not match. Try again.' -ForegroundColor Yellow; continue }
+    if ($plain.Length -lt 8) { Write-Host 'Use at least 8 characters.' -ForegroundColor Yellow; continue }
+    break
+}
+$check = $null
 
 # ---- where to serve ----
 $serve = [pscustomobject]@{ address = 'this-pc'; port = 18080 }
-if ($true) {
-    Write-Host ''
-    Write-Host 'Which address should the dashboard listen on?' -ForegroundColor Cyan
-    Write-Host '  this-pc   every local-network address of this PC'
-    Write-Host '  or one local-network IPv4 address of this PC, such as 192.168.1.20'
-    Write-Host 'The dashboard is for your own local network only.'
-    Write-Host '127.0.0.1 is left to the game server''s own dashboard, so both can use port 18080.'
-    $typed = (Read-Host ("Address [Enter for " + $serve.address + "]")).Trim()
-    if ($typed -in @('0.0.0.0', 'all', '*')) { $typed = 'this-pc' }
-    if ($typed -and $typed -ne 'this-pc') {
-        if ($typed -notmatch '^\d{1,3}(\.\d{1,3}){3}$') { throw "Not an IPv4 address: $typed" }
-        if (-not (Test-RmrPrivateIPv4 $typed) -and $env:RMR_ALLOW_PUBLIC -ne '1') { throw "Use this-pc, or this PC's IPv4 address on your local network (such as 192.168.1.20). The dashboard is for your own local network only." }
-        if ($typed -like '127.*') { Write-Host '127.0.0.1 belongs to the game server''s own dashboard; using every network address of this PC instead.' -ForegroundColor Yellow; $typed = 'this-pc' }
-    }
-    if ($typed) { $serve.address = $typed }
-    $typed = (Read-Host ("Port [Enter for " + $serve.port + "]")).Trim()
-    if ($typed) {
-        if ($typed -notmatch '^\d{1,5}$' -or [int]$typed -lt 1 -or [int]$typed -gt 65535) { throw "Not a port: $typed" }
-        $serve.port = [int]$typed
-    }
+Write-Host ''
+Write-Host 'Which address should the dashboard listen on?' -ForegroundColor Cyan
+Write-Host '  this-pc   every local-network address of this PC'
+Write-Host '  or one local-network IPv4 address of this PC, such as 192.168.1.20'
+Write-Host 'The dashboard is for your own local network only.'
+Write-Host '127.0.0.1 is left to the game server''s own dashboard, so both can use port 18080.'
+$typed = (Read-Host ("Address [Enter for " + $serve.address + "]")).Trim()
+if ($typed -in @('0.0.0.0', 'all', '*')) { $typed = 'this-pc' }
+if ($typed -and $typed -ne 'this-pc') {
+    if ($typed -notmatch '^\d{1,3}(\.\d{1,3}){3}$') { throw "Not an IPv4 address: $typed" }
+    if (-not (Test-RmrPrivateIPv4 $typed) -and $env:RMR_ALLOW_PUBLIC -ne '1') { throw "Use this-pc, or this PC's IPv4 address on your local network (such as 192.168.1.20). The dashboard is for your own local network only." }
+    if ($typed -like '127.*') { Write-Host '127.0.0.1 belongs to the game server''s own dashboard; using every network address of this PC instead.' -ForegroundColor Yellow; $typed = 'this-pc' }
+}
+if ($typed) { $serve.address = $typed }
+$typed = (Read-Host ("Port [Enter for " + $serve.port + "]")).Trim()
+if ($typed) {
+    if ($typed -notmatch '^\d{1,5}$' -or [int]$typed -lt 1 -or [int]$typed -gt 65535) { throw "Not a port: $typed" }
+    $serve.port = [int]$typed
 }
 
-# 127.0.0.1 is the game server's own dashboard (no sign-in): never take it.
-if ([string]$serve.address -like '127.*') {
-    Write-Host 'The saved address was 127.0.0.1, which the game server''s own dashboard uses. Using every network address of this PC instead.' -ForegroundColor Yellow
-    $serve.address = 'this-pc'
-}
-
-# Each of this PC's own network addresses (not 127.0.0.1, which the game
-# server's dashboard may hold on the same port).
+# This PC's local-network addresses (never 127.0.0.1: the game server's own
+# dashboard may hold it on the same port).
 $addresses = @()
-if ($serve.address -eq 'this-pc' -or $serve.address -eq '0.0.0.0') {
+if ($serve.address -eq 'this-pc') {
     foreach ($nic in [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
         if ($nic.OperationalStatus -ne 'Up') { continue }
         foreach ($unicast in $nic.GetIPProperties().UnicastAddresses) {
             $a = $unicast.Address
             if ($a.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork -and -not [Net.IPAddress]::IsLoopback($a)) {
-                # Local-network addresses only (unless the owner's --allow-public).
                 if ((Test-RmrPrivateIPv4 $a.ToString()) -or $env:RMR_ALLOW_PUBLIC -eq '1') { $addresses += $a.ToString() }
             }
         }
@@ -202,51 +192,68 @@ if ($serve.address -eq 'this-pc' -or $serve.address -eq '0.0.0.0') {
 } else {
     $addresses = @($serve.address)
 }
-$bindArgs = @('--root', $Root)
-foreach ($a in $addresses) { $bindArgs += @('--bind', ($a + ':' + $serve.port)) }
+$arguments = '--root "' + $Root + '" --login-stdin'
+foreach ($a in $addresses) { $arguments += ' --bind ' + $a + ':' + $serve.port }
 
-# Let other computers through Windows Firewall (asks for administrator once).
-$ruleName = 'Red Moon Rising dashboard (TCP ' + $serve.port + ')'
+$ruleAdded = $false
+$forwarded = $false
+$process = $null
 try {
-    if (-not (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)) {
-        Write-Host ''
-        $yes = (Read-Host ('Allow other computers on your local network through Windows Firewall on port ' + $serve.port + '? This asks for administrator. [Y/n]')).Trim()
+    # ---- this session's firewall opening ----
+    Write-Host ''
+    $yes = (Read-Host ('Let other devices on your local network through Windows Firewall on port ' + $serve.port + ' while the dashboard runs? This asks for administrator, now and when it stops. [Y/n]')).Trim()
+    if ($yes -eq '' -or $yes -match '^[Yy]') {
+        $profiles = if ($env:RMR_ALLOW_PUBLIC -eq '1') { 'Any' } else { 'Private,Domain' }
+        try {
+            Invoke-RmrElevated "New-NetFirewallRule -DisplayName '$ruleName' -Direction Inbound -Protocol TCP -LocalPort $($serve.port) -Action Allow -Profile $profiles | Out-Null"
+            $ruleAdded = $true
+        } catch { Write-Host ('The firewall was not opened: ' + $_.Exception.Message) -ForegroundColor Yellow }
+    }
+
+    if ($env:RMR_ALLOW_PUBLIC -eq '1' -and $serve.address -eq 'this-pc') {
+        $yes = (Read-Host ('Forward port ' + $serve.port + ' on your router for this session (UPnP)? [Y/n]')).Trim()
         if ($yes -eq '' -or $yes -match '^[Yy]') {
-            $profiles = if ($env:RMR_ALLOW_PUBLIC -eq '1') { 'Any' } else { 'Private,Domain' }
-            $command = "New-NetFirewallRule -DisplayName '$ruleName' -Direction Inbound -Protocol TCP -LocalPort $($serve.port) -Action Allow -Profile $profiles | Out-Null"
-            Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-Command', $command) -Verb RunAs -Wait -WindowStyle Hidden
+            $forward = Set-RmrUpnpForward $serve.port 'Red Moon Rising dashboard'
+            if ($forward.Ok) {
+                $forwarded = $true
+                Write-Host $forward.Message -ForegroundColor Green
+                if ($forward.External) { Write-Host ('http://' + $forward.External + ':' + $serve.port + '/') -ForegroundColor Green }
+            } else { Write-Host $forward.Message -ForegroundColor Yellow }
         }
     }
-} catch { Write-Host ('Firewall rule not added: ' + $_.Exception.Message) -ForegroundColor Yellow }
 
-# Ask the router to forward the dashboard port for this session only.
-$forwarded = $false
-if ($env:RMR_ALLOW_PUBLIC -eq '1' -and ($serve.address -eq 'this-pc' -or $serve.address -eq '0.0.0.0')) {
-    $yes = (Read-Host ('Forward port ' + $serve.port + ' on your router for this session (UPnP), so it can be reached from outside? [Y/n]')).Trim()
-    if ($yes -eq '' -or $yes -match '^[Yy]') {
-        $forward = Set-RmrUpnpForward $serve.port 'Red Moon Rising dashboard'
-        if ($forward.Ok) {
-            $forwarded = $true
-            Write-Host $forward.Message -ForegroundColor Green
-            if ($forward.External) { Write-Host ('From outside: http://' + $forward.External + ':' + $serve.port + '/') -ForegroundColor Green }
-        } else { Write-Host $forward.Message -ForegroundColor Yellow }
-    }
-}
+    Copy-Item -LiteralPath $built -Destination $exe -Force
 
-Write-Host ''
-foreach ($a in $addresses) { Write-Host ('Dashboard: http://' + $a + ':' + $serve.port + '/') -ForegroundColor Green }
-Write-Host ('On this PC, http://127.0.0.1:' + $serve.port + '/ is the game server''s own dashboard (no sign-in).') 
-Write-Host 'Sign in with the name and password you set. Close this window to take the dashboard offline.'
-Write-Host 'Open it from devices on your local network. It is plain HTTP and meant for your own network only; use a strong password.'
-Write-Host 'Closing this window forgets the sign-in; the next start asks for a new one.'
-Write-Host ''
-try {
-    & $exe @bindArgs
-    $code = $LASTEXITCODE
+    Write-Host ''
+    foreach ($a in $addresses) { Write-Host ('Dashboard: http://' + $a + ':' + $serve.port + '/') -ForegroundColor Green }
+    Write-Host 'Open it from devices on your local network and sign in with the name and password you just chose.'
+    Write-Host 'It is plain HTTP and meant for your own network only.'
+    Write-Host 'Press Ctrl+C to stop it: everything it set up is removed and nothing is kept.' -ForegroundColor Cyan
+    Write-Host ''
+
+    # The sign-in goes to the program over stdin and never touches the disk.
+    $start = New-Object Diagnostics.ProcessStartInfo
+    $start.FileName = $exe
+    $start.Arguments = $arguments
+    $start.UseShellExecute = $false
+    $start.RedirectStandardInput = $true
+    $process = [Diagnostics.Process]::Start($start)
+    $process.StandardInput.WriteLine($user)
+    $process.StandardInput.WriteLine($plain)
+    $process.StandardInput.Close()
+    $plain = $null; $user = $null; $first = $null; $again = $null
+    while (-not $process.WaitForExit(500)) { }
+    $code = $process.ExitCode
 } finally {
-    # Closing the dashboard closes the router's door too.
+    Write-Host ''
+    Write-Host 'Stopping the dashboard and removing everything it set up...' -ForegroundColor Cyan
+    if ($null -ne $process -and -not $process.HasExited) { try { $process.Kill(); $process.WaitForExit(5000) | Out-Null } catch { } }
     if ($forwarded) { Remove-RmrUpnpForward $serve.port }
-    # The program forgets the stored sign-in once it has read it; make sure.
-    if (Test-Path -LiteralPath $loginPath) { Remove-Item -LiteralPath $loginPath -Force -ErrorAction SilentlyContinue }
+    for ($i = 0; $i -lt 10 -and (Test-Path -LiteralPath $exe); $i++) {
+        try { Remove-Item -LiteralPath $exe -Force -ErrorAction Stop } catch { Start-Sleep -Milliseconds 300 }
+    }
+    if ($ruleAdded) { try { Invoke-RmrElevated "Remove-NetFirewallRule -DisplayName '$ruleName'" } catch { } }
+    $plain = $null; $user = $null
+    Write-Host 'Done. Nothing from this session was kept.' -ForegroundColor Green
 }
 if ($code -ne 0) { exit $code }

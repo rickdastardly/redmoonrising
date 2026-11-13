@@ -1,16 +1,17 @@
 //! The public dashboard (Dashboard.bat): a login in front of the game
 //! server's own dashboard, which only ever listens on 127.0.0.1.
 //!
-//! - Every page and API call needs a signed-in session; one account, set up by
-//!   Dashboard.bat (`--set-login`, the name and password on stdin), stored as a
-//!   salted, many-times-hashed digest in `.rmr/dashboard-login.json`.
+//! - Every page and API call needs a signed-in session; one account, chosen
+//!   in Dashboard.bat each time and handed over on stdin (`--login-stdin`).
+//!   It is kept only in memory, as a salted, many-times-hashed digest: nothing
+//!   is written to disk, and closing the dashboard forgets it.
 //! - Five wrong passwords from one address lock it out for fifteen minutes.
 //! - Signed in, requests go through to the game server's dashboard (its port
 //!   from `.rmr/settings.json`). When the server is down, a page says so and
 //!   offers to start it (Start.bat --server-only), then shows its progress.
 //!
-//! Usage: dashboard --root <folder> [--bind 0.0.0.0:18090]
-//!        dashboard --root <folder> --set-login      (name, then password, on stdin)
+//! Usage: dashboard --root <folder> --login-stdin [--bind ADDRESS:PORT ...]
+//!        (the name, then the password, as the first two lines on stdin)
 
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher};
@@ -30,7 +31,7 @@ const LOCKOUT: Duration = Duration::from_secs(15 * 60);
 const HEAD_LIMIT: usize = 64 * 1024;
 const COOKIE: &str = "rmr_session";
 
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[derive(Clone)]
 struct Login {
     user: String,
     salt: String,
@@ -51,29 +52,17 @@ async fn main() {
     let args: Vec<String> = std::env::args().collect();
     let value = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     let root = PathBuf::from(value("--root").unwrap_or_else(|| ".".into()));
-    let login_path = root.join(".rmr").join("dashboard-login.json");
-    if args.iter().any(|a| a == "--set-login") {
-        std::process::exit(match set_login(&login_path) {
-            Ok(()) => {
-                println!("Dashboard login saved.");
-                0
-            }
-            Err(e) => {
-                eprintln!("{e}");
-                1
-            }
-        });
+    if !args.iter().any(|a| a == "--login-stdin") {
+        eprintln!("Start the dashboard with Dashboard.bat.");
+        std::process::exit(1);
     }
-    let login: Login = match std::fs::read_to_string(&login_path).ok().and_then(|t| serde_json::from_str(&t).ok()) {
-        Some(l) => l,
-        None => {
-            eprintln!("No dashboard sign-in is set up. Start the dashboard with Dashboard.bat.");
+    let login = match read_login() {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("{e}");
             std::process::exit(1);
         }
     };
-    // The sign-in lives only in memory from here: nothing is left on disk
-    // once this program stops, and the next Dashboard.bat asks again.
-    let _ = std::fs::remove_file(&login_path);
     // One or more --bind addresses: Dashboard.bat passes each of this PC's
     // own addresses, so the public dashboard can share a port number with the
     // game server's dashboard on 127.0.0.1.
@@ -117,21 +106,23 @@ async fn main() {
     }
 }
 
-fn set_login(path: &Path) -> Result<(), String> {
+/// This session's sign-in, from the first two lines on stdin: held in memory
+/// only, as a salted digest.
+fn read_login() -> Result<Login, String> {
     let stdin = std::io::stdin();
     let mut lines = stdin.lock().lines();
     let user = lines.next().and_then(Result::ok).unwrap_or_default().trim().to_string();
-    let password = lines.next().and_then(Result::ok).unwrap_or_default();
-    let password = password.trim_end_matches(['\r', '\n']);
+    let mut password = lines.next().and_then(Result::ok).unwrap_or_default();
+    while password.ends_with(['\r', '\n']) {
+        password.pop();
+    }
     if user.is_empty() || password.chars().count() < 8 {
         return Err("A name and a password of at least 8 characters are needed.".into());
     }
     let salt = random_hex(16);
-    let login = Login { hash: digest(&salt, password, ROUNDS), user, salt, rounds: ROUNDS };
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(path, serde_json::to_string_pretty(&login).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+    let login = Login { hash: digest(&salt, &password, ROUNDS), user, salt, rounds: ROUNDS };
+    password.clear();
+    Ok(login)
 }
 
 // ---- requests ---------------------------------------------------------------------------------
