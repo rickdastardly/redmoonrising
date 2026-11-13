@@ -313,7 +313,7 @@ fn ship_slim(ship: &Ship) -> Value {
             ("corpID", Value::Int(p.corp_id)),
         ]);
     }
-    slim(vec![
+    let mut fields = vec![
         ("itemID", Value::Int(ship.id)),
         ("typeID", Value::Int(p.type_id)),
         ("ownerID", Value::Int(p.char_id)),
@@ -323,7 +323,14 @@ fn ship_slim(ship: &Ship) -> Value {
         // consider.py rounds it; it must be a number.
         ("securityStatus", Value::Double(p.security)),
         ("bounty", Value::Double(p.bounty)),
-    ])
+    ];
+    // Without these the client mounts no turrets on the hull, and firing
+    // shows no shots and makes no sound.
+    if !ship.hardpoints.is_empty() {
+        let modules = ship.hardpoints.iter().map(|(id, t)| Value::Tuple(vec![Value::Int(*id), Value::Int(*t)])).collect();
+        fields.push(("modules", Value::List(modules)));
+    }
+    slim(fields)
 }
 
 fn celestial_slim(c: &Celestial, owners: &[(i64, i64)]) -> Value {

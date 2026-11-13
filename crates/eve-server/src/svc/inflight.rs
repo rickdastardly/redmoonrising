@@ -199,12 +199,27 @@ pub async fn ship_for_space(ctx: &Ctx<'_>, char_id: i64, ship_id: i64) -> Option
         Ok(Some(p)) => {
             let mut ship = Ship::new(ship_id, ctx.client_id, p.stats, p.pilot, Default::default(), Default::default());
             ship.fight = Some(p.fighter);
+            ship.hardpoints = hardpoints(ctx.db, ship_id).await;
             Some(ship)
         }
         Ok(None) => None,
         Err(e) => {
             error!("loading ship {ship_id}: {}", crate::logging::chain(&e));
             None
+        }
+    }
+}
+
+/// A ship's high-slot modules (flags 27 to 34), in slot order.
+pub async fn hardpoints(db: &impl GenericClient, ship_id: i64) -> Vec<(i64, i64)> {
+    let sql = r#"SELECT "itemID", "typeID" FROM entity
+                  WHERE "locationID" = $1 AND "flag" BETWEEN 27 AND 34
+                  ORDER BY "flag""#;
+    match db.query(sql, &[&(ship_id as i32)]).await {
+        Ok(rows) => rows.iter().filter_map(|r| Some((crate::svc::rows::int(r, 0)?, crate::svc::rows::int(r, 1)?))).collect(),
+        Err(e) => {
+            error!("reading the high slots of ship {ship_id}: {}", crate::logging::chain(&e));
+            Vec::new()
         }
     }
 }

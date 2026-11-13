@@ -32,6 +32,9 @@ const MIN_AGGRO_RANGE: f64 = 30_000.0;
 const LEASH: f64 = 120_000.0;
 /// How far off a bot sees an enemy of its war worth going for.
 const WAR_AGGRO_RANGE: f64 = 80_000.0;
+/// How long, in ms, a rat takes to react to a pilot who has not shot it,
+/// on top of its lock time.
+const RAT_REACTION_MS: (f64, f64) = (5_000.0, 12_000.0);
 const THINK_MS: i64 = 1_000;
 const GROUP_BELT: i64 = 9;
 const GROUP_CONCORD: i32 = 301;
@@ -726,7 +729,9 @@ pub fn think(park: &mut Park, now: i64, out: &mut Out) {
     let seen: Vec<Seen> = park
         .ships
         .values()
-        .filter(|s| s.is_pilot() && !s.warping())
+        // A ship aligning to warp is still here and can still be shot; it
+        // is gone only once it is in warp.
+        .filter(|s| s.is_pilot() && !s.in_warp())
         .map(|s| Seen { id: s.id, pos: s.pos, player: s.is_player(), side: crate::svc::war::side(&s.pilot), char_id: s.pilot.char_id })
         .collect();
     let players: Vec<(i64, Vec3)> = seen.iter().filter(|s| s.player).map(|s| (s.id, s.pos)).collect();
@@ -1270,16 +1275,26 @@ fn think_one(park: &mut Park, id: i64, now: i64, seen: &[Seen], enemies: &HashSe
         crate::drones::bot_drones_follow(park, id, Some(target), now, out);
     }
 
+    // A rat takes a few seconds to notice a pilot who has just arrived and
+    // not fired on it: not the instant lock of a pilot already watching.
+    let pilot_target = seen.iter().find(|s| s.id == target && s.player).map(|s| s.char_id);
+
     // Lock it.
     let Some(rat) = park.ships.get_mut(&id) else { return };
     let (Some(brain), Some(fight)) = (rat.npc.as_mut(), rat.fight.as_mut()) else { return };
+    let reaction = match pilot_target {
+        Some(char_id) if !is_bot && !fight.damage_log.contains_key(&char_id) => {
+            combat::Rng::seeded((id as u64) ^ ((target as u64) << 1) ^ (now as u64 >> 10)).range(RAT_REACTION_MS.0, RAT_REACTION_MS.1) as i64
+        }
+        _ => 0,
+    };
     brain.target = Some(target);
     // Aggro reaches further than sensors: a lock started out of range, or
     // while jammed, would be dropped by the next pulse and started over.
     let can_lock = !field_blocked && distance <= fight.lock_range() && !fight.afflictions.jammed;
     if can_lock && !fight.locks.contains_key(&target) {
         fight.locks.clear();
-        let lock_ms = (combat::lock_seconds(fight.scan_resolution, signature) * 1_000.0) as i64;
+        let lock_ms = (combat::lock_seconds(fight.scan_resolution, signature) * 1_000.0) as i64 + reaction;
         fight.locks.insert(target, Lock::Pending(now + lock_ms));
         debug!("rat {id} locking {target} ({lock_ms} ms)");
     }

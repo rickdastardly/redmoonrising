@@ -732,14 +732,25 @@ fn notify_change(world: &World, char_id: i64, what: &str, agent_id: i64) {
 pub async fn journal(ctx: &Ctx<'_>, agent_id: Option<i64>) -> Value {
     let me = ctx.session.char_id.unwrap_or(0);
     let mut missions = Vec::new();
-    for m in open_missions(ctx.db, me, agent_id).await {
+    let open = open_missions(ctx.db, me, agent_id).await;
+    for m in &open {
         let state = if m.state == OFFERED { 0 } else { 2 };
-        let bookmarks = bookmarks(ctx.db, &m).await;
+        let bookmarks = bookmarks(ctx.db, m).await;
+        // People and Places files mission bookmarks by mission name, so two
+        // missions of the same name from different agents would each list
+        // both missions' places. Name such missions by their agent too.
+        let name = if open.iter().filter(|o| o.name == m.name).count() > 1 {
+            let agent = ctx.db.query_opt(r#"SELECT "characterName" FROM "character_" WHERE "characterID" = $1"#, &[&(m.agent_id as i32)])
+                .await.ok().flatten().and_then(|r| text(&r, 0)).unwrap_or_else(|| format!("agent {}", m.agent_id));
+            format!("{} ({agent})", m.name)
+        } else {
+            m.name.clone()
+        };
         missions.push(Value::Tuple(vec![
             Value::Int(state),
             Value::Int(0),
             Value::text(kind_name(m.kind)),
-            Value::text(&m.name),
+            Value::text(&name),
             Value::Int(m.agent_id),
             Value::Long(m.expires_at),
             Value::List(bookmarks),

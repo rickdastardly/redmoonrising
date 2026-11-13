@@ -880,8 +880,11 @@ async fn acl_for(ctx: &Ctx<'_>, channel_id: i64, default_mode: i64) -> Value {
         Err(e) => error!("LSC acl of {channel_id}: {err}", err = crate::logging::chain(&e)),
     }
     // People and Places' Agents tab reads NPC buddies from this personal
-    // channel ACL. Include the agents who currently have work for this pilot,
-    // and every mission agent who would work with them.
+    // channel ACL. Include the agents who currently have work for this pilot.
+    // The thousands of agents who would work with them come from
+    // factory.RmrAvailableAgents when that tab opens: in this ACL, every
+    // contact check the client makes (Local, mail, People and Places) read
+    // through all of them, and the client froze.
     if ctx.session.char_id == Some(channel_id) {
         let sql = r#"SELECT DISTINCT "agentID" FROM "agtCharMissions"
                       WHERE "characterID" = $1 AND "state" IN (0, 2, 3)"#;
@@ -892,10 +895,6 @@ async fn acl_for(ctx: &Ctx<'_>, channel_id: i64, default_mode: i64) -> Value {
                 Vec::new()
             }
         };
-        match crate::svc::agent_missions::available_agents(ctx.db, channel_id).await {
-            Ok(more) => agents.extend(more),
-            Err(e) => error!("LSC available agents of {channel_id}: {err}", err = crate::logging::chain(&e)),
-        }
         let mut seen = std::collections::HashSet::new();
         agents.retain(|a| seen.insert(*a));
         {

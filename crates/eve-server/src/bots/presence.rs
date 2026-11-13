@@ -603,7 +603,11 @@ impl Presence {
                     let units = ((rng.range(400.0, 1_600.0) / rock.volume.max(0.01)).floor() as i64).clamp(1, rock.quantity.max(1));
                     rock.quantity -= units;
                     let gone = rock.quantity <= 0;
-                    let mut entries = vec![space::special_fx(tick, ship_id, Some(rock_id), "effects.Mining")];
+                    // A ship mines with a mining laser (miningLaser, effects.Laser).
+                    // effects.Mining is the mining drone's effect: the client
+                    // looks for a drone's mining beam on the ship's model and
+                    // fails (AttributeError: StartMining).
+                    let mut entries = vec![space::special_fx(tick, ship_id, Some(rock_id), "effects.Laser")];
                     if gone {
                         park.rocks.remove(&rock_id);
                         entries.push(space::entry(tick, "RemoveBalls", vec![eve_marshal::Value::List(vec![eve_marshal::Value::Int(rock_id)])]));

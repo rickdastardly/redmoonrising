@@ -38,6 +38,8 @@ pub(super) struct PendingDock {
     station_id: i64,
     warp_deadline: i64,
     approaching: bool,
+    /// This request sent the ship into warp for the station.
+    warp_issued: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -79,8 +81,11 @@ impl PendingDock {
             return Ok(DockStep::Arrived);
         }
         // Let the heartbeat send the warp exit and reset the client's
-        // ballpark before sending a sublight command.
-        if ship.warping() || park.landed.contains(&self.ship_id) {
+        // ballpark before sending a sublight command. A ship still lining up
+        // for some other warp is turned toward the station instead: waiting
+        // for that warp took it away to wherever it had been heading.
+        let own_alignment = ship.warping() && self.warp_issued;
+        if ship.in_warp() || own_alignment || park.landed.contains(&self.ship_id) {
             return if park.tick < self.warp_deadline {
                 Ok(DockStep::Wait)
             } else {
@@ -109,6 +114,7 @@ impl PendingDock {
             park.set_speed_fraction(self.ship_id, 1.0);
             park.command(self.ship_id, Command::Warp { target, range: 0.0 });
             self.warp_deadline = park.tick + DOCK_WARP_LIMIT;
+            self.warp_issued = true;
             return Ok(DockStep::Warp);
         }
 
@@ -295,6 +301,7 @@ impl Conn {
             station_id,
             warp_deadline: destiny::tick_now() + DOCK_WARP_LIMIT,
             approaching: false,
+            warp_issued: false,
         };
         self.advance_dock(pending, towed).await
     }
@@ -723,6 +730,7 @@ mod tests {
             station_id: station.id,
             warp_deadline: DOCK_WARP_LIMIT,
             approaching: false,
+            warp_issued: false,
         };
         let mut park = Park::new(dock.system_id, vec![station], 0);
         let pilot = Pilot {
@@ -790,6 +798,8 @@ mod tests {
     }
 
     fn finish_warp(dock: &mut PendingDock, park: &mut Park) {
+        // The warp stands for the one the docking request itself started.
+        dock.warp_issued = true;
         let warp = park.ships[&dock.ship_id].command.clone();
         for tick in park.tick + 1..=park.tick + DOCK_WARP_LIMIT {
             assert_eq!(dock.step(park, false), Ok(DockStep::Wait));

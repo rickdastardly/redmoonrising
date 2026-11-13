@@ -2,6 +2,32 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Turrets you can see and hear, fairer rats, docking and agent list fixes
+
+*2026-11-13 17:01 UTC*
+
+- **Your turrets show and fire again.** The server never told the client what was in your ship's high slots, so it mounted no turrets or launchers on the hull, and firing showed no shots and made no sound. Your high-slot modules are now sent with your ship, as they were in 2007, for you and for everyone who sees you.
+- **Rats keep shooting while you align.** They stopped the moment you clicked warp. They now keep firing until you're actually in warp, and you can still be shot while lining up to leave.
+- **Rats take a moment to notice you.** Belt rats locked you the instant you landed. Now they take 5 to 12 seconds to react to a pilot who hasn't fired on them. Shoot first and they answer at once.
+- **Docking goes where you ask.** Asking to dock while your ship was still lining up for another warp made it finish that warp first, so you flew back to wherever you'd been heading and couldn't dock. A dock request now turns the ship toward the station straight away. A warp you're already in still finishes first, since nothing can stop a warp.
+- **People & Places: mission places sorted properly.** Two missions with the same name, such as two *Sealed Documents* from different agents, each listed both missions' drop-offs and pickups. Missions sharing a name now show their agent's name too, and each lists only its own places.
+- **People & Places: no more freezing on the Agents tab.** The few thousand agents who'll work with you were kept in your chat contact list, which the client reads through every time it checks whether someone is a contact (Local, mail, People & Places). Now the server sends that list only when you open the **Level N agents available to you** groups, and the contact list holds only your real contacts and mission agents.
+
+*Restart Start.bat to rebuild the server, and start the game from Client.bat.*
+
+## Fewer client errors: bot miners, market in space, jumps and undocking
+
+*2026-11-13 16:52 UTC*
+
+- **Bot miners:** bots mining asteroids caused *AttributeError: StartMining* and *DroneMining: no ball found* errors whenever you were in a belt with them. Their mining was drawn with the mining drone effect, which the client looks for on a drone and can't find on a ship. They now use the mining laser effect, as a player's ship does.
+- **Market in space:** using the market window after undocking failed with *Must be in station*. It now shows no station orders while you're in space, instead of failing.
+- **Jumping:** clicking Jump again while a jump was already under way raised the *sensors are still tuning in on subspace frequencies* error. The extra click is now ignored, since the first jump goes ahead.
+- **Jumping, docking and undocking:** the client checked your drone bay and cargo hold while it was still switching location, which logged *session is mutating or changing* warnings. Those checks now wait until you've arrived.
+- The star map's harmless Python notices (*hex() of negative int*, *integer argument expected*) are no longer written to the log as stack traces.
+- Warping, docking and turrets were all working in the log: every warp landed, every dock and undock completed, and the hybrid turrets killed their targets. The errors around them were the ones above.
+
+*Restart Start.bat to rebuild the server, and start the game from Client.bat.*
+
 ## Update roundup: everything new since 12 November
 
 *2026-11-13 15:22 UTC*

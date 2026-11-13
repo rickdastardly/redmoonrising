@@ -57,6 +57,19 @@ pub async fn factory(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
             debug!("GetMaterialCompositionOfItemType({type_id}): {} material(s)", found.len());
             rowset(&["typeID", "quantity"], lines(&found))
         }
+        // The launcher's People and Places hook: every mission agent who would
+        // work with the caller, for the "Level N agents available to you"
+        // groups.
+        "RmrAvailableAgents" => {
+            let Some(me) = ctx.session.char_id else { return Some(Outcome::Value(Value::List(Vec::new()))) };
+            match crate::svc::agent_missions::available_agents(ctx.db, me).await {
+                Ok(ids) => Value::List(ids.into_iter().map(Value::Int).collect()),
+                Err(e) => {
+                    tracing::error!("available agents of {me}: {}", crate::logging::chain(&e));
+                    Value::List(Vec::new())
+                }
+            }
+        }
         // A client hook's one-line diagnostic, for the server log.
         "RmrReport" => {
             info!("client hook: {}", call.arg_text(0).unwrap_or_default());

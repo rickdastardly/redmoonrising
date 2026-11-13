@@ -265,6 +265,10 @@ pub struct Ship {
     pub bot_fitted: usize,
     /// A bot ship's drone flight, launched when it fights.
     pub bot_drones: Option<crate::drones::BotDrones>,
+    /// A player's high-slot modules (item, type), sent in its SlimItem as
+    /// `modules`: the client mounts turret and launcher models from it and
+    /// plays their firing effects and sounds on them.
+    pub hardpoints: Vec<(i64, i64)>,
 }
 
 impl Ship {
@@ -291,6 +295,7 @@ impl Ship {
             bot_loot: Vec::new(),
             bot_fitted: 0,
             bot_drones: None,
+            hardpoints: Vec::new(),
         }
     }
 

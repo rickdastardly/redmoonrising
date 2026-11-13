@@ -1150,6 +1150,95 @@ def _rmr_install_tutorial_guard():
 
 uthread.new(_rmr_install_tutorial_guard)
 
+def _rmr_session_busy():
+    return getattr(eve.session, 'changing', None) or getattr(eve.session, 'mutating', 0)
+
+def _rmr_defer_while_changing(cls, name):
+    # Calls the server for the old location while the session is still
+    # switching (on a jump, dock or undock) trip the client's session
+    # check. Run them once the session has settled instead.
+    original = getattr(cls, name, None)
+    if original is None or getattr(original, '_rmr_deferred', False):
+        return False
+    def later(self, args, kwargs):
+        for i in range(75):
+            blue.pyos.synchro.Sleep(200)
+            if not _rmr_session_busy():
+                break
+        try:
+            original(self, *args, **kwargs)
+        except:
+            _rmr_log('%s after a session change failed: %s' % (name, ''.join(traceback.format_exception(*sys.exc_info()))))
+            sys.exc_clear()
+    def wrapper(self, *args, **kwargs):
+        if _rmr_session_busy():
+            uthread.new(later, self, args, kwargs)
+            return None
+        return original(self, *args, **kwargs)
+    wrapper._rmr_deferred = True
+    setattr(cls, name, wrapper)
+    return True
+
+def _rmr_install_session_guards():
+    # Python 2.5 notes inside the client's own star map code (hex() of a
+    # negative number, a float where an int is wanted) are logged as stack
+    # traces; they change nothing.
+    try:
+        import warnings
+        warnings.filterwarnings('ignore', category=FutureWarning)
+        warnings.filterwarnings('ignore', category=DeprecationWarning)
+    except:
+        sys.exc_clear()
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    done = []
+    for service, method in (('tactical', 'CheckInitDrones'), ('window', 'OnCapacityChange')):
+        try:
+            cls = sm.GetService(service).__class__
+            if _rmr_defer_while_changing(cls, method):
+                done.append('%s.%s' % (service, method))
+        except:
+            _rmr_log('Session guard for %s.%s failed: %s' % (service, method, ''.join(traceback.format_exception(*sys.exc_info()))))
+            sys.exc_clear()
+    # The market window asks for the station's sell orders even in space,
+    # and the client then fails with "Must be in station".
+    try:
+        cls = sm.GetService('marketQuote').__class__
+        original_asks = getattr(cls, 'GetStationAsks', None)
+        if original_asks is not None and not getattr(original_asks, '_rmr_guarded', False):
+            def station_asks(self, *args, **kwargs):
+                if not getattr(eve.session, 'stationid', None):
+                    return {}
+                return original_asks(self, *args, **kwargs)
+            station_asks._rmr_guarded = True
+            cls.GetStationAsks = station_asks
+            done.append('marketQuote.GetStationAsks')
+    except:
+        _rmr_log('Market guard failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+    # Clicking Jump again while the first jump is still under way: the
+    # jump is already happening, so the second click is let go quietly.
+    try:
+        cls = sm.GetService('menu').__class__
+        original_jump = getattr(cls, 'StargateJump', None)
+        if original_jump is not None and not getattr(original_jump, '_rmr_guarded', False):
+            def stargate_jump(self, *args, **kwargs):
+                try:
+                    return original_jump(self, *args, **kwargs)
+                except:
+                    if 'subspace' not in str(sys.exc_info()[1]):
+                        raise
+                    sys.exc_clear()
+            stargate_jump._rmr_guarded = True
+            cls.StargateJump = stargate_jump
+            done.append('menu.StargateJump')
+    except:
+        _rmr_log('Jump guard failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+    _rmr_log('Session guards installed: ' + ', '.join(done))
+
+uthread.new(_rmr_install_session_guards)
+
 def _rmr_install_html_table_guard():
     # The client's HTML tables fail (KeyError 'spacing-right') when a cell's
     # text is wider than its column, which can stop a window drawing (the
@@ -2265,14 +2354,6 @@ def _rmr_install_mission_agent_contacts():
             try:
                 missions = eve.LocalSvc('journal').GetMyAgentJournalDetails()[0]
                 mission_agents = [mission[4] for mission in missions]
-                if _rmr_contacts_only[0]:
-                    # The stock People and Places list: real contacts and the
-                    # agents you have missions with. The server's list of
-                    # every agent you may use (ten thousand of them) goes to
-                    # the "agents available to you" groups instead; built as
-                    # one list it froze the client.
-                    agents = sm.StartService('agents').GetAgentsByID()
-                    buddies = [b for b in buddies if b in mission_agents or _rmr_agent_row(agents, b) is None]
                 for agent_id in mission_agents:
                     if agent_id not in buddies:
                         buddies.append(agent_id)
@@ -2441,20 +2522,31 @@ def _rmr_agent_factions(nodedata, *args):
     return [_rmr_agent_group(name, nodedata.id + (factionID,), factions[factionID], sublevel, _rmr_agent_corps)
             for name, factionID in named]
 
+_rmr_available_cache = [None, 0]
+
 def _rmr_available_agent_groups():
     # The server lists every mission agent that would work with this pilot on
     # the personal channel's contacts. Arrange them like the Character Sheet:
     # by level, then faction, then corporation, names fetched per group.
-    import util
+    # The list comes from the server when the tab opens (kept a minute), not
+    # from the chat contact list, which every contact check reads through.
     agents = sm.StartService('agents').GetAgentsByID()
+    now = blue.os.GetTime()
+    cached = _rmr_available_cache
+    if cached[0] is None or now - cached[1] > 60 * 10000000L:
+        try:
+            cached[0] = list(eve.RemoteSvc('factory').RmrAvailableAgents() or [])
+        except:
+            _rmr_log('Available agents could not be fetched: ' + str(sys.exc_info()[1]))
+            sys.exc_clear()
+            cached[0] = cached[0] or []
+        cached[1] = now
     levels = {}
-    for buddyID in eve.LocalSvc('LSC').GetBuddies():
-        if not util.IsNPC(buddyID):
+    for agentID in cached[0]:
+        if agentID not in agents:
             continue
-        if buddyID not in agents:
-            continue
-        agent = agents[buddyID]
-        levels.setdefault(agent.level or 1, []).append(buddyID)
+        agent = agents[agentID]
+        levels.setdefault(agent.level or 1, []).append(agentID)
     keys = levels.keys()
     keys.sort()
     groups = []
