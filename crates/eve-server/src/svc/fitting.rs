@@ -90,6 +90,10 @@ pub async fn fit(ctx: &Ctx<'_>, txn: &mut ItemTxn<'_>, ship: &Item, item: &Item,
 
 async fn fit_module(ctx: &Ctx<'_>, txn: &mut ItemTxn<'_>, ship: &Item, module: &Item, wanted: i64) -> Result<(), MoveError> {
     let char_id = ctx.session.char_id.unwrap_or(0);
+    let missing = crate::svc::skills::missing_for(txn.tx(), char_id, module.type_id).await?;
+    if !missing.is_empty() {
+        return refuse(format!("You need {} to fit that module.", crate::svc::skills::describe(txn.tx(), &missing).await));
+    }
     let loadout = Loadout::load(txn.tx(), ctx.dogma, char_id, Some(ship.id), &HashSet::new()).await?;
     let Some(ship_index) = loadout.find(ship.id) else { return refuse("Your ship could not be read.") };
 

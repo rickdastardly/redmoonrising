@@ -89,7 +89,7 @@ pub async fn home_station(db: &impl GenericClient, char_id: i64) -> Result<Optio
     let row = db
         .query_opt(
             r#"SELECT e."customInfo" FROM entity e JOIN "invTypes" t ON t."typeID" = e."typeID"
-                WHERE e."ownerID" = $1 AND t."groupID" = $2
+                WHERE e."ownerID" = $1 AND e."locationID" = $1 AND t."groupID" = $2
                 ORDER BY e."itemID" DESC LIMIT 1"#,
             &[&(char_id as i32), &GROUP_CLONE],
         )
@@ -102,7 +102,7 @@ pub async fn home_station(db: &impl GenericClient, char_id: i64) -> Result<Optio
 pub async fn replace_clone(db: &impl GenericClient, char_id: i64, type_id: i64, home: Option<i64>) -> Result<(), tokio_postgres::Error> {
     db.execute(
         r#"DELETE FROM entity e USING "invTypes" t
-            WHERE t."typeID" = e."typeID" AND e."ownerID" = $1 AND t."groupID" = $2"#,
+            WHERE t."typeID" = e."typeID" AND e."ownerID" = $1 AND e."locationID" = $1 AND t."groupID" = $2"#,
         &[&(char_id as i32), &GROUP_CLONE],
     )
     .await?;
@@ -115,15 +115,53 @@ pub async fn replace_clone(db: &impl GenericClient, char_id: i64, type_id: i64, 
     Ok(())
 }
 
-async fn clone_type(db: &impl GenericClient, char_id: i64) -> Result<Option<i64>, tokio_postgres::Error> {
+pub async fn clone_type(db: &impl GenericClient, char_id: i64) -> Result<Option<i64>, tokio_postgres::Error> {
     let row = db
         .query_opt(
             r#"SELECT e."typeID" FROM entity e JOIN "invTypes" t ON t."typeID" = e."typeID"
-                WHERE e."ownerID" = $1 AND t."groupID" = $2 ORDER BY e."itemID" DESC LIMIT 1"#,
+                WHERE e."ownerID" = $1 AND e."locationID" = $1 AND t."groupID" = $2 ORDER BY e."itemID" DESC LIMIT 1"#,
             &[&(char_id as i32), &GROUP_CLONE],
         )
         .await?;
     Ok(row.map(|r| r.get::<_, i32>(0) as i64))
+}
+
+/// A clone grade the pilot carries as an item (bought on the market, say)
+/// that keeps more skill points than the clone in use is used up: it becomes
+/// the pilot's clone, keeping the home station, and one leaves the hangar.
+/// Returns the clone type now in use, if one was installed.
+pub async fn install_carried_clone(ctx: &Ctx<'_>, char_id: i64) -> Result<Option<i64>, tokio_postgres::Error> {
+    const SKILL_POINTS_SAVED: i32 = 419;
+    let saved = |alias: &str| format!(
+        r#"COALESCE((SELECT coalesce(a."valueFloat", a."valueInt"::float8) FROM "dgmTypeAttributes" a
+                      WHERE a."typeID" = {alias}."typeID" AND a."attributeID" = {SKILL_POINTS_SAVED}), 0)"#
+    );
+    let sql = format!(
+        r#"SELECT e."itemID", e."typeID", {carried}
+             FROM entity e JOIN "invTypes" t ON t."typeID" = e."typeID"
+            WHERE e."ownerID" = $1 AND e."locationID" <> $1 AND t."groupID" = $2 AND e."quantity" > 0
+              AND {carried} > COALESCE((SELECT max({installed}) FROM entity i JOIN "invTypes" it ON it."typeID" = i."typeID"
+                                         WHERE i."ownerID" = $1 AND i."locationID" = $1 AND it."groupID" = $2), 0)
+            ORDER BY 3 DESC LIMIT 1"#,
+        carried = saved("e"),
+        installed = saved("i"),
+    );
+    let Some(best) = ctx.db.query_opt(sql.as_str(), &[&(char_id as i32), &GROUP_CLONE]).await? else { return Ok(None) };
+    let (item_id, type_id) = (best.get::<_, i32>(0) as i64, best.get::<_, i32>(1) as i64);
+    let mut client = crate::db::connect(ctx.db_url).await?;
+    let mut txn = crate::items::ItemTxn::begin(&mut client).await?;
+    let Some(item) = txn.item(item_id).await? else { return Ok(None) };
+    if item.quantity > 1 {
+        txn.set_quantity(item_id, item.quantity - 1).await?;
+    } else {
+        txn.destroy(item_id).await?;
+    }
+    let home = home_station(txn.tx(), char_id).await?;
+    replace_clone(txn.tx(), char_id, type_id, home).await?;
+    let events = txn.commit().await?;
+    crate::items::notify(ctx.world, ctx.client_id, events);
+    info!("{char_id} put clone {type_id} (item {item_id}) to use");
+    Ok(Some(type_id))
 }
 
 /// character.GetHomeStation: the clone's station, else the corporation's.

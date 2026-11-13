@@ -313,10 +313,14 @@ async fn set_character_description(call: &Call, ctx: &Ctx<'_>) -> Value {
 
 async fn clone_type_id(ctx: &Ctx<'_>) -> Value {
     let Some(char_id) = ctx.session.char_id else { return Value::None };
+    // A better clone carried as an item is used up and becomes the clone.
+    if let Err(e) = crate::svc::medical::install_carried_clone(ctx, char_id).await {
+        error!("character.GetCloneTypeID({char_id}): using a carried clone: {err}", err = crate::logging::chain(&e));
+    }
     let sql = r#"SELECT e."typeID" FROM "entity" e
                    JOIN "invTypes" t ON t."typeID" = e."typeID"
-                  WHERE e."ownerID" = $1 AND t."groupID" = 23
-                  ORDER BY e."typeID" DESC LIMIT 1"#;
+                  WHERE e."ownerID" = $1 AND e."locationID" = $1 AND t."groupID" = 23
+                  ORDER BY e."itemID" DESC LIMIT 1"#;
     match ctx.db.query(sql, &[&(char_id as i32)]).await {
         Ok(rows) => match rows.first() {
             Some(r) => int_col(r, 0),

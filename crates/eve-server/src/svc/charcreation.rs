@@ -551,7 +551,11 @@ async fn insert_character(req: &CreateRequest<'_>, db_url: &str) -> Result<i32, 
     .await
     .map_err(|e| db_failed("chrEmployment insert", e))?;
 
-    for (type_id, level) in &src.skills {
+    // The school's skills, and whatever they need (a turret skill needs Gunnery).
+    let skills = crate::svc::skills::with_prerequisites(&tx, &src.skills)
+        .await
+        .map_err(|e| db_failed("skill prerequisites", e))?;
+    for (type_id, level) in &skills {
         let item_id = next_id(&tx).await?;
         insert_entity(
             &tx,
@@ -636,7 +640,7 @@ async fn insert_character(req: &CreateRequest<'_>, db_url: &str) -> Result<i32, 
         "CreateCharacter({name:?}): id {char_id}, corp {}, station {}, {} skills, ship {}",
         src.corporation_id,
         src.station_id,
-        src.skills.len(),
+        skills.len(),
         src.ship_type_id
     );
     Ok(char_id)

@@ -110,6 +110,12 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     svc::medical::ensure_grades(&mut client).await.map_err(|e| format!("preparing medical clone grades: {e}"))?;
+    svc::skills::ensure_training(&client).await.map_err(|e| format!("preparing skill training: {}", logging::chain(&e)))?;
+    match svc::skills::grant_missing_prerequisites(&client).await {
+        Ok(0) => {}
+        Ok(n) => info!("skills: gave pilots {n} prerequisite skill level(s) they were missing"),
+        Err(e) => tracing::warn!("skills: granting missing prerequisites: {}", logging::chain(&e)),
+    }
     market_seed::ensure(&mut client).await.map_err(|e| format!("seeding the market: {}", logging::chain(&e)))?;
     svc::moves::ensure_capital_storage(&client).await.map_err(|e| format!("preparing capital hangars: {}", logging::chain(&e)))?;
     svc::starbase::ensure_sovereignty(&client).await.map_err(|e| format!("preparing sovereignty: {}", logging::chain(&e)))?;
@@ -164,6 +170,7 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(losses::fix_drone_attackers(server.db_url.clone()));
     tokio::spawn(svc::missions::run_bot_escrows(Arc::clone(&server)));
     tokio::spawn(bot_market::run(Arc::clone(&server)));
+    tokio::spawn(svc::skills::run_training(Arc::clone(&server)));
     let listener = TcpListener::bind(&config.bind).await?;
     info!("listening on {} as node {}", config.bind, config.node_id);
 

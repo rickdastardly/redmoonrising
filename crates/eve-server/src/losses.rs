@@ -565,7 +565,7 @@ async fn lose_skill_points(txn: &ItemTxn<'_>, char_id: i64) -> Result<Option<(St
                  FROM entity e
                  JOIN "invTypes" t ON t."typeID" = e."typeID"
                  JOIN "dgmTypeAttributes" a ON a."typeID" = e."typeID" AND a."attributeID" = $3
-                WHERE e."ownerID" = $1 AND t."groupID" = $2
+                WHERE e."ownerID" = $1 AND e."locationID" = $1 AND t."groupID" = $2
                 ORDER BY 1 DESC LIMIT 1"#,
             &[&(char_id as i32), &GROUP_CLONE, &attr::SKILL_POINTS_SAVED],
         )
