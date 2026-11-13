@@ -358,6 +358,14 @@ impl Config {
 fn read(path: &Path) -> Result<(File, String), String> {
     match std::fs::read_to_string(path) {
         Ok(text) => {
+            if let Some(upgraded) = upgrade_untouched_defaults(&text) {
+                let file = parse(&upgraded).map_err(|e| format!("{}: {e}", path.display()))?;
+                let note = match std::fs::write(path, &upgraded) {
+                    Ok(()) => format!("config from {} (unchanged defaults: now 100,000 bots, accounts made at first login, dashboard bot controls on)", path.display()),
+                    Err(e) => format!("config from {} (cannot write the new defaults back: {e}; using them anyway)", path.display()),
+                };
+                return Ok((file, note));
+            }
             let file = parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
             Ok((file, format!("config from {}", path.display())))
         }
@@ -376,6 +384,51 @@ fn read(path: &Path) -> Result<(File, String), String> {
 /// The file written where there is none: every setting at its default,
 /// each explained.
 const DEFAULT_FILE: &str = include_str!("rmr.default.yml");
+
+/// Defaults written by earlier versions, which had no bots, no account
+/// auto-creation and no dashboard bot controls.
+const OLD_DEFAULT_FILES: [&str; 2] = [include_str!("old_defaults/2026-11-12.yml"), include_str!("old_defaults/2026-11-13.yml")];
+
+/// A config file still exactly as an earlier version wrote it (bar the
+/// account passwords the server sealed) was never chosen by anyone: it gets
+/// today's defaults for the settings that changed. Anything edited by hand
+/// or from the dashboard is left alone.
+fn upgrade_untouched_defaults(text: &str) -> Option<String> {
+    fn shape(text: &str) -> Vec<String> {
+        text.lines()
+            .map(|l| {
+                let l = l.trim_end_matches('\r');
+                let t = l.trim_start().trim_start_matches('-').trim_start();
+                if t.starts_with("password:") || t.starts_with("passwordHash:") {
+                    "<password>".to_string()
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect()
+    }
+    let mine = shape(text);
+    if !OLD_DEFAULT_FILES.iter().any(|old| shape(old) == mine) {
+        return None;
+    }
+    let crlf = text.contains("\r\n");
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim_end_matches('\r');
+        out.push(match line {
+            "  autoCreateAccounts: false" => "  autoCreateAccounts: true".to_string(),
+            "  count: 0" => "  count: 100000".to_string(),
+            "  dashboardControls: false" => "  dashboardControls: true".to_string(),
+            other => other.to_string(),
+        });
+    }
+    let eol = if crlf { "\r\n" } else { "\n" };
+    let mut joined = out.join(eol);
+    if text.ends_with('\n') {
+        joined.push_str(eol);
+    }
+    (joined != text).then_some(joined)
+}
 
 /// An empty file, or one all comments, is every default.
 fn parse(text: &str) -> Result<File, serde_yaml_ng::Error> {
@@ -553,6 +606,23 @@ pub fn auto_create_accounts() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_untouched_old_default_file_gets_the_new_defaults() {
+        for old in OLD_DEFAULT_FILES {
+            let sealed = old.replace("password: testpass", "passwordHash: \"pbkdf2-sha256$600000$ab$cd\"").replace('\n', "\r\n");
+            let up = upgrade_untouched_defaults(&sealed).expect("upgraded");
+            let file = parse(&up).unwrap();
+            assert_eq!(file.bots.count, 100_000);
+            assert!(file.server.auto_create_accounts);
+            assert!(file.bots.dashboard_controls);
+            assert!(up.contains("passwordHash: \"pbkdf2-sha256$600000$ab$cd\"\r\n"));
+            // Anything chosen by hand stays as it is.
+            assert!(upgrade_untouched_defaults(&old.replace("  count: 0", "  count: 500")).is_none());
+            assert!(upgrade_untouched_defaults(&format!("{old}# mine\n")).is_none());
+        }
+        assert!(upgrade_untouched_defaults(DEFAULT_FILE).is_none());
+    }
 
     #[test]
     fn dashboard_staff_roles_have_distinct_native_chat_colours() {
