@@ -2,6 +2,29 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Skill training, skill prerequisites, fitting requirements and clones
+
+*2026-11-13 14:53 UTC*
+
+### Skill training
+
+- **Skills train.** Starting a skill now begins real training: it finishes at the time shown, whether you are logged in or not, and the skill goes up a level. Starting a different skill, or stopping, keeps the skill points earned so far.
+- A skill whose prerequisites you do not have cannot be started; the message says which skills and levels you need.
+- Training speed comes from your attributes: the skill's primary attribute plus half its secondary, with implants and learning skills counted.
+
+### Prerequisites
+
+- **New pilots get the skills their starting skills need**, such as Gunnery for a turret skill.
+- Pilots made before this get any prerequisite skills they are missing the next time the server starts.
+
+### Fitting
+
+- **Modules need their skills.** A module cannot be fitted unless you have its required skills; the message names the ones you are missing.
+
+### Clones
+
+- **A clone bought as an item is used up** when it becomes your clone, instead of staying in your hangar. Only the clone you have installed counts for the skill points you keep.
+
 ## Selling to buy orders, bot buy orders, account creation and a calmer Start.bat
 
 *2026-11-13 14:44 UTC*
