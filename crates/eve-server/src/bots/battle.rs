@@ -587,7 +587,7 @@ fn reinforce(f: &mut Fight, system: i32, world: &World, bots: &mut [Bot], presen
             }
             enlist(bots, presence, i, system, rally, clock);
             if let Some((titan, at)) = bridge {
-                presence.jump_in(i, at + scatter(i, 8_000.0), titan);
+                presence.jump_drive_in(i, at + scatter(i, 8_000.0), titan);
                 bridged += 1;
             }
             side.on_grid.push(i);
@@ -614,7 +614,7 @@ fn reinforce(f: &mut Fight, system: i32, world: &World, bots: &mut [Bot], presen
                 continue;
             }
             enlist(bots, presence, i, system, rally, clock);
-            presence.jump_in(i, at + scatter(i, 10_000.0), beacon);
+            presence.jump_drive_in(i, at + scatter(i, 10_000.0), beacon);
             side.on_grid.push(i);
             report.touched.push(i);
             jumped.push(side.assigned(i).map_or("ship", |a| a.class.name(1)));

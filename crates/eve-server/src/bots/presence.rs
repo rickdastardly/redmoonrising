@@ -34,6 +34,11 @@ use crate::world::{World, WorldState};
 /// The most bots shown in one system at once, unless configured otherwise.
 #[cfg(test)]
 pub const PER_SYSTEM: usize = 120;
+/// The effect a ship arriving by jump drive shows: the bright flash and the
+/// streaks trailing from it. This client's data does not name it; this is
+/// the name later clients used, under trial (a client that lacks it shows
+/// nothing, or reports an error in the server log).
+const JUMP_DRIVE_IN: &str = "effects.JumpDriveIn";
 /// A siege fleet warps to its rally point from further off than this.
 const RALLY_WARP: f64 = 150_000.0;
 const UNDOCK_SHIP_CLEARANCE: f64 = 100.0;
@@ -105,6 +110,9 @@ pub struct Presence {
     /// gate: where they appear, and the cynosural field or titan they come
     /// out at.
     jump_in: HashMap<u32, (Vec3, i64)>,
+    /// Of those, the ones coming by jump drive (to a cyno, or through a
+    /// titan's bridge), who arrive with the jump drive's effect.
+    by_drive: HashSet<u32>,
     /// Hired wingmen, and the player each flies with (`hire`).
     escort: HashMap<u32, i64>,
     /// Bots hunting a player (`relations`): they go for them on sight.
@@ -161,6 +169,7 @@ impl Presence {
             rally: HashMap::new(),
             undock: HashMap::new(),
             jump_in: HashMap::new(),
+            by_drive: HashSet::new(),
             escort: HashMap::new(),
             hunts: HashMap::new(),
             raiders: HashSet::new(),
@@ -252,9 +261,17 @@ impl Presence {
         self.jump_in.insert(i, (at, beacon));
     }
 
+    /// As `jump_in`, by jump drive: a capital to a cynosural field, or a
+    /// ship through a titan's bridge. It arrives with JUMP_DRIVE_IN.
+    pub fn jump_drive_in(&mut self, i: u32, at: Vec3, beacon: i64) {
+        self.jump_in(i, at, beacon);
+        self.by_drive.insert(i);
+    }
+
     /// Takes a bot out of its siege fleet.
     pub fn dismiss(&mut self, i: u32) {
         self.jump_in.remove(&i);
+        self.by_drive.remove(&i);
         self.undock.remove(&i);
         self.rally.remove(&i);
     }
@@ -767,7 +784,13 @@ impl Presence {
         }
         if let Some(gate) = gate {
             let tick = w.parks.get(&system).map_or(0, |p| p.tick);
-            space::broadcast(w, system, None, vec![space::special_fx(tick, ship_id, Some(gate), "effects.JumpIn")]);
+            let fx = if self.by_drive.remove(&i) {
+                tracing::debug!("bots: ship {ship_id} arrives by jump drive in {system} ({JUMP_DRIVE_IN})");
+                space::special_fx(tick, ship_id, None, JUMP_DRIVE_IN)
+            } else {
+                space::special_fx(tick, ship_id, Some(gate), "effects.JumpIn")
+            };
+            space::broadcast(w, system, None, vec![fx]);
         }
         self.shown.insert(i, (bot.system, ship_id));
     }

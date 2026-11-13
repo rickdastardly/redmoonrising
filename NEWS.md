@@ -2,6 +2,13 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Capitals arrive at a cyno with the jump drive's flash
+
+*2026-11-13 18:58 UTC*
+
+- **Capitals jumping to a cynosural field, and ships coming through a titan's bridge, now arrive with the jump drive's own effect** (the bright flash with streaks trailing from it) instead of the stargate flash.
+- This one is on trial: if you see no flash when the capitals appear, or the server log shows a client error about it, tell the server's owner so it can be put right.
+
 ## Start a capital battle from the dashboard
 
 *2026-11-13 18:42 UTC*
