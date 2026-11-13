@@ -81,11 +81,10 @@ pub async fn beyonce(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         }
         "GetGangState" => Value::None,
         "GetRelativity" => relativity(ctx, call),
-        // The scanner service expects a mapping even when no probes are out.
-        "GetScans" => Value::Dict(vec![
-            (Value::bytes("probes"), Value::List(Vec::new())),
-            (Value::bytes("results"), Value::List(Vec::new())),
-        ]),
+        // Scanner probes and their analyses (`exploration`).
+        "GetScans" => crate::exploration::get_scans(ctx),
+        "CombineScans" => crate::exploration::combine(ctx, call).await,
+        "GiveProbe" => crate::exploration::give(ctx, call),
         "ConeScan" => cone_scan(ctx, call).await,
         method if is_movement(method) => return Some(movement(ctx, call).await),
         _ => return None,
@@ -129,7 +128,7 @@ async fn cone_scan(ctx: &Ctx<'_>, call: &Call) -> Value {
         for r in park.rocks.values() { consider(r.id, r.type_id, None, &r.name, r.pos); }
         for c in park.cans.values() { consider(c.id, c.type_id, None, &c.name, c.pos); }
         for s in park.structures.values() { consider(s.id, s.type_id, Some(s.group_id), &s.name, s.pos); }
-        for s in park.sites.values() { consider(s.id, crate::sites::TYPE_BEACON, None, &s.name, s.pos); }
+        for s in park.sites.values() { consider(s.id, s.type_id, None, &s.name, s.pos); }
         hits
     };
 
@@ -1015,6 +1014,9 @@ async fn warp_target(ctx: &Ctx<'_>, kind: &str, id: i64) -> Option<(Vec3, f64, i
     let point = |r: &tokio_postgres::Row, i: usize| {
         Some(Vec3::new(float(r, i)?, float(r, i + 1)?, float(r, i + 2)?))
     };
+    if kind == "scan" {
+        return crate::exploration::warp_target(ctx, id).await;
+    }
     match kind {
         "item" => {
             if let Some(ball) = ctx.world.lock().parks.get(&ctx.session.solar_system_id?).and_then(|p| {
@@ -1039,7 +1041,11 @@ async fn warp_target(ctx: &Ctx<'_>, kind: &str, id: i64) -> Option<(Vec3, f64, i
             // names its system, whose map row is in galaxy coordinates, so use its own XYZ.
             match point(&r, 3) {
                 Some(at) => Some((at, float(&r, 6).unwrap_or(0.0), int(&r, 7).unwrap_or(0))),
-                None => Some((point(&r, 0)?, 0.0, 0)),
+                None => {
+                    let at = point(&r, 0)?;
+                    crate::exploration::open_near(ctx, at).await;
+                    Some((at, 0.0, 0))
+                }
             }
         }
         "char" => {

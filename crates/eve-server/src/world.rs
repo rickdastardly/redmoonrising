@@ -142,6 +142,13 @@ pub struct SiegeView {
     pub starts: i64,
     /// Ships still fighting on each side, once it is being fought.
     pub fleets: Option<(usize, usize)>,
+    /// Once it is being fought: how big a fight, what each side brought and
+    /// has lost, their allies, and whether players can see it.
+    pub stakes: Option<String>,
+    pub brought: (u32, u32),
+    pub lost: (u32, u32),
+    pub allies: (Vec<String>, Vec<String>),
+    pub seen: bool,
 }
 
 /// A bot as a Local channel lists it.
@@ -279,6 +286,16 @@ impl WorldState {
     /// Clients whose session holds every bit of `role`.
     pub fn with_role(&self, role: i64) -> Vec<i64> {
         self.clients.iter().filter(|(_, c)| c.presence.is_some_and(|p| p.role & role == role)).map(|(id, _)| *id).collect()
+    }
+
+    /// The bots online now that `keep` picks, as Local lists them.
+    pub fn online_bots(&self, keep: impl Fn(&LocalBot) -> bool) -> Vec<LocalBot> {
+        self.bot_roster
+            .iter()
+            .enumerate()
+            .filter(|(i, b)| self.bot_online.get(*i).copied().unwrap_or(false) && keep(b))
+            .map(|(_, b)| b.clone())
+            .collect()
     }
 
     /// Where `char_id` is, if online.
@@ -492,6 +509,30 @@ pub fn local_system(channel_id: &Value) -> Option<i64> {
         [key, id] if key.as_bytes() == Some(b"solarsystemid2".as_slice()) => id.as_i64(),
         _ => None,
     }
+}
+
+/// A corporation or alliance channel, `(('corpid', X),)` or
+/// `(('allianceid', X),)`: which, and whose.
+pub fn group_channel(channel_id: &Value) -> Option<(GroupChannel, i64)> {
+    let [only] = channel_id.seq()? else { return None };
+    let pair = only.seq()?;
+    let [key, id] = pair else { return None };
+    let key = match key {
+        Value::Unicode(k) => k.as_bytes().to_vec(),
+        other => other.as_bytes()?.to_vec(),
+    };
+    let kind = match key.as_slice() {
+        b"corpid" => GroupChannel::Corporation,
+        b"allianceid" => GroupChannel::Alliance,
+        _ => return None,
+    };
+    Some((kind, id.as_i64()?))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupChannel {
+    Corporation,
+    Alliance,
 }
 
 /// A chat channel's identity as a map key. Channel IDs are ints for ordinary

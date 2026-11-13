@@ -94,6 +94,11 @@ pub struct Politics {
     pub unseen_kills: Vec<(u32, u32, i32, i32)>,
     /// How fast the bots' clock runs.
     pub speed: f64,
+    /// Systems each alliance has claiming towers in (`sov::upkeep`).
+    pub held: HashMap<i32, u32>,
+    /// Player alliances whose bot corporations hold space for them, and
+    /// their home region.
+    pub player_sov: HashMap<i32, i32>,
 }
 
 impl Politics {
@@ -139,6 +144,8 @@ impl Politics {
             hour: 0.0,
             unseen_kills: Vec::new(),
             speed: 1.0,
+            held: HashMap::new(),
+            player_sov: HashMap::new(),
         }
     }
 
@@ -676,7 +683,14 @@ pub async fn tick(p: &mut Politics, db: &Client, bots: &[Bot], ids: &mut [Identi
             let i = free[rng.below(free.len())];
             let want = if combat(bots[i].role) { KIND_COMBAT_CORP } else { KIND_INDUSTRIAL_CORP };
             let fitting: Vec<i32> = corps.iter().filter(|(_, k)| *k == want).map(|(id, _)| *id).collect();
-            let Some(&corp) = fitting.get(rng.below(fitting.len().max(1))) else { continue };
+            // The more space a corporation's alliance holds, the more it draws.
+            let weight = |c: &i32| 1.0 + p.corps.get(c).and_then(|c| c.alliance).and_then(|a| p.held.get(&a)).copied().unwrap_or(0) as f64 / 2.0;
+            let total: f64 = fitting.iter().map(weight).sum();
+            let mut roll = rng.unit() * total;
+            let Some(&corp) = fitting.iter().find(|c| {
+                roll -= weight(*c);
+                roll <= 0.0
+            }).or(fitting.last()) else { continue };
             who.push(bots[i].id);
             into.push(corp);
             ids[i].corp = corp;
@@ -692,7 +706,10 @@ pub async fn tick(p: &mut Politics, db: &Client, bots: &[Bot], ids: &mut [Identi
 
 /// Wars until each null-sec alliance has about one, and pirates their prey.
 async fn start_wars(p: &mut Politics, db: &Client, rng: &mut Rng, clock: u32, speed: f64) -> Result<(), tokio_postgres::Error> {
-    let null: Vec<(i32, Option<i32>)> = p.alliances.iter().filter(|(_, a)| a.kind == KIND_NULL_ALLIANCE).map(|(id, a)| (*id, a.region)).collect();
+    let mut null: Vec<(i32, Option<i32>)> = p.alliances.iter().filter(|(_, a)| a.kind == KIND_NULL_ALLIANCE).map(|(id, a)| (*id, a.region)).collect();
+    // Player alliances whose bots hold space are neighbours like any other.
+    null.extend(p.player_sov.iter().map(|(id, region)| (*id, Some(*region))));
+    null.sort_unstable();
     let pirates: Vec<i32> = p.alliances.iter().filter(|(_, a)| a.kind == KIND_PIRATE_ALLIANCE).map(|(id, _)| *id).collect();
     let others: Vec<i32> = p.alliances.keys().copied().filter(|a| !pirates.contains(a)).collect();
     let target = null.len() / 2 + pirates.len() / 2;

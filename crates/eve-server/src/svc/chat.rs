@@ -5,7 +5,7 @@ use tracing::{error, warn};
 use crate::services::{Call, Ctx, Outcome};
 use crate::session::{Session, ROLE_LOGIN, ROLE_PLAYER};
 use crate::svc::rows::{int, row, rowset, text};
-use crate::world::{local_system, LocalBot, WorldState};
+use crate::world::{group_channel, local_system, GroupChannel, LocalBot, WorldState};
 
 const OWNER_SYSTEM: i32 = 1;
 
@@ -439,10 +439,20 @@ pub fn announce(
 }
 
 pub(crate) fn channel_population(world: &WorldState, channel: &Value, members: usize) -> usize {
+    if let Some((kind, id)) = group_channel(channel) {
+        let bots = world.online_bots(|b| match kind {
+            GroupChannel::Corporation => b.corp_id == id,
+            GroupChannel::Alliance => b.alliance_id == Some(id),
+        });
+        return members.max(1) + bots.len();
+    }
     local_system(channel).map_or(members, |system| {
         world.local_players(system).len() + world.bot_local.get(&system).map_or(0, Vec::len)
     })
 }
+
+/// The most members a corporation or alliance channel lists.
+const GROUP_LISTED: usize = 3_000;
 
 pub fn announce_counted(
     world: &WorldState,
@@ -677,6 +687,11 @@ async fn members_for(ctx: &Ctx<'_>, channel_id: i64, me: Option<&Vec<Value>>) ->
 /// system, including characters docked or still opening their chat window.
 async fn local_members(ctx: &Ctx<'_>, channel_id: &Value, me: Option<&Vec<Value>>) -> Option<Value> {
     let my_id = ctx.session.char_id.unwrap_or(0);
+    // A corporation's or alliance's channel: everyone in it who is online,
+    // players and bots alike.
+    if let Some((kind, id)) = group_channel(channel_id) {
+        return group_members(ctx, kind, id, me).await;
+    }
     let (players, bots): (Vec<(i64, i64)>, Vec<LocalBot>) = {
         let world = ctx.world.lock();
         let system = local_system(channel_id);
@@ -712,6 +727,57 @@ async fn local_members(ctx: &Ctx<'_>, channel_id: &Value, me: Option<&Vec<Value>
         }
     }
     for b in bots.into_iter().filter(|b| b.char_id != my_id) {
+        lines.push(member_line(b.char_id, Some(b.corp_id), b.alliance_id, ROLE_LOGIN | ROLE_PLAYER, b.name, b.type_id));
+    }
+    Some(rowset(MEMBER_HEADER, lines))
+}
+
+/// The members of a corporation's or alliance's channel: its players
+/// online and its bots online, with their corporations and alliances (which
+/// give them their standing icons).
+async fn group_members(ctx: &Ctx<'_>, kind: GroupChannel, id: i64, me: Option<&Vec<Value>>) -> Option<Value> {
+    let my_id = ctx.session.char_id.unwrap_or(0);
+    // The corporations in it, to find its players by.
+    let corps: Vec<i64> = match kind {
+        GroupChannel::Corporation => vec![id],
+        GroupChannel::Alliance => match ctx.db.query(r#"SELECT "corporationID" FROM "corporation" WHERE "allianceID" = $1"#, &[&(id as i32)]).await {
+            Ok(rows) => rows.iter().filter_map(|r| int(r, 0)).collect(),
+            Err(e) => {
+                error!("alliance channel {id}: {err}", err = crate::logging::chain(&e));
+                Vec::new()
+            }
+        },
+    };
+    let (players, bots): (Vec<(i64, i64)>, Vec<LocalBot>) = {
+        let world = ctx.world.lock();
+        let players = world.players().into_iter().filter(|p| p.char_id != my_id && corps.contains(&p.corp_id)).map(|p| (p.char_id, p.role)).collect();
+        let bots = world.online_bots(|b| {
+            b.char_id != my_id
+                && match kind {
+                    GroupChannel::Corporation => b.corp_id == id,
+                    GroupChannel::Alliance => b.alliance_id == Some(id),
+                }
+        });
+        (players, bots)
+    };
+    let mut lines: Vec<Value> = me.map(|m| vec![Value::List(m.clone())]).unwrap_or_default();
+    if !players.is_empty() {
+        let ids: Vec<i32> = players.iter().map(|(c, _)| *c as i32).collect();
+        let sql = r#"SELECT c."characterID", c."corporationID", co."allianceID", c."characterName", c."typeID"
+                       FROM "character_" c LEFT JOIN "corporation" co ON co."corporationID" = c."corporationID"
+                      WHERE c."characterID" = ANY($1)"#;
+        match ctx.db.query(sql, &[&ids]).await {
+            Ok(rows) => {
+                for r in &rows {
+                    let char_id = int(r, 0).unwrap_or(0);
+                    let role = players.iter().find(|(c, _)| *c == char_id).map_or(ROLE_LOGIN | ROLE_PLAYER, |(_, role)| *role);
+                    lines.push(member_line(char_id, int(r, 1), nonzero(int(r, 2)), role, text(r, 3).unwrap_or_default(), int(r, 4).unwrap_or(0)));
+                }
+            }
+            Err(e) => error!("channel members of {id}: {err}", err = crate::logging::chain(&e)),
+        }
+    }
+    for b in bots.into_iter().take(GROUP_LISTED.saturating_sub(lines.len())) {
         lines.push(member_line(b.char_id, Some(b.corp_id), b.alliance_id, ROLE_LOGIN | ROLE_PLAYER, b.name, b.type_id));
     }
     Some(rowset(MEMBER_HEADER, lines))
@@ -794,14 +860,27 @@ async fn acl_for(ctx: &Ctx<'_>, channel_id: i64, default_mode: i64) -> Value {
         Err(e) => error!("LSC acl of {channel_id}: {err}", err = crate::logging::chain(&e)),
     }
     // People and Places' Agents tab reads NPC buddies from this personal
-    // channel ACL. Include the agents who currently have work for this pilot.
+    // channel ACL. Include the agents who currently have work for this pilot,
+    // and every mission agent who would work with them.
     if ctx.session.char_id == Some(channel_id) {
         let sql = r#"SELECT DISTINCT "agentID" FROM "agtCharMissions"
                       WHERE "characterID" = $1 AND "state" IN (0, 2, 3)"#;
-        match ctx.db.query(sql, &[&(channel_id as i32)]).await {
-            Ok(agents) => {
-                for agent in agents {
-                    let Some(id) = int(&agent, 0) else { continue };
+        let mut agents: Vec<i64> = match ctx.db.query(sql, &[&(channel_id as i32)]).await {
+            Ok(rows) => rows.iter().filter_map(|r| int(r, 0)).collect(),
+            Err(e) => {
+                error!("LSC mission agent contacts of {channel_id}: {err}", err = crate::logging::chain(&e));
+                Vec::new()
+            }
+        };
+        match crate::svc::agent_missions::available_agents(ctx.db, channel_id).await {
+            Ok(more) => agents.extend(more),
+            Err(e) => error!("LSC available agents of {channel_id}: {err}", err = crate::logging::chain(&e)),
+        }
+        let mut seen = std::collections::HashSet::new();
+        agents.retain(|a| seen.insert(*a));
+        {
+            {
+                for id in agents {
                     if lines.iter().any(|line| matches!(line, Value::List(cells) if cells.first() == Some(&Value::Int(id)))) {
                         continue;
                     }
@@ -812,7 +891,6 @@ async fn acl_for(ctx: &Ctx<'_>, channel_id: i64, default_mode: i64) -> Value {
                     ]));
                 }
             }
-            Err(e) => error!("LSC mission agent contacts of {channel_id}: {err}", err = crate::logging::chain(&e)),
         }
     }
     if !has_default {

@@ -22,7 +22,7 @@
 
 use eve_marshal::Value;
 use tokio_postgres::GenericClient;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::ballpark::Vec3;
 use crate::combat::Rng;
@@ -100,6 +100,29 @@ const ENCOUNTERS: &[Encounter] = &[
 
 fn encounter_for(name: &str) -> Option<Encounter> {
     ENCOUNTERS.iter().copied().find(|e| e.name == name)
+}
+
+/// Whose ships an agent's missions send a pilot against: the pirates
+/// raiding its space, rogue drones, mercenaries, Mordu's Legion and the EoM,
+/// and an empire agent's enemy's navy.
+fn mission_factions(agent: &Agent) -> Vec<&'static str> {
+    let mut out = vec![crate::npc::pirate_key(agent.faction, agent.system), "drones", "mercenaries", "mordu", "eom"];
+    out.extend_from_slice(match agent.faction {
+        Some(500001) => &["gallente"][..],
+        // Minmatar agents also send pilots against the Khanid and against
+        // Thukker renegades camping their space.
+        Some(500002) => &["amarr", "ammatar", "khanid", "thukker"][..],
+        Some(500003) => &["minmatar"][..],
+        Some(500004) => &["caldari"][..],
+        _ => &[][..],
+    });
+    out
+}
+
+/// The mission dungeons an agent can hand out at a level.
+fn mission_choices(agent: &Agent, level: usize) -> Vec<std::sync::Arc<crate::dungeons::Dungeon>> {
+    let factions = mission_factions(agent);
+    crate::dungeons::missions(level as u8).into_iter().filter(|d| factions.contains(&d.faction.as_str())).collect()
 }
 
 fn encounter_options(level: usize) -> Vec<Encounter> {
@@ -362,7 +385,7 @@ async fn offer(ctx: &Ctx<'_>, agent: &Agent) -> Option<Mission> {
     let quality = 1.0 + agent.quality as f64 / 50.0;
     let base = REWARD[level - 1] * quality;
     let kind = kind_of(agent.division);
-    let pick = |rng: &mut Rng, names: &[&'static str]| names[rng.below(names.len())];
+    let pick = |rng: &mut Rng, names: &[&'static str]| names[rng.below(names.len())].to_string();
     let (name, type_id, quantity, destination, site, reward, bonus, bonus_hours) = match kind {
         KIND_COURIER => {
             let reach = (level as i64 + 1).min(6);
@@ -401,9 +424,16 @@ async fn offer(ctx: &Ctx<'_>, agent: &Agent) -> Option<Mission> {
             let &(system, _) = systems.get(rng.below(systems.len().max(1)))?;
             let at = site_position(ctx.db, system, &mut rng).await;
             let reward = base * 1.3;
-            let encounters = encounter_options(level);
-            let encounter = encounters.get(rng.below(encounters.len()))?;
-            (encounter.name, 0, 0, system, Some(at), reward, reward * 0.4, 2.0)
+            // A mission from the catalog (dungeons/missions-*.json), or one
+            // of the old reconstructions if the catalog has none for it.
+            let dungeons = mission_choices(agent, level);
+            let name = if dungeons.is_empty() {
+                let encounters = encounter_options(level);
+                encounters.get(rng.below(encounters.len()))?.name.to_string()
+            } else {
+                dungeons[rng.below(dungeons.len())].name.clone()
+            };
+            (name, 0, 0, system, Some(at), reward, reward * 0.4, 2.0)
         }
     };
     let sql = r#"INSERT INTO "agtCharMissions" ("characterID", "agentID", "kind", "state", "name", "typeID", "quantity",
@@ -635,6 +665,28 @@ pub async fn site_cleared(world: &World, db: &tokio_postgres::Client, mission_id
 
 // ---- standings -------------------------------------------------------------------------------
 
+/// Every mission agent who would work with `me`: the effective standing its
+/// level needs with the agent, its corporation or its faction (`ask`), and
+/// none of the three at -2 or worse. For People and Places' Agents tab.
+pub async fn available_agents(db: &impl GenericClient, me: i64) -> Result<Vec<i64>, tokio_postgres::Error> {
+    let sql = r#"SELECT a."agentID"
+                   FROM "agtAgents" a
+                   LEFT JOIN "crpNPCCorporations" n ON n."corporationID" = a."corporationID"
+                   LEFT JOIN "chrNPCStandings" sa ON sa."characterID" = $1::int AND sa."fromID" = a."agentID"
+                   LEFT JOIN "chrNPCStandings" sc ON sc."characterID" = $1::int AND sc."fromID" = a."corporationID"
+                   LEFT JOIN "chrNPCStandings" sf ON sf."characterID" = $1::int AND sf."fromID" = n."factionID"
+                  WHERE a."agentTypeID"::int = ANY($2::int[])
+                    AND a."level"::int BETWEEN 1 AND 5
+                    AND LEAST(COALESCE(sa."standing", 0), COALESCE(sc."standing", 0), COALESCE(sf."standing", 0))::float8 > -2
+                    AND GREATEST(COALESCE(sa."standing", 0), COALESCE(sc."standing", 0), COALESCE(sf."standing", 0))::float8
+                        >= ($3::float8[])[a."level"::int]
+                  ORDER BY a."agentID""#;
+    let types: Vec<i32> = MISSION_AGENTS.iter().map(|t| *t as i32).collect();
+    let needed: Vec<f64> = STANDING_NEEDED.to_vec();
+    let rows = db.query(sql, &[&(me as i32), &types, &needed]).await?;
+    Ok(rows.iter().filter_map(|r| int(r, 0)).collect())
+}
+
 /// The pilot's standing from the agent, its corporation and its faction.
 async fn standings_toward(db: &impl GenericClient, me: i64, agent: &Agent) -> Vec<f64> {
     let ids: Vec<i32> = [Some(agent.id), Some(agent.corp), agent.faction].into_iter().flatten().map(|i| i as i32).collect();
@@ -835,7 +887,17 @@ pub async fn go_to(ctx: &Ctx<'_>, location_type: &str, number: i64, range: f64, 
 }
 
 async fn open_site(ctx: &Ctx<'_>, m: &Mission, system: i64, at: Vec3) {
-    let level = agent(ctx.db, m.agent_id).await.map_or(1, |a| a.level);
+    let giver = agent(ctx.db, m.agent_id).await;
+    let level = giver.as_ref().map_or(1, |a| a.level);
+    if let Some(a) = &giver {
+        let choices: Vec<_> = mission_choices(a, level).into_iter().filter(|d| d.name == m.name).collect();
+        if !choices.is_empty() {
+            let def = std::sync::Arc::clone(&choices[(m.id.unsigned_abs() as usize) % choices.len()]);
+            if open_dungeon(ctx, m, system, at, def).await {
+                return;
+            }
+        }
+    }
     let empty = {
         let mut w = ctx.world.lock();
         let (nearby, empty) = {
@@ -854,6 +916,11 @@ async fn open_site(ctx: &Ctx<'_>, m: &Mission, system: i64, at: Vec3) {
             wave: 0,
             waves: encounter_for(&m.name).map_or(1, |e| e.waves),
             security: ENCOUNTER_SECURITY[level - 1],
+            type_id: crate::sites::TYPE_BEACON,
+            dungeon: None,
+            gate: None,
+            part_of: None,
+            size: 0.0,
         };
         let nearby = crate::sites::open(park, site, ENCOUNTER_SECURITY[level - 1], crate::combat::now_ms());
         let empty = park.sites.get(&site_id).is_some_and(|s| s.rats.is_empty());
@@ -867,6 +934,32 @@ async fn open_site(ctx: &Ctx<'_>, m: &Mission, system: i64, at: Vec3) {
         // pilot with an encounter that can never be completed.
         site_cleared(ctx.world, ctx.db, m.id, ctx.session.char_id.unwrap_or(0)).await;
     }
+}
+
+/// A catalog mission's site: its dungeon, rooms, gates and waves. False if
+/// its ships could not be found (the old encounter opens instead).
+async fn open_dungeon(ctx: &Ctx<'_>, m: &Mission, system: i64, at: Vec3, def: std::sync::Arc<crate::dungeons::Dungeon>) -> bool {
+    let rats = match crate::npc::load_dungeon_rats(ctx.db, &def.faction, &def.ship_names(), &def.name_classes()).await {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            warn!("mission {}: no ships for {} ({})", m.id, def.id, def.faction);
+            return false;
+        }
+        Err(e) => {
+            warn!("mission {}: {}", m.id, crate::logging::chain(&e));
+            return false;
+        }
+    };
+    let char_id = ctx.session.char_id.unwrap_or(0);
+    let mut w = ctx.world.lock();
+    let Some(park) = w.parks.get_mut(&system) else { return false };
+    if park.sites.values().any(|s| s.mission_id == m.id) {
+        return true;
+    }
+    let (site, nearby) = crate::dungeons::open(park, std::sync::Arc::clone(&def), std::sync::Arc::new(rats), at, char_id, m.id, crate::combat::now_ms());
+    crate::svc::space::notify_targeted_updates(&w, nearby);
+    info!("mission {} ({}) opened as dungeon {} at site {site}", m.id, m.name, def.id);
+    true
 }
 
 // ---- names and amounts -----------------------------------------------------------------------

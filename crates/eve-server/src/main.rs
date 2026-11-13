@@ -9,6 +9,8 @@ mod conn;
 mod db;
 mod destiny;
 mod drones;
+mod dungeons;
+mod exploration;
 mod dogma;
 mod exceptions;
 mod fight;
@@ -107,6 +109,10 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     losses::ensure_kill_items(&client).await.map_err(|e| format!("preparing kill item records: {}", logging::chain(&e)))?;
     web::ensure_storage(&client).await.map_err(|e| format!("preparing dashboard news and downtime: {}", logging::chain(&e)))?;
     news::sync_notes(&client).await.map_err(|e| format!("loading patch notes: {}", logging::chain(&e)))?;
+    dungeons::load_catalog();
+    if let Err(e) = dungeons::load_loot(&client).await {
+        tracing::warn!("DED loot not loaded: {}", logging::chain(&e));
+    }
     svc::alliance::ensure_logo_storage(&client).await.map_err(|e| format!("preparing alliance logos: {}", logging::chain(&e)))?;
 
     let started = Instant::now();

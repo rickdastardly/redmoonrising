@@ -1,0 +1,2104 @@
+# Level 4 security missions, from EVE-Survival mission reports (eve-survival.org).
+# Format as in missions-l1.txt.
+
+= m4-blockade-an | The Blockade | angel | 4
+! Kill the trigger battleships
+> Blockade | open | 0
+  1 Starbase Stasis Tower @ s
+  4 Gistior Trasher @ d
+  4 Gist Throne @ bs
+  * 1 Gist Malakim/Gist Nephilim @ bs
+^ killed Gist Malakim/Gist Nephilim
+  2 Arch Gistii Ruffian/Arch Gistii Nomad @ f
+  2 Gistior Defacer @ d
+  5 Arch Gistum Phalanx/Arch Gistum Smasher @ c
+  2 Gistatis Praefectus @ bc
+  3 Gist War General @ bs
+  * 1 Gist Nephilim/Gist Malakim @ bs
+^ killed Gist Nephilim/Gist Malakim
+  1 Gistior Seizer @ d
+  2 Arch Gistii Ruffian @ f
+  3 Gist War General/Gist Throne @ bs
+  * 1 Gist Malakim/Gist Nephilim @ bs
+^ killed Gist Malakim/Gist Nephilim
+  3 Gistior Shatterer @ d
+  3 Arch Gistum Smasher @ c
+  3 Gistatis Legionnaire @ bc
+  3 Gist Warlord @ bs
+  * 1 Gist Malakim @ bs
+^ killed Gist Malakim
+  3 Arch Gistii Outlaw @ f
+  5 Gist Throne/Gist Malakim/Gist Seraphim @ bs
+
+= m4-blockade-br | The Blockade | blood | 4
+! Kill the final Corpus Pope
+> Blockade | open | 0
+  1 Starbase Stasis Tower @ s
+  4 Corpior Friar/Corpior Devoter @ d
+  * 5 Corpus Apostle/Corpus Oracle/Corpus Monsignor/Corpus Harbinger @ bs
+^ killed Corpus Apostle/Corpus Oracle/Corpus Monsignor/Corpus Harbinger
+  4 Elder Corpum Priest/Elder Corpum Sage/Elder Corpum Arch Templar @ c
+  * 5 Corpus Apostle/Corpus Oracle/Corpus Harbinger/Corpus Monsignor @ bs
+  3 Corpior Friar/Corpior Visionary/Corpior Devoter @ d
+  3 Elder Corpum Dark Priest/Elder Corpum Shadow Sage @ c
+  3 Elder Corpii Diviner/Elder Corpii Raider/Elder Corpii Reaver @ f
+  3 Corpior Shade/Corpior Fanatic @ bc
+^ killed Corpus Apostle/Corpus Oracle/Corpus Harbinger/Corpus Monsignor
+  4 Elder Corpii Seeker/Elder Corpii Collector @ f
+  * 5 Corpus Cardinal/Corpus Harbinger/Corpus Monsignor @ bs
+  2 Corpior Friar/Corpior Devoter/Corpior Visionary @ d
+  2 Corpus Apostle/Corpus Oracle @ bs
+^ killed Corpus Cardinal/Corpus Harbinger/Corpus Monsignor
+  3 Corpior Friar/Corpior Visionary/Corpior Cleric/Corpior Converter @ d
+  3 Elder Corpum Revenant/Elder Corpum Arch Templar @ c
+  * 1 Corpus Harbinger/Corpus Monsignor @ bs
+  4 Corpior Bishop/Corpior Shade/Corpior Seer/Corpior Fanatic/Corpior Phantom @ bc
+  4 Corpus Cardinal/Corpus Monsignor @ bs
+^ killed Corpus Harbinger/Corpus Monsignor
+  4 Elder Corpii Follower/Elder Corpii Worshipper/Elder Corpii Herald/Elder Corpii Upholder @ f
+  4 Corpus Cardinal/Corpus Monsignor @ bs
+  * 1 Corpus Pope @ bs
+
+= m4-blockade-sa | The Blockade | sansha | 4
+! Kill the trigger battleships, then the Centus Tyrant
+> Blockade | open | 0
+  1 Starbase Stasis Tower @ s
+  * 5 Centus Mutant Lord/Centus Savage Lord/Centus Beast Lord/Centus Overlord @ bs
+  4 Centior Abomination/Centior Monster @ d
+^ killed Centus Mutant Lord/Centus Savage Lord/Centus Beast Lord/Centus Overlord
+  3 Centum Loyal Beast/Centum Loyal Juggernaut/Centum Loyal Execrator @ c
+  3 Centatis Wraith/Centatis Devil @ bc
+  3 Centior Cannibal/Centior Misshape @ d
+  3 Centum Loyal Fiend/Centum Loyal Hellhound @ c
+  * 5 Centus Savage Lord/Centus Mutant Lord/Centus Beast Lord/Centus Overlord @ bs
+^ killed Centus Savage Lord/Centus Mutant Lord/Centus Beast Lord/Centus Overlord
+  2 Centior Horror/Centior Abomination @ d
+  2 Centus Mutant Lord/Centus Savage Lord @ bs
+  2 Centii Loyal Slavehunter/Centii Loyal Savage @ f
+  * 3 Centus Mutant Lord/Centus Overlord/Centus Savage Lord/Centus Beast Lord @ bs
+^ killed Centus Mutant Lord/Centus Overlord/Centus Savage Lord/Centus Beast Lord
+  3 Centii Loyal Savage/Centii Loyal Slavehunter @ f
+  3 Centum Loyal Execrator/Centum Loyal Slaughterer @ c
+  * 1 Centus Beast Lord/Centus Savage Lord/Centus Overlord @ bs
+  4 Centus Dark Lord/Centus Overlord @ bs
+^ killed Centus Beast Lord/Centus Savage Lord/Centus Overlord
+  4 Centii Loyal Scavenger/Centii Loyal Minion/Centii Loyal Ravener @ f
+  4 Centus Overlord/Centus Dark Lord @ bs
+  * 1 Centus Tyrant @ bs
+
+= m4-blockade-se | The Blockade | serpentis | 4
+! Kill the Core Lord Admiral
+> Blockade | open | 0
+  1 Starbase Stasis Tower @ s
+  4 Corelior Sentinel/Corelior Cannoneer @ d
+  * 5 Core Admiral/Core Vice Admiral/Core Rear Admiral/Core Port Admiral @ bs
+^ killed Core Admiral/Core Vice Admiral/Core Rear Admiral/Core Port Admiral
+  3 Corelior Trooper/Corelior Cannoneer @ d
+  9 Corelum Guardian Chief Watchman/Corelum Guardian Chief Sentinel/Corelum Guardian Chief Infantry @ c
+  3 Corelatis Platoon Leader/Corelatis Captain @ bc
+  * 5 Core Admiral/Core Vice Admiral/Core Port Admiral/Core Rear Admiral @ bs
+^ killed Core Admiral/Core Vice Admiral/Core Port Admiral/Core Rear Admiral
+  2 Coreli Guardian Patroller @ f
+  1 Corelior Sentinel @ d
+  * 4 Core Admiral/Core Vice Admiral/Core Rear Admiral/Core Port Admiral @ bs
+^ killed Core Admiral/Core Vice Admiral/Core Rear Admiral/Core Port Admiral
+  2 Coreli Guardian Patroller @ f
+  2 Corelior Sentinel @ d
+  * 5 Core Admiral/Core Rear Admiral/Core Port Admiral @ bs
+^ killed Core Admiral/Core Rear Admiral/Core Port Admiral
+  2 Coreli Guardian Watchman/Coreli Guardian Patroller @ f
+  2 Corelum Guardian Chief Sentinel/Corelum Guardian Chief Guard @ c
+  5 Core Rear Admiral/Core High Admiral/Core Admiral @ bs
+^ cleared
+  3 Coreli Guardian Watchman/Coreli Guardian Initiate/Coreli Guardian Spy/Coreli Guardian Agent @ f
+  3 Core Admiral/Core High Admiral @ bs
+  * 1 Core Lord Admiral @ bs
+
+= m4-angel-extravaganza | Angel Extravaganza | angel | 4
+! Kill Tiogo Kargaz
+> First Pocket | open | 13
+  2 Angel Viper/Angel Webifier @ f
+  3 Gistatis Praefectus/Gistatis Tribunus @ bc
+  * 3 Gist Commander/Gist General/Gist War General @ bs
+^ killed Gist Commander/Gist General/Gist War General
+  2 Gistatis Praefectus/Gistatis Tribunus @ bc
+  2 Gist General/Gist War General/Gist Warlord @ bs
+^ approach
+  2 Angel Viper/Angel Webifier @ f
+  2 Gist War General/Gist Warlord @ bs
+> Second Pocket | open | 5
+  2 Gistior Seizer @ d
+  2 Gistatis Tribunus/Gistatis Praefectus @ bc
+  * 1 Gist Warlord/Gist Saint @ bs
+^ killed Gist Warlord/Gist Saint
+  2 Gistatis Tribunus @ bc
+  2 Gist Warlord/Gist War General/Gist Saint/Gist Nephilim @ bs
+^ approach
+  2 Angel Viper/Angel Webifier @ f
+  1 Arch Gistum Liquidator @ c
+  2 Gistatis Primus/Gistatis Tribunus @ bc
+  1 Gist Warlord/Gist Saint/Gist Nephilim @ bs
+> Third Pocket | open | 5
+  3 Angel Sentry Gun @ s
+  7 Angel Light Missile Battery @ s
+  2 Angel Heavy Missile Battery @ s
+^ approach
+  1 Gist General/Gist Commander @ bs
+> Fourth Pocket | open | 2
+  3 Angel Viper/Angel Webifier @ f
+  2 Gistatis Praefectus/Gistatis Tribunus @ bc
+  * 2 Gist Warlord/Gist Nephilim/Gist Saint @ bs
+^ killed Gist Warlord/Gist Nephilim/Gist Saint
+  2 Angel Viper/Angel Webifier @ f
+  4 Gist Commander/Gist War General/Gist General/Gist Warlord @ bs
+^ approach
+  2 Angel Viper/Angel Webifier @ f
+  3 Gist Warlord/Gist War General/Gist General @ bs
+^ approach
+  * 1 Garin Kezmonu @ d
+  3 Gistatis Tribunus/Gistatis Praefectus @ bc
+  1 Gist Warlord/Gist Saint @ bs
+> Fifth Pocket | open | 0
+  1 Gistior Seizer @ d
+  2 Gistatis Tribunus/Gistatis Legatus @ bc
+  * 2 Gist War General/Gist General @ bs
+^ killed Gist War General/Gist General
+  2 Gistior Haunter/Gistior Defacer @ d
+  5 Gistatis Primus/Gistatis Tribunus @ bc
+  1 Gist Warlord/Gist Saint @ bs
+^ approach
+  3 Angel Viper/Angel Webifier @ f
+  3 Gist Saint/Gist Warlord @ bs
+^ approach
+  2 Spider Drone II @ s
+  * 1 Tiogo Kargaz @ bs
+
+= m4-guristas-extravaganza | Guristas Extravaganza | guristas | 4
+! Kill all; Aimon Kuzni commands the last pocket
+> First Pocket | open | 20
+  1 Tower Sentry Guristas III @ s
+  1 Tower Sentry Guristas II @ s
+  2 Pithi Plunderer/Pithi Wrecker @ f
+  2 Pithum Silencer/Pithum Ascriber @ c
+> Second Pocket | open | 20
+  2 Pithatis Assassin/Pithatis Death Dealer @ bc
+  1 Pith Destroyer/Pith Exterminator @ bs
+  1 Pithior Supremacist/Pithior Terrorist @ d
+  * 1 Guristas Kyoukan/Guristas Webifier @ f
+^ killed Guristas Kyoukan/Guristas Webifier
+  2 Pithatis Assaulter/Pithatis Enforcer @ bc
+  2 Pith Eliminator/Pith Extinguisher @ bs
+  * 2 Guristas Kyoukan/Guristas Webifier @ f
+^ killed Guristas Kyoukan/Guristas Webifier
+  2 Pith Dismantler/Pith Obliterator @ bs
+  * 1 Guristas Webifier @ f
+^ killed Guristas Webifier
+  2 Pithum Abolisher/Pithum Eraser @ c
+  2 Pith Eradicator @ bs
+  1 Arika Tosch @ bs
+> Third Pocket | open | 20
+  3 Guristas Cruise Missile Battery @ s
+  2 Pithatis Assaulter/Pithatis Enforcer @ bc
+  3 Pith Dismantler/Pith Obliterator @ bs
+  * 1 Guristas Kyoukan/Guristas Webifier @ f
+^ killed Guristas Kyoukan/Guristas Webifier
+  2 Pithatis Enforcer/Pithatis Executor @ bc
+  2 Pith Eradicator/Pith Obliterator @ bs
+  * 2 Guristas Kyoukan/Guristas Webifier @ f
+^ killed Guristas Kyoukan/Guristas Webifier
+  1 Pithatis Enforcer/Pithatis Executor @ bc
+  3 Pith Dismantler/Pith Extinguisher @ bs
+  2 Guristas Kyoukan/Guristas Webifier @ f
+^ approach
+  1 Guristas Webifier @ f
+  2 Pithatis Assaulter/Pithatis Enforcer @ bc
+  * 2 Pith Eliminator/Pith Exterminator/Pith Extinguisher @ bs
+^ killed Pith Eliminator/Pith Exterminator/Pith Extinguisher
+  1 Guristas Kyoukan/Guristas Webifier @ f
+  1 Pithior Terrorist @ d
+  2 Pith Eliminator/Pith Exterminator/Pith Extinguisher @ bs
+> Fourth Pocket | open | 20
+  4 Guristas Heavy Missile Battery @ s
+  3 Pith Eradicator/Pith Obliterator @ bs
+  1 Guristas Emissary @ c
+  * 2 Guristas Kyoukan/Guristas Webifier @ f
+^ killed Guristas Kyoukan/Guristas Webifier
+  1 Guristas Kyoukan/Guristas Webifier @ f
+  2 Pithatis Assassin/Pithatis Death Dealer @ bc
+  2 Pith Extinguisher/Pith Eliminator @ bs
+> Fifth Pocket | open | 0
+  2 Tower Sentry Guristas II @ s
+  1 Guristas Heavy Missile Battery @ s
+  * 2 Guristas Kyoukan/Guristas Webifier @ f
+  4 Pithior Anarchist/Pithior Renegade @ d
+  2 Pithatis Assaulter/Pithatis Enforcer @ bc
+  2 Pith Conquistador/Pith Dismantler/Pith Destroyer/Pith Extinguisher @ bs
+^ killed Guristas Kyoukan/Guristas Webifier
+  4 Dire Pithi Despoiler/Dire Pithi Saboteur @ f
+  3 Pith Conquistador/Pith Destroyer @ bs
+  * 1 Guristas Kyoukan @ f
+^ killed Guristas Kyoukan
+  3 Pith Eradicator/Pith Obliterator @ bs
+  4 Pithior Guerilla/Pithior Supremacist/Pithior Terrorist @ d
+  * 1 Guristas Webifier @ f
+^ attacked Guristas Webifier
+  2 Guristas Kyoukan/Guristas Webifier @ f
+  3 Pithatis Assaulter/Pithatis Death Dealer @ bc
+  3 Pith Eradicator/Pith Obliterator @ bs
+  * 1 Aimon Kuzni @ bs
+
+= m4-serpentis-extravaganza | Serpentis Extravaganza | serpentis | 4
+! Kill the Spider Drones and Krayek Sarpanti
+> First Pocket | locked | 25
+  * 4 Guardian Veteran @ f
+  4 Corelior Soldier/Corelior Trooper @ d
+  * 2 Corelum Chief Sentinel/Corelum Chief Infantry @ c
+  1 Core Port Admiral/Core Commodore @ bs
+  2 Corelatis Platoon Leader @ bc
+  7 Core Baron/Core Commodore @ bs
+  2 Serpentis Personnel Transport @ ?
+^ attacked Guardian Veteran
+  5 Corelum Chief Guard/Corelum Chief Sentinel/Corelum Chief Safeguard @ c
+^ attacked Corelum Chief Sentinel/Corelum Chief Infantry
+  3 Guardian Veteran @ f
+> Second Pocket | locked | 25
+  2 Corelatis Wing Leader/Corelatis Squad Leader @ bc
+  3 Core Baron/Core Commodore @ bs
+  * 2 Guardian Veteran @ f
+  2 Corelior Infantry/Corelior Soldier @ d
+  3 Corelum Chief Spy/Corelum Chief Scout @ c
+  3 Corelatis Platoon Leader/Corelatis Squad Leader @ bc
+  1 Core Port Admiral/Core Rear Admiral @ bs
+^ attacked Corelatis Platoon Leader/Corelatis Squad Leader
+  3 Guardian Veteran @ f
+> Command Post | open | 0
+  4 Corelior Infantry/Corelior Sentinel @ d
+  7 Corelatis Squad Leader/Corelatis Platoon Leader @ bc
+  1 Core Flotilla Admiral/Core Rear Admiral @ bs
+  3 Corelum Chief Defender/Corelum Chief Protector @ c
+  3 Core Rear Admiral/Core Commodore/Core Port Admiral @ bs
+  2 Core Admiral/Core Vice Admiral @ bs
+  2 Serpentis Heavy Missile Battery @ s
+  * 1 Krayek Sarpanti @ bs
+^ attacked Krayek Sarpanti
+  3 Spider Drone I @ s
+  4 Guardian Veteran @ f
+  4 Corelatis Squad Leader/Corelatis Platoon Leader @ bc
+
+= m4-assault-gu | The Assault | guristas | 4
+! Kill the third group in the second pocket
+> Outer Base | open | 25
+  2 Dire Pithi Wrecker/Dire Pithi Plunderer @ f
+  * 4 Pith Dismantler/Pith Obliterator/Pith Destroyer/Pith Eliminator @ bs
+^ attacked Pith Dismantler/Pith Obliterator/Pith Destroyer/Pith Eliminator
+  4 Dire Pithum Inferno/Dire Pithum Mortifier @ c
+  3 Pithatis Assassin/Pithatis Assaulter @ bc
+^ approach
+  3 Pithatis Assassin/Pithatis Enforcer/Pithatis Executor/Pithatis Revolter @ bc
+  3 Pith Conquistador/Pith Eliminator/Pith Exterminator/Pith Destroyer @ bs
+> Starbase | locked | 0
+  2 Dire Pithi Invader/Dire Pithi Infiltrator @ f
+  2 Dire Pithum Abolisher/Dire Pithum Eraser @ c
+  3 Pith Dismantler/Pith Extinguisher @ bs
+^ approach
+  2 Dire Pithum Annihilator/Dire Pithum Killer/Dire Pithum Murderer/Dire Pithum Nullifier @ c
+  * 5 Pith Extinguisher/Pith Destroyer/Pith Eliminator/Pith Conquistador @ bs
+^ attacked Pith Extinguisher/Pith Destroyer/Pith Eliminator/Pith Conquistador
+  2 Dire Pithi Infiltrator/Dire Pithi Invader @ f
+  * 3 Pithior Guerilla/Pithior Renegade @ d
+  3 Pithatis Assaulter/Pithatis Enforcer @ bc
+  2 Pith Exterminator/Pith Extinguisher/Pith Destroyer/Pith Conquistador @ bs
+^ killed Pithior Guerilla/Pithior Renegade
+  4 Pithum Eraser/Pithum Inferno/Pithum Mortifier/Pithum Abolisher @ c
+  4 Pith Eliminator/Pith Exterminator/Pith Conquistador @ bs
+^ approach
+  2 Pithum Eraser/Pithum Inferno/Pithum Mortifier @ c
+
+= m4-assault-se | The Assault | serpentis | 4
+! Kill all
+> First Pocket | open | 25
+  2 Coreli Guardian Agent @ f
+  4 Corelum Guardian Chief Patroller @ c
+^ attacked Coreli Guardian Agent
+  5 Corelior Infantry @ d
+  * 3 Corelatis Platoon Leader @ bc
+  * 4 Core Flotilla Admiral @ bs
+^ approach
+  3 Corelior Infantry @ d
+  4 Corelatis Squad Leader @ bc
+  2 Core Rear Admiral @ bs
+^ approach
+  4 Core Rear Admiral @ bs
+^ approach
+  4 Coreli Guardian Protector @ f
+  4 Core Port Admiral @ bs
+> Second Pocket | open | 25
+  3 Corelatis Squad Leader @ bc
+  6 Core Commodore @ bs
+^ approach
+  4 Coreli Guardian Agent @ f
+^ approach
+  3 Corelior Sentinel @ d
+  * 2 Core High Admiral @ bs
+^ approach
+  4 Coreli Guardian Defender @ f
+  4 Core Flotilla Admiral @ bs
+> Third Pocket | locked | 0
+  2 Coreli Guardian Agent @ f
+  2 Corelum Guardian Chief Infantry @ c
+  3 Corelatis Squad Leader @ bc
+  1 Core High Admiral @ bs
+^ attacked Coreli Guardian Agent
+  1 Corelum Chief Sentinel @ c
+  1 Corelatis Platoon Leader @ bc
+  3 Core Port Admiral @ bs
+
+= m4-duo-of-death-an | Duo of Death | angel | 4
+! Destroy both battleships
+> Encounter | open | 0
+  2 Spider Drone II @ s
+  * 2 Gist Seraphim @ bs
+  4 Angel Heavy Missile Battery @ s
+
+= m4-duo-of-death-br | Duo of Death | blood | 4
+! Destroy both battleships
+> Encounter | open | 0
+  6 Spider Drone I @ s
+  * 2 Corpus Pope @ bs
+
+= m4-duo-of-death-gu | Duo of Death | guristas | 4
+! Destroy both battleships
+> Encounter | open | 0
+  3 Guristas Cruise Missile Battery @ s
+  2 Spider Drone II @ s
+  * 2 Pith Usurper @ bs
+
+= m4-duo-of-death-sa | Duo of Death | sansha | 4
+! Destroy both battleships
+> Encounter | open | 0
+  2 Spider Drone II @ s
+  * 2 Centus Tyrant @ bs
+  4 Tower Sentry Sansha III @ s
+
+= m4-duo-of-death-se | Duo of Death | serpentis | 4
+! Destroy both battleships
+> Encounter | open | 0
+  3 Tower Sentry Serpentis III @ s
+  2 Spider Drone II @ s
+  * 2 Core Lord Admiral @ bs
+
+= m4-vengeance-an | Vengeance | angel | 4
+! Clear all three pockets
+> Outer Camp | locked | 25
+  * 3 Gistatis Primus/Gistatis Tribunus @ bc
+  2 Gist General @ bs
+^ cleared
+  3 Gist War General @ bs
+^ cleared
+  7 Gistum Marauder/Gistum Liquidator @ c
+^ cleared
+  2 Angel Webifier/Angel Viper @ f
+  2 Gistior Haunter @ d
+  9 Gistum Centurion/Gistum Phalanx @ c
+  2 Gist War General/Gist Nephilim @ bs
+> Inner Camp | locked | 25
+  * 5 Gistatis Legionnaire/Gistatis Primus @ bc
+^ cleared
+  3 Gistum Marauder/Gistum Liquidator @ c
+  3 Gist Saint/Gist Warlord @ bs
+^ cleared
+  6 Gistum Centurion/Gistum Phalanx @ c
+  1 Gist Throne @ bs
+^ cleared
+  3 Gistior Defacer @ d
+  6 Gistum Centurion/Gistum Phalanx @ c
+  1 Gist Nephilim @ bs
+> Headquarters | open | 0
+  * 1 Gistior Seizer @ d
+  2 Gistum Marauder @ c
+  1 Gist Commander @ bs
+^ cleared
+  5 Angel Webifier/Angel Viper @ f
+  4 Gistatis Praefectus/Gistatis Tribunus @ bc
+  1 Gist Warlord @ bs
+  * 1 Hoborak Moon @ bs
+^ cleared
+  2 Tower Sentry Angel III @ s
+  2 Angel Heavy Missile Battery @ s
+
+= m4-vengeance-br | Vengeance | blood | 4
+! Kill the Corpus Oracle, then the group it calls
+> Outer Camp | locked | 25
+  5 Corpii Reaver/Corpii Engraver @ f
+  3 Corpum Priest/Corpum Sage @ c
+  1 Corpus Oracle @ bs
+  3 Corpior Phantom/Corpior Exorcist @ bc
+  3 Corpior Friar/Corpior Devoter @ d
+  4 Corpior Bishop/Corpior Seer @ bc
+  4 Corpum Dark Priest/Corpum Shadow Sage @ c
+  1 Corpus Apostle @ bs
+  6 Corpum Arch Sage/Corpum Arch Priest @ c
+  1 Corpus Prophet @ bs
+> Inner Camp | locked | 25
+  8 Corpior Seer/Corpior Bishop @ bc
+  3 Blood Wraith/Blood Disciple @ f
+  4 Corpum Arch Sage/Corpum Arch Priest @ c
+  3 Corpus Oracle/Corpus Prophet @ bs
+  3 Corpii Reaver/Corpii Engraver @ f
+  2 Corpior Devoter @ d
+  5 Corpum Shadow Sage/Corpum Dark Priest @ c
+  1 Corpus Archbishop @ bs
+  5 Corpior Bishop/Corpior Seer @ bc
+> Headquarters | open | 0
+  3 Blood Raider Sentry Gun @ s
+  3 Corpior Templar/Corpior Devoter @ d
+  4 Corpum Arch Priest/Corpum Arch Sage @ c
+  * 1 Corpus Oracle @ bs
+^ killed Corpus Oracle
+  6 Blood Wraith/Blood Disciple @ f
+  4 Corpior Shade/Corpior Fanatic @ bc
+  1 Corpus Monsignor @ bs
+  * 1 Faramon Mundan @ bs
+
+= m4-vengeance-gu | Vengeance | guristas | 4
+! Destroy all hostiles
+> Outer Camp | locked | 25
+  3 Pithatis Assaulter @ bc
+^ cleared
+  3 Guristas Kyoukan/Guristas Webifier @ f
+  4 Pithum Abolisher/Pithum Eraser @ c
+  1 Pith Eradicator @ bs
+^ cleared
+  3 Pithum Eraser/Pithum Abolisher @ c
+  2 Pith Dismantler/Pith Eliminator @ bs
+^ cleared
+  2 Pithior Terrorist @ d
+  2 Pithatis Assassin @ bc
+> Inner Camp | locked | 25
+  3 Pithum Abolisher/Pithum Eraser @ c
+^ cleared
+  1 Pith Eliminator/Pith Extinguisher @ bs
+  3 Pithatis Assassin/Pithatis Assaulter @ bc
+^ cleared
+  2 Pith Eliminator/Pith Extinguisher @ bs
+^ cleared
+  3 Pithum Abolisher/Pithum Eraser @ c
+  2 Pithior Supremacist/Pithior Terrorist @ d
+> Headquarters | open | 0
+  2 Pithatis Assaulter/Pithatis Enforcer @ bc
+^ attacked Pithatis Assaulter/Pithatis Enforcer
+  4 Tower Sentry Guristas III @ s
+  4 Guristas Kyoukan/Guristas Webifier @ f
+  3 Pithatis Assassin/Pithatis Assaulter @ bc
+  1 Pith Extinguisher @ bs
+  * 1 Rachen Mysuna @ bs
+
+= m4-vengeance-sa | Vengeance | sansha | 4
+! Clear all three pockets
+> Mining Outpost | locked | 25
+  3 Sansha's Berserker/Sansha's Demon @ f
+  2 Centus Mutant Lord/Centus Savage Lord @ bs
+  5 Centatis Phantasm/Centatis Specter @ bc
+  1 Centus Overlord/Centus Beast Lord @ bs
+  7 Centum Execrator/Centum Slaughterer @ c
+  1 Centus Mutant Lord @ bs
+  5 Centior Cannibal/Centior Devourer @ d
+  6 Centatis Phantasm/Centatis Specter @ bc
+  3 Centus Savage Lord @ bs
+> Monument | locked | 25
+  1 Centior Monster/Centior Horror @ d
+  2 Centum Mutilator/Centum Torturer @ c
+  1 Centus Savage Lord/Centus Plague Lord @ bs
+  3 Centus Beast Lord/Centus Plague Lord/Centus Savage Lord @ bs
+  10 Centum Hellhound/Centum Fiend @ c
+  2 Centus Mutant Lord/Centus Savage Lord @ bs
+> Headquarters | open | 0
+  5 Tower Sentry Sansha III @ s
+  3 Sansha's Berserker/Sansha's Demon @ f
+  1 Centus Overlord/Centus Dark Lord @ bs
+  * 1 Draben Kuvakei @ bs
+
+= m4-vengeance-se | Vengeance | serpentis | 4
+! Destroy the third group in the last pocket
+> Outer Perimeter | locked | 25
+  4 Corelior Soldier/Corelior Infantry @ d
+  4 Corelatis Squad Leader/Corelatis Platoon Leader @ bc
+^ cleared
+  5 Coreli Protector/Coreli Defender @ f
+  5 Corelum Chief Guard/Corelum Chief Safeguard @ c
+  1 Core Port Admiral/Core Rear Admiral @ bs
+^ cleared
+  5 Guardian Veteran @ f
+  1 Core Commodore/Core Baron @ bs
+^ cleared
+  3 Corelior Infantry/Corelior Sentinel @ d
+  9 Corelum Chief Sentinel/Corelum Chief Infantry @ c
+> Inner Perimeter | locked | 25
+  6 Guardian Veteran @ f
+^ killed Guardian Veteran
+  5 Corelum Chief Infantry/Corelum Chief Sentinel @ c
+  2 Core Rear Admiral @ bs
+^ cleared
+  4 Coreli Defender/Coreli Protector @ f
+  2 Corelior Sentinel @ d
+  4 Corelum Chief Infantry/Corelum Chief Sentinel @ c
+^ cleared
+  2 Corelior Infantry @ d
+  3 Core Port Admiral/Core Commodore @ bs
+> To the Coven | open | 0
+  4 Corelatis Squad Leader/Corelatis Wing Leader @ bc
+^ cleared
+  2 Guardian Veteran @ f
+  4 Corelum Chief Sentinel/Corelum Chief Infantry @ c
+  2 Core Commodore/Core Port Admiral @ bs
+^ cleared
+  5 Corelior Cannoneer/Corelior Sentinel @ d
+  4 Corelum Chief Sentinel/Corelum Chief Infantry @ c
+  1 Core Rear Admiral/Core Flotilla Admiral @ bs
+  * 1 Xevni Jipon @ bs
+^ cleared
+  4 Serpentis Heavy Missile Battery @ s
+
+= m4-recon-an | Recon (1 of 3) | angel | 4
+! Reach the second pocket
+> Outpost | open | 25
+  1 Arch Gistii Outlaw @ f
+  1 Arch Gistum Phalanx @ c
+  1 Gist Cherubim @ bs
+^ approach
+  1 Gist Seraphim @ bs
+  1 Gistatis Tribunus @ bc
+  1 Arch Gistum Breaker @ c
+^ approach
+  2 Gist Seraphim @ bs
+  1 Arch Gistum Breaker @ c
+^ approach
+  1 Arch Gistii Thug @ f
+  1 Gist Cherubim @ bs
+  1 Gist Seraphim @ bs
+> Recon Point | open | 0
+  3 Gist Throne/Gist Malakim @ bs
+  3 Arch Gistum Breaker/Arch Gistum Smasher @ c
+^ approach
+  5 Arch Gistum Marauder @ c
+  2 Arch Gistii Outlaw @ f
+
+= m4-recon-br | Recon (1 of 3) | blood | 4
+! Reach the second pocket
+> Outpost | open | 24
+  1 Elder Corpum Dark Priest/Elder Corpum Shadow Sage @ c
+  1 Corpior Phantom @ bc
+  1 Corpus Pope/Corpus Patriarch @ bs
+^ approach
+  1 Elder Corpum Dark Priest/Elder Corpum Shadow Sage @ c
+  2 Corpus Pope/Corpus Monsignor/Corpus Cardinal @ bs
+^ approach
+  1 Elder Corpum Sage/Elder Corpum Priest @ c
+  2 Corpus Pope @ bs
+^ approach
+  3 Corpus Pope/Corpus Monsignor/Corpus Cardinal/Corpus Patriarch @ bs
+> Recon Point | open | 0
+  3 Elder Corpum Sage @ c
+  2 Corpus Cardinal @ bs
+^ approach
+  3 Elder Corpii Collector @ f
+  2 Elder Corpum Arch Priest @ c
+
+= m4-recon-gu | Recon (1 of 3) | guristas | 4
+! Reach the second pocket
+> Outpost | open | 25
+  1 Dire Pithum Abolisher/Dire Pithum Eraser @ c
+  1 Pithatis Death Dealer @ bc
+  1 Pith Usurper/Pith Massacrer @ bs
+^ approach
+  1 Dire Pithi Infiltrator/Dire Pithi Invader @ f
+  1 Dire Pithum Nullifier/Dire Pithum Annihilator @ c
+  1 Pith Usurper/Pith Massacrer @ bs
+^ approach
+  1 Dire Pithi Infiltrator/Dire Pithi Invader @ f
+  2 Pith Usurper/Pith Massacrer @ bs
+^ approach
+  1 Dire Pithum Nullifier/Dire Pithum Annihilator @ c
+  2 Pith Usurper/Pith Massacrer @ bs
+> Recon Point | open | 0
+  2 Pith Conquistador/Pith Destroyer @ bs
+  3 Pithior Guerilla @ d
+^ approach
+  4 Dire Pithi Invader/Dire Pithi Arrogator @ f
+  4 Dire Pithum Inferno/Dire Pithum Mortifier @ c
+
+= m4-recon-sa | Recon (1 of 3) | sansha | 4
+! Reach the second pocket
+> Outpost | open | 24
+  1 Centum Loyal Fiend/Centum Loyal Hellhound @ c
+  1 Centatis Daemon/Centatis Behemoth @ bc
+  1 Centus Tyrant/Centus Dread Lord @ bs
+^ approach
+  1 Centum Loyal Slaughterer/Centum Loyal Execrator @ c
+  2 Centus Tyrant/Centus Overlord/Centus Dark Lord @ bs
+^ approach
+  1 Centum Loyal Fiend/Centum Loyal Hellhound @ c
+  2 Centus Tyrant @ bs
+^ approach
+  1 Centum Loyal Fiend/Centum Loyal Hellhound @ c
+  2 Centus Tyrant @ bs
+> Recon Point | open | 0
+  3 Centum Loyal Slaughterer @ c
+  3 Centus Overlord @ bs
+^ approach
+  4 Centii Loyal Scavenger @ f
+  4 Centum Loyal Torturer @ c
+
+= m4-recon-se | Recon (1 of 3) | serpentis | 4
+! Reach the second pocket
+> Outpost | open | 25
+  1 Corelum Guardian Chief Guard @ c
+  1 Corelatis Captain Sentry @ bc
+  1 Core Grand Admiral @ bs
+^ approach
+  2 Corelum Guardian Chief Infantry @ c
+  1 Core Lord Admiral @ bs
+^ approach
+  1 Corelum Guardian Chief Safeguard @ c
+  2 Core Lord Admiral @ bs
+^ approach
+  1 Corelum Guardian Chief Infantry @ c
+  2 Core Lord Admiral/Core Grand Admiral @ bs
+> Recon Point | open | 0
+^ approach
+  3 Corelum Guardian Chief Patroller/Corelum Guardian Chief Watchman @ c
+  2 Core Admiral/Core High Admiral @ bs
+^ approach
+  3 Coreli Guardian Agent/Coreli Guardian Scout/Coreli Guardian Spy @ f
+  3 Core Admiral/Core High Admiral @ bs
+
+= m4-pirate-invasion-an | Pirate Invasion | angel | 4
+! Kill the fifth group
+> Invasion | open | 0
+  4 Gistatis Praefectus/Gistatis Tribunus @ bc
+  4 Gist Commander/Gist General/Gist War General/Gist Warlord @ bs
+^ approach
+  2 Gistior Haunter/Gistior Defiler @ d
+  2 Gist Commander/Gist General @ bs
+^ cleared
+  1 Arch Gistii Rogue/Arch Gistii Hijacker @ f
+  1 Gistatis Tribunus @ bc
+  * 1 Gist Warlord/Gist Saint/Gist Nephilim @ bs
+^ attacked Gistior Haunter/Gistior Defiler
+  3 Arch Gistii Hijacker @ f
+  3 Arch Gistum Liquidator/Arch Gistum Marauder @ c
+^ killed Gist Warlord/Gist Saint/Gist Nephilim
+  5 Gist Commander/Gist General/Gist War General @ bs
+
+= m4-pirate-invasion-sa | Pirate Invasion | sansha | 4
+! Kill the fifth group
+> Invasion | open | 0
+  4 Centatis Wraith @ bc
+  4 Centus Lord/Centus Mutant Lord @ bs
+^ approach
+  2 Centior Abomination/Centior Devourer @ d
+  2 Centum Fiend/Centum Hellhound @ c
+  2 Centus Lord @ bs
+^ approach
+  1 Centii Loyal Servant/Centii Loyal Minion @ f
+  1 Centus Mutant Lord/Centus Savage Lord @ bs
+^ attacked Centior Abomination/Centior Devourer
+  3 Centii Loyal Servant/Centii Loyal Minion @ f
+  3 Centus Savage Lord/Centus Plague Lord/Centus Beast Lord @ bs
+^ attacked Centatis Wraith
+  5 Centum Fiend/Centum Hellhound @ c
+  5 Centus Slave Lord/Centus Lord/Centus Savage Lord/Centus Mutant Lord @ bs
+
+= m4-worlds-collide-ansa | Worlds Collide | angel | 4
+! Reach the Research Outpost and rescue the Heron's crew
+> Warzone | locked | 40
+  * 4 Arch Gistii Impaler/Arch Gistii Hunter @ f
+  1 Arch Gistum Smasher/Arch Gistum Crusher @ c
+  5 Gistatis Primus/Gistatis Tribunus @ bc
+  3 Gist War General/Gist General/Gist Commander @ bs
+^ approach
+  * 3 Centii Loyal Ravener/Centii Loyal Scavenger @ f
+  3 Centatis Specter/Centatis Wraith @ bc
+  4 Centus Savage Lord/Centus Overlord/Centus Beast Lord/Centus Dark Lord @ bs
+> Angel Base | locked | 20
+  2 Angel Viper @ f
+  3 Tower Sentry Angel III @ s
+^ cleared
+  3 Gistatis Praefectus/Gistatis Tribunus @ bc
+  2 Gist Saint/Gist Warlord @ bs
+^ approach
+  5 Gistior Seizer/Gistior Trasher @ d
+  3 Arch Gistum Phalanx/Arch Gistum Centurion @ c
+^ approach
+  6 Arch Gistii Thug/Arch Gistii Outlaw @ f
+  4 Gist General/Gist Commander @ bs
+  * 1 Angel Overseer @ bs
+> Sansha Base | locked | 20
+  2 Sansha's Berserker @ f
+  3 Centus Dread Lord/Centus Savage Lord/Centus Dark Lord/Centus Beast Lord @ bs
+^ cleared
+  5 Centior Monster/Centior Abomination @ d
+  4 Centus Dark Lord/Centus Beast Lord/Centus Overlord @ bs
+^ approach
+  4 Centii Loyal Scavenger/Centii Loyal Ravener @ f
+  5 Centum Loyal Hellhound/Centum Loyal Fiend @ c
+  3 Centus Savage Lord/Centus Plague Lord/Centus Mutant Lord/Centus Slave Lord @ bs
+  * 1 Sansha Overseer @ bs
+> Research Outpost | open | 0
+  3 Arch Gistum Phalanx/Arch Gistum Centurion @ c
+  2 Gist War General/Gist Warlord @ bs
+^ approach
+  4 Gistatis Legionnaire/Gistatis Primus @ bc
+  1 Gist Warlord/Gist Malakim @ bs
+^ approach
+  5 Gistior Trasher/Gistior Seizer @ d
+  3 Gist Saint/Gist Warlord/Gist Malakim @ bs
+^ approach
+  4 Arch Gistii Hijacker/Arch Gistii Rogue @ f
+  1 Gist Nephilim/Gist Cherubim @ bs
+
+= m4-worlds-collide-bran | Worlds Collide | blood | 4
+! Clear the pockets and recover the stranded crew
+> Warzone | locked | 40
+  3 Elder Corpii Follower/Elder Corpii Herald/Elder Corpii Worshipper @ f
+  2 Elder Corpum Dark Priest/Elder Corpum Shadow Sage @ c
+  * 3 Corpus Prophet/Corpus Oracle @ bs
+^ approach
+  3 Arch Gistii Thug/Arch Gistii Outlaw @ f
+  3 Gistum Crusher/Gistum Smasher @ c
+  4 Gist Malakim/Gist Throne @ bs
+> Blood Raider Base | locked | 20
+  * 2 Blood Raider Spy @ f
+  3 Corpus Apostle/Corpus Oracle @ bs
+^ cleared
+  2 Corpior Fanatic @ bc
+  2 Corpus Apostle/Corpus Oracle @ bs
+^ cleared
+  5 Corpior Friar @ d
+  5 Corpus Apostle/Corpus Oracle @ bs
+^ cleared
+  * 1 Blood Raider Overseer @ bs
+> Angel Base | locked | 20
+  * 2 Angel Spy @ f
+  3 Gist Saint @ bs
+^ cleared
+  4 Angel Viper @ f
+  2 Gistatis Primus @ bc
+  3 Gist Saint @ bs
+^ approach
+  3 Arch Gistii Hunter/Arch Gistii Impaler @ f
+  1 Arch Gistum Centurion @ c
+  4 Gist Saint/Gist Warlord @ bs
+^ cleared
+  5 Gist Throne/Gist Cherubim @ bs
+> Research Outpost | open | 0
+  * 3 Elder Corpum Dark Priest/Elder Corpum Shadow Sage @ c
+  2 Corpus Apostle/Corpus Oracle/Corpus Prophet @ bs
+^ cleared
+  4 Elder Corpii Herald/Elder Corpii Upholder @ f
+  2 Corpus Apostle/Corpus Oracle @ bs
+^ cleared
+  3 Corpior Fanatic/Corpior Phantom @ bc
+  2 Corpus Apostle/Corpus Oracle/Corpus Prophet @ bs
+
+= m4-worlds-collide-guse | Worlds Collide | guristas | 4
+! Reach the Research Outpost and rescue the crew
+> Warzone | locked | 40
+  4 Core High Admiral/Core Admiral @ bs
+  4 Corelatis High Captain/Corelatis Captain Sentry @ bc
+  4 Guardian Veteran @ f
+  3 Pith Dismantler/Pith Extinguisher @ bs
+  4 Pithatis Revolter/Pithatis Death Dealer @ bc
+> Serpentis Base | locked | 20
+  3 Core Admiral/Core High Admiral @ bs
+  3 Corelatis Platoon Leader @ bc
+  3 Guardian Veteran @ f
+  * 2 Serpentis Spy @ f
+^ approach
+  3 Core Lord Admiral/Core Grand Admiral @ bs
+  3 Corelatis Platoon Leader @ bc
+  3 Guardian Veteran @ f
+^ approach
+  3 Core Admiral/Core High Admiral @ bs
+  3 Corelatis Platoon Leader @ bc
+  3 Guardian Veteran @ f
+^ approach
+  * 1 Serpentis Overseer @ bs
+> Guristas Base | locked | 20
+  3 Pith Obliterator/Pith Dismantler @ bs
+  3 Dire Pithum Abolisher/Dire Pithum Eraser @ c
+  * 2 Guristas Spy @ f
+^ approach
+  3 Pith Dismantler/Pith Extinguisher @ bs
+  2 Dire Pithum Abolisher/Dire Pithum Eraser @ c
+  3 Dire Pithi Infiltrator @ f
+^ approach
+  4 Dire Pithum Eraser/Dire Pithum Abolisher @ c
+  4 Dire Pithi Infiltrator @ f
+^ approach
+  1 Guristas Kyoukan @ f
+  * 1 Guristas Overseer @ bs
+> Research Outpost | open | 0
+  * 3 Pith Extinguisher/Pith Dismantler @ bs
+  3 Pithatis Death Dealer/Pithatis Revolter @ bc
+^ killed Pith Extinguisher/Pith Dismantler
+  3 Pith Extinguisher/Pith Eliminator @ bs
+^ approach
+  2 Pith Obliterator/Pith Dismantler @ bs
+  3 Pithum Murderer/Pithum Ascriber/Pithum Silencer/Pithum Killer @ c
+
+= m4-silence-informant | Silence the Informant | mercenaries | 4
+! Kill Kioran Jeraulek
+> Drone Field | open | 25
+  2 Elite Drone Parasite @ bs
+^ killed Elite Drone Parasite
+  3 Elite Drone Parasite @ bs
+^ killed Elite Drone Parasite
+  6 Disintegrator Drone @ c
+  2 Tower Sentry Drone II @ s
+> Mercenary Picket | open | 25
+  2 Spider Drone I @ s
+  3 Mercenary Wingman @ f
+  5 Mercenary Commander @ c
+^ cleared
+  4 Mercenary Wingman @ f
+  4 Mercenary Commander @ c
+  1 Mercenary Overlord @ bs
+^ cleared
+  2 Mercenary Overlord @ bs
+^ cleared
+  6 Mercenary Commander @ c
+  1 Mercenary Overlord @ bs
+> Hideout | locked | 0
+  3 Tower Sentry Drone II @ s
+  5 Tower Sentry Drone III @ s
+^ attacked Tower Sentry Drone II
+  * 1 Kioran Jeraulek @ c
+
+= m4-stop-the-thief | Stop the Thief | mercenaries | 4
+! Kill Shadow and recover the reports
+> Hideout | open | 0
+  1 Mercenary Overlord @ bs
+  6 Mercenary Wingman @ f
+  4 Mercenary Lieutenant @ c
+^ killed Mercenary Overlord
+  4 Mercenary Wingman @ f
+  6 Mercenary Commander @ c
+  2 Mercenary Overlord @ bs
+  * 1 Shadow @ bs
+
+= m4-mordus-headhunters | The Mordus Headhunters | mordu | 4
+! Kill all
+> Outer Camp | open | 25
+  * 5 Mordus Leopard/Mordus Lion @ c
+  3 Mordus Phanti/Mordus Gigamar/Mordus Sequestor @ bs
+^ attacked Mordus Leopard/Mordus Lion
+  4 Mordus Gladius @ f
+  2 Mordus Bounty Hunter @ f
+  5 Mordus Puma/Mordus Lion @ c
+^ cleared
+  6 Mordus Katana/Mordus Gladius @ f
+  4 Mordus Bobcat @ c
+  2 Mordus Sequestor @ bs
+> Camp | open | 0
+  8 Mordus Sabre/Mordus Katana @ f
+  2 Mordus Bounty Hunter @ f
+^ cleared
+  5 Mordus Gladius @ f
+  12 Mordus Bobcat/Mordus Cheetah/Mordus Leopard/Mordus Lion/Mordus Puma @ c
+  5 Mordus Sequestor/Mordus Phanti/Mordus Gigamar @ bs
+^ cleared
+  4 Mordus Katana @ f
+  5 Mordus Leopard/Mordus Lion @ c
+  * 3 Mordus Sequestor/Mordus Mammoth @ bs
+^ cleared
+  7 Mordus Katana/Mordus Bounty Hunter @ f
+  8 Mordus Cheetah/Mordus Puma @ c
+
+= m4-rogue-drone-harassment | Rogue Drone Harassment | drones | 4
+! Clear the rogue drones
+> Outer Hive | open | 25
+  * 1 Kayzum Mother Drone @ bs
+^ attacked Kayzum Mother Drone
+  1 Hunter Drone/Silverfish Drone @ f
+  1 Strain Render Drone @ f
+  3 Wrecker Drone/Bomber Drone @ c
+  1 Defeater Drone @ bc
+^ cleared
+  2 Silverfish Drone @ f
+  2 Strain Render Drone @ f
+  3 Bomber Drone/Destructor Drone @ c
+  1 Defeater Drone @ bc
+^ cleared
+  2 Devilfish Drone/Silverfish Drone @ f
+  2 Annihilator Drone @ c
+  2 Crippler Drone @ bc
+^ cleared
+  2 Hunter Drone/Raider Drone @ f
+  1 Strain Splinter Drone @ f
+  2 Devastator Drone @ c
+  2 Striker Drone @ bc
+> Inner Hive | open | 0
+  1 Bomber Drone @ c
+  1 Defeater Drone @ bc
+  3 Drone Controller/Swarm Preserver Drone @ bs
+
+= m4-infested-ruins | The Infested Ruins | drones | 4
+! Destroy the Lesser Hive
+> Ruins | open | 0
+  4 Drone Cruise Missile Battery @ s
+^ attacked Drone Cruise Missile Battery
+  2 Strain Render Drone/Strain Splinter Drone @ f
+  1 Silverfish Drone @ f
+  6 Violator Drone @ c
+^ approach
+  5 Violator Drone @ c
+  * 1 Drone Controller @ bs
+^ cleared
+  3 Raider Drone @ f
+  4 Disintegrator Drone @ c
+  * 1 Enforcer Drone @ bc
+
+= m4-infiltrated-outposts | Infiltrated Outposts | drones | 4
+! Kill the second group in the second pocket and destroy the bunker
+> Outer Outpost | open | 33
+  3 Sunder Drone/Raider Drone @ f
+  2 Viral Infector Drone @ c
+  1 Defeater Drone @ bc
+  * 1 Swarm Preserver Drone @ bs
+^ cleared
+  3 Decimator Drone/Hunter Drone @ f
+  2 Viral Infector Drone @ c
+  1 Defeater Drone @ bc
+> Bunker | locked | 0
+^ approach
+  5 Strain Infester Drone/Strain Decimator Drone @ f
+  5 Devastator Drone/Disintegrator Drone @ c
+  * 1 Drone Controller @ bs
+^ attacked Devastator Drone/Disintegrator Drone
+  1 Devilfish Drone @ f
+  2 Strain Infester Drone @ f
+  5 Crippler Drone/Enforcer Drone @ bc
+  * 2 Swarm Preserver Drone @ bs
+^ cleared
+  4 Raider Drone/Devilfish Drone @ f
+  2 Strain Infester Drone @ f
+  3 Devastator Drone @ c
+  2 Enforcer Drone @ bc
+  1 Swarm Preserver Drone @ bs
+
+= m4-attack-of-the-drones | Attack of the Drones | drones | 4
+! Kill all the drones
+> Hive | open | 0
+  * 2 Bomber Drone @ c
+  * 3 Defeater Drone @ bc
+^ killed Bomber Drone
+  3 Strain Infester Drone/Strain Splinter Drone @ f
+  3 Supreme Drone Parasite/Drone Ruler @ bs
+^ killed Bomber Drone
+  3 Predator Drone/Marauder Drone @ d
+  3 Supreme Drone Parasite/Drone Ruler @ bs
+^ killed Defeater Drone
+  3 Nuker Drone @ c
+  3 Supreme Drone Parasite/Drone Ruler @ bs
+^ killed Defeater Drone
+  3 Striker Drone/Enforcer Drone @ bc
+  3 Supreme Drone Parasite/Drone Ruler @ bs
+
+= m4-score-sa | The Score | sansha | 4
+! Kill the Centus Plague Lord
+> Outer Camp | locked | 58
+  1 Centior Abomination @ d
+  1 Centum Hellhound/Centum Fiend @ c
+  1 Centatis Devil/Centatis Daemon @ bc
+^ cleared
+  2 Centii Butcher/Centii Manslayer @ f
+  2 Centior Abomination/Centior Monster @ d
+  2 Centum Hellhound/Centum Fiend @ c
+  2 Centatis Devil/Centatis Daemon @ bc
+  2 Centus Savage Lord @ bs
+> Inner Camp | locked | 54
+  1 Centior Cannibal/Centior Devourer @ d
+  1 Centum Hellhound/Centum Fiend @ c
+  1 Centatis Specter @ bc
+^ cleared
+  2 Centus Mutant Lord/Centus Slave Lord @ bs
+^ cleared
+  3 Centum Mutilator/Centum Torturer @ c
+  3 Centus Mutant Lord/Centus Slave Lord @ bs
+> Score | open | 0
+  1 Centii Butcher/Centii Manslayer @ f
+  1 Centior Abomination/Centior Monster @ d
+^ cleared
+  2 Centum Hellhound/Centum Fiend @ c
+  2 Centatis Daemon/Centatis Behemoth @ bc
+^ approach
+  * 1 Centus Plague Lord @ bs
+  2 Centus Savage Lord/Centus Mutant Lord @ bs
+
+= m4-score-se | The Score | serpentis | 4
+! Clear each pocket to open the next gate
+> Outer Camp | open | 61
+  2 Corelior Infantry/Corelior Soldier @ d
+  4 Corelum Chief Defender/Corelum Chief Protector @ c
+  1 Corelatis Platoon Leader @ bc
+^ approach
+  8 Coreli Guard/Coreli Safeguard @ f
+  4 Corelior Infantry/Corelior Soldier @ d
+  4 Corelum Chief Protector @ c
+  3 Corelatis Squad Leader/Corelatis Platoon Leader @ bc
+> Inner Camp | locked | 42
+  2 Corelior Soldier @ d
+  6 Corelum Chief Defender/Corelum Chief Protector @ c
+  2 Corelatis Squad Leader @ bc
+^ approach
+  4 Corelum Chief Defender/Corelum Chief Protector @ c
+  1 Core Port Admiral @ bs
+^ approach
+  3 Core Commodore/Core Port Admiral @ bs
+> Score | locked | 0
+  4 Coreli Guard @ f
+  2 Corelior Soldier @ d
+^ approach
+  2 Core Baron/Core Commodore @ bs
+^ approach
+  4 Corelum Chief Protector/Corelum Chief Defender @ c
+  2 Corelatis Squad Leader/Corelatis Platoon Leader @ bc
+  * 2 Core Baron/Core Commodore/Core Port Admiral @ bs
+
+= m4-smuggler-interception-an | Smuggler Interception | angel | 4
+! Destroy the transports
+> Outer Picket | open | 28
+  1 Gistii Ambusher @ f
+  1 Gistum Liquidator @ c
+  1 Gistum Marauder @ c
+  1 Gist Commander @ bs
+^ approach
+  2 Gistum Breaker/Gistum Centurion/Gistum Defeater @ c
+^ approach
+  3 Gistum Breaker/Gistum Defeater @ c
+  3 Gistatis Legionnaire @ bc
+^ approach
+  4 Gistum Crusher/Gistum Smasher @ c
+  4 Gist Commander/Gist General/Gist War General @ bs
+> Transports | open | 0
+  1 Gistii Impaler @ f
+  1 Arch Gistii Rogue @ f
+  1 Gistior Defiler @ d
+^ approach
+  2 Gistii Ambusher/Gistii Raider @ f
+  2 Gistatis Tribunus/Gistatis Praefectus @ bc
+^ approach
+  3 Gistatis Tribunus @ bc
+  3 Gist Commander/Gist War General @ bs
+  * 3 Angel Cartel Personnel Transport @ ?
+^ approach
+  4 Gistatis Praefectus @ bc
+  4 Gist Commander/Gist General @ bs
+
+= m4-smuggler-interception-br | Smuggler Interception | blood | 4
+! Destroy the transports
+> Outer Picket | locked | 58
+  1 Corpii Diviner/Corpii Raider/Corpii Herald @ f
+  1 Corpum Arch Sage/Corpum Arch Priest @ c
+  1 Corpus Prophet/Corpus Archon @ bs
+^ approach
+  2 Corpum Arch Priest/Corpum Arch Sage @ c
+  2 Corpior Bishop/Corpior Seer @ bc
+^ approach
+  3 Corpum Revenant/Corpum Arch Templar @ c
+  3 Corpus Prophet/Corpus Archon/Corpus Oracle @ bs
+^ approach
+  4 Corpum Priest/Corpum Sage/Corpum Shadow Sage @ c
+> Transports | open | 0
+  1 Corpii Upholder/Corpii Raider/Corpii Diviner/Corpii Herald @ f
+  1 Elder Corpii Worshipper @ f
+^ approach
+  2 Corpum Arch Priest/Corpum Arch Sage/Corpum Arch Templar/Corpum Revenant @ c
+  2 Corpus Prophet/Corpus Archon @ bs
+^ approach
+  * 3 Blood Raider Personnel Transport @ ?
+  3 Corpum Arch Sage/Corpum Arch Priest @ c
+  3 Corpus Oracle/Corpus Prophet/Corpus Apostle/Corpus Archon @ bs
+^ approach
+  4 Corpii Herald/Corpii Upholder @ f
+  4 Corpum Sage @ c
+
+= m4-unauthorized-military-an | Unauthorized Military Presence | angel | 4
+! Destroy the third group and recover the Marines from the transport
+> Gate Guard | open | 23
+  2 Gistior Defiler/Gistior Haunter @ d
+  3 Gistum Liquidator/Gistum Marauder @ c
+  2 Gistatis Primus/Gistatis Legionnaire @ bc
+> Barracks | open | 0
+^ approach
+  1 Gistii Nomad @ f
+  2 Arch Gistii Impaler/Arch Gistii Hunter @ f
+  6 Gistum Crusher/Gistum Marauder/Gistum Liquidator/Gistum Smasher @ c
+  4 Gist Commander/Gist General @ bs
+^ cleared
+  2 Gistii Nomad/Gistii Ruffian/Gistii Hunter/Gistii Impaler @ f
+  2 Gistum Smasher/Gistum Crusher/Gistum Marauder/Gistum Liquidator @ c
+  3 Gistatis Primus/Gistatis Legionnaire @ bc
+^ approach
+  3 Gistii Hunter/Gistii Impaler @ f
+  2 Gistior Defiler/Gistior Haunter @ d
+  7 Gistum Phalanx/Gistum Breaker/Gistum Defeater/Gistum Centurion @ c
+  3 Gist Warlord/Gist War General @ bs
+  * 1 Angel Cartel Personnel Transport @ ?
+
+= m4-unauthorized-military-br | Unauthorized Military Presence | blood | 4
+! Destroy the transport group and recover the militants
+> Gate Guard | open | 20
+  2 Corpior Templar/Corpior Devoter @ d
+  3 Corpum Arch Sage/Corpum Arch Priest @ c
+  2 Corpior Bishop/Corpior Seer @ bc
+> Barracks | open | 0
+  3 Corpii Reaver/Corpii Engraver @ f
+  2 Elder Corpii Seeker/Elder Corpii Collector @ f
+  3 Corpum Dark Priest/Corpum Shadow Sage @ c
+  3 Corpior Bishop/Corpior Seer @ bc
+  4 Corpus Archon/Corpus Oracle/Corpus Prophet @ bs
+^ approach
+  * 1 Blood Raider Personnel Transport @ ?
+  3 Corpii Engraver/Corpii Reaver @ f
+  2 Corpior Templar/Corpior Devoter @ d
+  3 Corpum Shadow Sage @ c
+  2 Corpus Apostle/Corpus Archon/Corpus Oracle @ bs
+
+= m4-unauthorized-military-ca | Unauthorized Military Presence | caldari | 4
+! Destroy the transport group and recover the Marines
+> Warp-In | open | 25
+  2 State Wakizashi/State Shuriken @ f
+  3 State Daito @ c
+  3 State Shuriken @ f
+  1 State Shukuro Chugen/State Kissaki/State Tsuba @ f
+> Barracks | locked | 0
+  * 2 Caldari Personnel Transport @ ?
+  1 Taibu State Wakizashi/Taibu State Katana @ d
+  6 State Shukuro Ashigaru/State Ashigaru/State Fudai @ f
+  9 State Shuriken/State Tenkyu/State Shukuro Shuriken @ f
+  2 State Shukuro Shinai/State Ronin/State Shukuro Chugen @ d
+  2 State Kissaki/State Tsuba/State Buke @ c
+  1 State Shukuro Buke/State Shukuro Ashura @ c
+  2 State Chugen/State Yojimbo @ bc
+
+= m4-angel-spies | The Angel Cartel Spies | angel | 4
+! Kill all
+> Encounter | open | 0
+  1 Starbase Stasis Tower @ s
+  2 Angel Heavy Missile Battery @ s
+  4 Gistatis Praefectus/Gistatis Tribunus @ bc
+  3 Gist Warlord/Gist Saint/Gist Nephilim @ bs
+
+= m4-blood-spies | The Blood Raider Spies | blood | 4
+! Kill the third group
+> Encounter | open | 0
+  3 Corpior Bishop/Corpior Seer @ bc
+  1 Corpus Harbinger/Corpus Oracle @ bs
+^ approach
+  3 Corpior Visionary/Corpior Converter @ d
+  3 Corpum Shadow Sage/Corpum Dark Priest @ c
+  3 Corpus Archon/Corpus Prophet @ bs
+^ approach
+  3 Corpior Cleric/Corpior Friar @ d
+  * 3 Blood Raider Spy @ bc
+
+= m4-gurista-spies | The Guristas Spies | guristas | 4
+! Kill the spies
+> Encounter | open | 0
+  1 Pithior Supremacist/Pithior Terrorist @ d
+  3 Pith Extinguisher/Pith Destroyer/Pith Exterminator @ bs
+^ approach
+  2 Pithatis Assaulter/Pithatis Enforcer @ bc
+  4 Pith Eradicator/Pith Obliterator/Pith Exterminator/Pith Extinguisher @ bs
+^ approach
+  2 Pithior Supremacist/Pithior Terrorist @ d
+  * 3 Guristas Spy @ bc
+  1 Pith Massacrer/Pith Conquistador @ bs
+
+= m4-sansha-spies | The Sansha Spies | sansha | 4
+! Kill the third group
+> Encounter | open | 0
+  2 Tower Sentry Sansha I/Tower Sentry Sansha II @ s
+^ approach
+  2 Centior Devourer/Centior Abomination @ d
+  2 Centum Hellhound/Centum Fiend @ c
+  2 Centus Savage Lord/Centus Mutant Lord @ bs
+^ cleared
+  3 Centus Dark Lord/Centus Overlord @ bs
+  * 3 Sansha Spy @ bc
+
+= m4-serpentis-spies | The Serpentis Spies | serpentis | 4
+! Kill all ships
+> Encounter | open | 0
+  2 Tower Sentry Serpentis III @ s
+  2 Tower Sentry Serpentis II @ s
+  3 Tower Sentry Serpentis I @ s
+^ approach
+  4 Corelior Soldier/Corelior Infantry @ d
+  * 3 Serpentis Spy @ bc
+  1 Core Port Admiral @ bs
+
+# --- Added from EVE-Survival mission reports, stage 2 of the mission port ---
+
+= m4-massive-attack-am | Massive Attack | amarr | 4
+! Eliminate the third group in the third pocket
+> Pocket 1 | open | 3.5
+  2 Gistum Defeater @ c
+  2 Imperial Crusader @ d
+  1 Imperial Templar Caius @ d
+^ cleared
+  1 Divine Imperial Nabih @ f
+  2 Imperial Crusader @ d
+  2 Imperial Tamir @ ?
+  1 Imperial Templar Muzakir @ ?
+^ attacked Divine Imperial Nabih
+  2 Imperial Crusader @ d
+  1 Imperial Avenger @ ?
+  1 Imperial Equalizer @ ?
+  1 Imperial Ultara @ ?
+  1 Imperial Dominator @ ?
+> Pocket 2 | open | 3.5
+  * 1 Divine Imperial Felix @ f
+  2 Imperial Templar Paladin @ f
+  1 Divine Imperial Nabih @ f
+  2 Imperial Tamir @ ?
+  1 Imperial Templar Muzakir @ ?
+^ attacked Divine Imperial Felix
+  2 Imperial Crusader @ d
+  3 Imperial Avenger @ ?
+  2 Imperial Ultara @ ?
+> Pocket 3 | open | 0
+  1 Imperial Nabih @ f
+  3 Imperial Tamir @ ?
+^ approach
+  2 Divine Imperial Imran @ f
+  1 Imperial Templar Caius @ d
+  1 Imperial Templar Crusader @ d
+  1 Imperial Justicar @ ?
+  2 Imperial Avenger @ ?
+  2 Imperial Ultara @ ?
+  1 Imperial Dominator @ ?
+^ attacked Imperial Templar Muzakir
+  2 Imperial Templar Muzakir @ ?
+  2 Divine Imperial Equalizer @ ?
+  3 Imperial Justicar @ ?
+  1 Imperial Avenger @ ?
+
+= m4-massive-attack-sa | Massive Attack | sansha | 4
+! Destroy the third group in the last pocket
+> Warp Gate Guards | open | 0
+  5 Centii Butcher/Centii Manslayer @ f
+  3 Centior Abomination/Centior Monster @ d
+> Pocket 1 | open | 45
+  3 Centii Butcher @ f
+  2 Centior Abomination/Centior Monster @ d
+  3 Centatis Daemon/Centatis Wraith/Centatis Devil/Centatis Specter @ bc
+^ approach
+  3 Centii Slavehunter/Centii Savage @ f
+  1 Centii Loyal Servant @ f
+  2 Centior Abomination/Centior Monster @ d
+  2 Centum Execrator/Centum Slaughterer @ c
+> Pocket 2 | open | 37
+  * 5 Centii Manslayer/Centii Butcher @ f
+  3 Centii Loyal Servant/Centii Minion @ f
+  3 Centum Execrator/Centum Slaughterer @ c
+^ attacked Centii Manslayer/Centii Butcher
+  4 Centior Horror/Centior Monster @ d
+  1 Centatis Daemon/Centatis Devil @ bc
+  1 Centus Overlord/Centus Dark Lord @ bs
+> Pocket 3 | open | 0
+  3 Centii Slavehunter/Centii Savage @ f
+  1 Centii Loyal Scavanger/Centii Ravener @ f
+  2 Centior Abomination/Centior Monster @ d
+  2 Centum Execrator/Centum Slaughterer @ c
+^ cleared
+  * 3 Centii Manslayer/Centii Butcher @ f
+  2 Centii Loyal Servant/Centii Minion @ f
+  4 Centior Horror/Centior Monster @ d
+  1 Centatis Devil @ bc
+  1 Centus Overlord/Centus Beast Lord @ bs
+^ attacked Centii Manslayer/Centii Butcher
+  2 Centii Manslayer/Centii Butcher @ f
+  2 Centii Loyal Scavanger/Centii Ravener @ f
+  1 Centior Horror/Centior Monster @ d
+  1 Centum Fiend/Centum Hellhound @ c
+  2 Centatis Daemon @ bc
+
+= m4-massive-attack-se | Massive Attack | serpentis | 4
+! Clear every Serpentis pocket
+> Warp In | open | 8
+  3 Corelior Sentinel @ d
+  2 Corelum Chief Watchman/Corelum Chief Patroller @ c
+> Second Pocket | locked | 3
+  2 Corelior Cannoneer/Corelior Sentinel @ d
+  2 Corelatis Squad Leader/Corelatis Platoon Leader @ bc
+  * 2 Core Rear Admiral/Core Flotilla Admiral @ bs
+^ attacked Core Rear Admiral/Core Flotilla Admiral
+  1 Coreli Guardian Scout/Coreli Guardian Initiate @ f
+  2 Corelior Sentinel/Corelior Cannoneer @ d
+  3 Corelum Chief Safeguard/Corelum Chief Guard @ c
+> Third Pocket | locked | 20
+  5 Coreli Guardian Spy/Coreli Guardian Agent/Coreli Guardian Defender/Coreli Guardian Protector @ f
+  3 Corelum Chief Guard/Corelum Chief Safeguard @ c
+^ approach
+  2 Corelior Artillery/Corelior Cannoneer @ d
+  3 Corelatis Squad Leader/Corelatis Platoon Leader @ bc
+  2 Core Rear Admiral/Core Flotilla Admiral @ bs
+> Fourth Pocket | locked | 0
+  1 Coreli Guardian Scout/Coreli Guardian Initiate @ f
+^ approach
+  2 Coreli Guardian Initiate/Coreli Guardian Scout/Coreli Guardian Spy @ f
+  2 Corelum Chief Guard/Corelum Chief Safeguard @ c
+  4 Corelatis Squad Leader/Corelatis Platoon Leader @ bc
+  2 Coreli Guardian Agent/Coreli Guardian Spy/Coreli Guardian Scout/Coreli Guardian Initiate @ f
+  2 Corelior Cannoneer @ d
+  3 Corelatis Platoon Leader/Corelatis Squad Leader @ bc
+  3 Core Rear Admiral/Core Flotilla Admiral @ bs
+
+= m4-pirate-slaughter-an | Pirate Slaughter | angel | 4
+! Clear the Angel waves in all three pockets
+> First Pocket | open | 20
+  2 Arch Gistii Hijacker @ f
+  * 2 Gistum Defeater @ c
+  2 Gistior Defacer @ d
+^ killed Gistum Defeater
+  3 Gistum Liquidator @ c
+  1 Gist War General @ bs
+^ approach
+  2 Gist Commander/Gist General @ bs
+  1 Gistatis Praefectus @ bc
+  4 Gistii Raider/Gistii Ambusher @ f
+  2 Gistum  Phalanx @ c
+^ approach
+  2 Gistatis Primus/Gistatis Legionnaire @ bc
+  4 Gistum  Phalanx @ c
+^ killed Arch Gistii Hijacker
+  1 Gistum  Phalanx @ c
+  3 Gistatis Praefectus @ bc
+> Second Pocket | open | 20
+  4 Gist Warlord/Gist General @ bs
+  * 3 Gistatis Tribuni @ bc
+^ approach
+  2 Gistum Liquidator/Gistum Marauder @ c
+^ killed Gistatis Tribuni
+  4 Gistior Defacer @ d
+  2 Gistum  Centurion @ c
+  1 Gistatis Tribuni @ bc
+^ approach
+  * 2 Gist General/Gist Commander @ bs
+^ attacked Gist General/Gist Commander
+  1 Arch Gistum Liquidator @ c
+  1 Gistatis Legionnaire @ bc
+^ killed Gist General/Gist Commander
+  3 Gist Malakim/Gist Warlord/Gist General @ bs
+  3 Gistatis Primus/Gistatis Legionnaire @ bc
+> Final Pocket | open | 0
+  * 1 Gist Nephilim @ bs
+  2 Gistatis Legatus/Gistatis Praefectus @ bc
+  7 Gistum  Centurion/Gistum  Phalanx @ c
+  4 Gistior Defiler/Gistior Seizer @ d
+^ killed Gist Nephilim
+  2 Gist War General @ bs
+  2 Gist Warlord @ bs
+  1 Gistior Seizer @ d
+^ cleared
+  2 Gist Seraphim @ bs
+  * 2 Gistum Marauder @ c
+^ killed Gistum Marauder
+  2 Arch Gistii Hijacker @ f
+
+= m4-pirate-slaughter-gu | Pirate Slaughter | guristas | 4
+! Destroy the last battleship in the final pocket
+# The source lists classes only, so the faction's own ships of each class fly.
+> First Pocket | open | 20
+  3 Battleship @ bs
+  4 Destroyer @ d
+  * 1 Communications Officer @ bs
+^ attacked Communications Officer
+  3 Battleship @ bs
+  2 Elite Frigate @ f
+  * 1 Communications Officer @ bs
+^ attacked Communications Officer
+  3 Battleship @ bs
+  4 Battlecruiser @ bc
+  2 Elite Frigate @ f
+> Second Pocket | open | 20
+  3 Battleship @ bs
+  * 2 Battlecruiser @ bc
+^ cleared
+  4 Battleship @ bs
+^ cleared
+  3 Battleship @ bs
+  2 Heavy Assault Cruiser @ c
+> Final Pocket | open | 0
+  1 Battleship @ bs
+  4 Destroyer @ d
+  2 Heavy Assault Cruiser @ c
+^ cleared
+  4 Elite Frigate @ f
+  2 Heavy Assault Cruiser @ c
+  1 Battleship @ bs
+^ cleared
+  4 Elite Frigate @ f
+  2 Heavy Assault Cruiser @ c
+  1 Battleship @ bs
+
+= m4-cargo-delivery-br | Cargo Delivery | blood | 4
+! Recover the cargo and deliver it to your agent
+> Raider Outpost | open | 0
+  2 Elder Corpii Herald @ f
+  * 2 Corpior Cleric @ d
+  3 Elder Corpum Shadow Sage/Elder Corpum Dark Priest @ c
+  3 Corpior Exorcist/Corpior Phantom @ bc
+^ killed Corpior Cleric
+  3 Elder Corpii Diviner/Elder Corpii Engraver @ f
+  2 Corpum Arch Priest/Corpum Sage @ c
+  1 Corpior Exorcist @ bc
+  6 Corpus Pope/Corpus Archbishop/Corpus Harbinger @ bs
+
+= m4-cargo-delivery-se | Cargo Delivery | serpentis | 4
+! Recover the cargo and deliver it to your agent
+> Serpentis Warehouse | open | 0
+  2 Core Port Admiral/Core Rear Admiral @ bs
+  1 Corelum Chief Infantry @ c
+^ approach
+  2 Corelatis High Captain @ bc
+  1 Corelum Guardian Chief Guard @ c
+  1 Core Rear Admiral @ bs
+  1 Coreli Guardian Watchman @ f
+^ cleared
+  3 Core Port Admiral @ bs
+  * 2 Corelum Chief Sentinel @ c
+^ killed Corelum Chief Sentinel
+  4 Corelum Guardian Chief Defender/Corelum Guardian Chief Protector @ c
+  3 Core Port Admiral/Core Rear Admiral @ bs
+
+= m4-intercept-saboteurs-am | Intercept the Saboteurs | amarr | 4
+! Destroy the saboteurs' convoy and recover the stolen goods
+> At the Gate | open | 0
+  5 Divine Imperial Imran/Divine Imperial Sixtus @ f
+  2 Imperial Templar Forian @ f
+  1 Imperial Templar Paladin @ f
+  1 Imperial Templar Caius @ d
+  1 Imperial Crusader @ d
+> Saboteur Hideout | open | 0
+  1 Imperial Tamir @ ?
+  1 Imperial Templar Muzakir @ ?
+  2 Imperial Templar Caius @ d
+  2 Imperial Avenger @ ?
+  1 Imperial Bataivah @ ?
+^ approach
+  2 Imperial Tamir @ ?
+  1 Imperial Crusader @ d
+  1 Imperial Templar Caius @ d
+  1 Imperial Templar Muzakir @ ?
+  1 Imperial Avenger @ ?
+  1 Imperial Origen @ ?
+^ approach
+  4 Imperial Templar Forian @ f
+  3 Imperial Templar Mathura @ ?
+  5 Imperial Templar Paladin @ f
+  2 Divine Imperial Sixtus @ f
+  5 Divine Imperial Imran @ f
+  1 Imperial Ultara @ ?
+
+= m4-intercept-saboteurs-br | Intercept the Saboteurs | blood | 4
+! Destroy the saboteurs' convoy and recover the stolen goods
+# The source names only a few ships; the rest are its classes.
+> At the Gate | open | 0
+  2 Destroyer @ d
+  3 Frigate @ f
+> Saboteur Hideout | open | 0
+  6 Frigate @ f
+  5 Destroyer @ d
+  3 Corpum Arch Priest/Corpum Sage @ c
+^ approach
+  6 Cruiser @ c
+  8 Battlecruiser @ bc
+  3 Elder Corpii Upholder @ f
+^ approach
+  3 Battleship @ bs
+
+= m4-intercept-saboteurs-gu | Intercept the Saboteurs | guristas | 4
+! Destroy the saboteurs' convoy and recover the stolen goods
+> Saboteur Hideout | open | 0
+  2 Pithior Guerilla/Pithior Terrorist @ d
+  3 Pithum Annihilator @ c
+  3 Pithatis Assaulter/Pithatis Assassin @ bc
+  1 Pith Eradicator @ bs
+^ approach
+  5 Pithi Demolisher/Pithi Destructor/Pithi Wrecker @ f
+  3 Pithum Mortifier/Pithum Inferno @ c
+  2 Pithatis Assassin/Pithatis Assaulter/Pithatis Enforcer @ bc
+  1 Pith Eliminator/Pith Eradicator/Pith Extinguisher @ bs
+^ cleared
+  3 Dire Pithi Infiltrator/Dire Pithi Invader @ f
+  3 Pithi Demolisher/Pithi Destructor @ f
+^ approach
+  2 Pithior Terrorist/Pithior Guerilla @ d
+  3 Pithum Mortifier/Pithum Inferno @ c
+  2 Pithatis Assaulter/Pithatis Enforcer @ bc
+  1 Pith Obliterator/Pith Eradicator @ bs
+^ approach
+  3 Dire Pithi Imputor/Dire Pithi Arrogator/Dire Pithi Invader/Dire Pithi Infiltrator @ f
+  3 Pithi Demolisher/Pithi Destructor @ f
+
+= m4-intercept-saboteurs-mi | Intercept the Saboteurs | minmatar | 4
+! Destroy the saboteurs' convoy and recover the stolen goods
+# The source lists classes only: these are the navy's own mission ships of each class.
+> At the Gate | open | 0
+  5 Republic Radur/Republic Skani/Republic Otur/Republic Kvarm @ f
+> Saboteur Hideout | open | 0
+  15 Republic Radur/Republic Skani/Republic Otur/Republic Kvarm @ f
+  6 Republic Radur/Republic Skani/Republic Otur/Republic Kvarm @ f
+^ approach
+  16 Republic Nutia/Republic Venis/Republic Norn @ bc
+^ approach
+  3 Republic Pytara/Republic Jarl/Republic Jotun @ bs
+
+= m4-ambush-the-convoy | Ambush the Convoy | serpentis | 4
+! Destroy the convoy; the item drops from the last ship killed
+> Convoy Route | open | 0
+  1 Corelum Chief Spy @ c
+  4 Corelatis Squad Leader/Corelatis Platoon Leader @ bc
+  2 Core Flotilla Admiral/Core Vice Admiral @ bs
+
+= m4-buzz-kill-an | Buzz Kill | angel | 4
+! Kill the Angel battleships
+> Angel Outpost | open | 0
+  5 Arch Gistum  Centurion/Arch Gistum  Phalanx @ c
+  1 Gistii Ruffian/Gistii Thug @ f
+  4 Arch Gistii Hunter/Arch Gistii Impaler @ f
+^ approach
+  3 Arch Gistii Hunter/Arch Gistii Impaler @ f
+  2 Arch Gistum Defeater/Arch Gistum Breaker @ c
+  3 Arch Gistii Ruffian/Arch Gistii Nomad @ f
+  3 Arch Gistii Nomad/Arch Gistii Ruffian @ f
+^ approach
+  8 Arch Gistum  Centurion/Arch Gistum  Phalanx @ c
+  5 Gistatis Tribuni/Gistatis Legatus @ bc
+  4 Arch Gistii Thug/Arch Gistii Outlaw @ f
+  3 Gistior Seizer @ d
+  * 4 Arch Gistum Defeater/Arch Gistum Breaker @ c
+^ killed Arch Gistum Defeater/Arch Gistum Breaker
+  4 Gist Warlord/Gist Saint @ bs
+
+= m4-gone-berserk | Gone Berserk | eom | 4
+! Kill the EoM Death Lord
+> EoM Hideout | open | 0
+  * 3 EoM Crusader @ c
+  3 EoM Hydra @ bs
+^ killed EoM Crusader
+  * 2 EoM Death Knight @ c
+^ killed EoM Death Knight
+  2 EoM Saboteur @ f
+  * 1 EoM Hydra @ bs
+^ killed EoM Hydra
+  1 EoM Hydra @ bs
+  * 1 EoM Ogre @ bs
+^ killed EoM Ogre
+  1 EoM Death Lord @ bs
+
+= m4-kidnapping | The Kidnapping | eom | 4
+! Rescue the kidnapped officials
+> EoM Outpost | open | 20
+  2 EoM Ogre @ c
+  1 EoM Hydra @ c
+> Holding Area | open | 20
+  2 EoM Death Lord @ bs
+  4 EoM Saboteur @ f
+^ cleared
+  4 EoM Hydra @ c
+^ cleared
+  5 EoM Crusader @ c
+  6 EoM Succubus @ f
+^ cleared
+  2 EoM Ogre @ c
+  4 EoM Black Priest @ c
+> Inner Sanctum | open | 20
+  1 EoM Death Lord @ bs
+  1 EoM Ogre @ c
+  1 EoM Hydra @ c
+^ cleared
+  2 EoM Hydra @ c
+  6 EoM Prophet @ c
+^ cleared
+  3 EoM Ogre @ c
+> Mercenary Camp | open | 20
+  4 Mercenary Overlord @ bs
+^ cleared
+  2 Mercenary Overlord @ bs
+  4 Mercenary Commander @ c
+^ cleared
+  6 Mercenary Commander @ c
+  4 Mercenary Wingman @ f
+> Prison | open | 0
+  1 EoM Behemoth @ bs
+  6 Tower Sentry Drone II @ s
+
+= m4-mordus-folly | Mordus Folly | mordu | 4
+! Recover the encrypted ship log
+> Mordu Camp | open | 0
+  3 Mordus Rapier @ f
+  4 Mordus Cheetah @ c
+  1 Mordus Gigamar @ bs
+  1 Mordus Mammoth @ bs
+  2 Mordus Sequestor @ bs
+  1 Mordus Fleet Commander @ bs
+  * 1 Mordus Cheetah @ c
+^ killed Mordus Cheetah
+  5 Mordus Leopard @ c
+^ cleared
+  1 Mordus Sequestor @ bs
+  * 1 Mordus Sequestor @ bs
+^ killed Mordus Sequestor
+  4 Mordus Phanti @ bs
+
+= m4-ritualist-raids | Ritualist Raids | blood | 4
+! Destroy the Blood Raider Cathedral
+> Ritual Grounds | locked | 30
+  2 Bloodraider Cruise Missile Battery @ s
+  3 Corpii Collector/Corpii Seeker @ f
+  9 Corpior Cleric/Corpior Devoter/Corpior Friar/Corpior Templar @ d
+  4 Corpior Bishop/Corpior Shade/Corpior Fanatic @ bc
+  2 Corpus Monsignor/Corpus Harbinger/Corpus Oracle @ bs
+> Cathedral | open | 0
+  6 Blood Raider Sentry Gun @ s
+  6 Bloodraider Heavy Missile Battery @ s
+  3 Corpii Engraver/Corpii Reaver @ f
+  6 Corpior Devoter/Corpior Cleric/Corpior Friar @ d
+  9 Corpior Bishop/Corpior Seer/Corpior Shade @ bc
+  2 Corpus Patriarch/Corpus Pope @ bs
+
+= m4-navy-armada-ca | The Navy Armada | caldari | 4
+! Destroy the State Navy fleet in all three pockets
+> First Pocket | open | 80
+  2 State Shuriken @ ?
+  3 State Daito @ ?
+  5 State Wakizashi @ ?
+  2 State Katana @ ?
+  2 State Shukuro Choji @ ?
+  5 State Fudai @ ?
+  2 State Ashigaru @ ?
+  3 State Oni @ ?
+  2 State Tenkyu @ ?
+  2 State Utaisho @ ?
+> Second Pocket | open | 69
+  1 State Shuriken @ ?
+  1 State Daito @ ?
+  5 State Wakizashi @ ?
+  1 State Katana @ ?
+  2 State Kai Gunto @ ?
+  2 State Shukuro Choji @ ?
+  5 State Fudai @ ?
+  1 State Ashigaru @ ?
+  2 State Shukuro Chugen @ ?
+  4 State Kerai @ ?
+  1 State Ronin @ ?
+  2 State Oni @ ?
+  3 State Tenkyu @ ?
+  3 State Utaisho @ ?
+> Final Pocket | open | 0
+  1 State Shukuro Choji @ ?
+  3 State Tsuba @ ?
+  2 Taibu State Shirasaya @ ?
+  2 State Shukuro Shinai @ ?
+  2 State Shukuro Shuriken @ ?
+  8 State Shukuro Ashigaru @ ?
+  1 State Shukuro Chugen @ ?
+  5 State Shukuro Buke @ ?
+  2 State Shukuro Ashura @ ?
+  2 State Ronin @ ?
+  1 State Oni @ ?
+  1 State Kanpaku @ ?
+  1 State Shukuro Bajo @ ?
+  1 Taibu State Kanpaku @ ?
+  3 State Utaisho @ ?
+  2 State Zen @ ?
+  1 State Shukuro Tenno @ ?
+
+= m4-navy-armada-ga | The Navy Armada | gallente | 4
+! Destroy the Federation Navy fleet in all three pockets
+# The source lists classes only: these are the navy's own mission ships of each class.
+> First Pocket | open | 79
+  3 Federation Triarius/Federation Xenan/Federation Helepolis/Federation Covinus @ bs
+  3 Federation Pezos/Federation Praeco/Federation Calo @ bc
+  19 Federation Loras/Federation Hastarius/Federation Hastatus/Federation Misthios @ c
+  2 Federation Machaira/Federation Matara/Federation Arcus @ d
+  10 Federation Clavis/Federation Hastile/Federation Kontos/Federation Hoplon @ f
+> Second Pocket | open | 68
+  6 Federation Triarius/Federation Xenan/Federation Helepolis/Federation Covinus @ bs
+  9 Federation Pezos/Federation Praeco/Federation Calo @ bc
+  10 Federation Loras/Federation Hastarius/Federation Hastatus/Federation Misthios @ c
+  4 Federation Machaira/Federation Matara/Federation Arcus @ d
+  15 Federation Clavis/Federation Hastile/Federation Kontos/Federation Hoplon @ f
+> Final Pocket | open | 0
+  6 Federation Triarius/Federation Xenan/Federation Helepolis/Federation Covinus @ bs
+  5 Federation Pezos/Federation Praeco/Federation Calo @ bc
+  17 Federation Loras/Federation Hastarius/Federation Hastatus/Federation Misthios @ c
+  4 Federation Machaira/Federation Matara/Federation Arcus @ d
+  6 Federation Clavis/Federation Hastile/Federation Kontos/Federation Hoplon @ f
+
+= m4-police-invasion-mi | Police Invasion | minmatar | 4
+! Eliminate the Republic police force
+> Republic Checkpoint | open | 0
+  2 Chief Republic Isak @ ?
+  1 Chief Republic Iflin @ ?
+  3 Republic Austri @ ?
+  1 Republic Faxi @ ?
+  3 Republic Tribal Rodul @ ?
+  2 Republic Norn @ ?
+^ approach
+  3 Republic Tribal Gleeda @ ?
+  1 Republic Tribal Baldur @ ?
+  1 Republic Tribal Takan @ ?
+  2 Republic Tribal Manadis @ ?
+  1 Republic Tribal Jarpur @ ?
+  2 Republic Pytara @ ?
+^ approach
+  2 Chief Republic Isak @ ?
+  2 Republic Faxi @ ?
+  1 Republic Austri @ ?
+  2 Republic Bormin @ ?
+  5 Republic Tribal Manadis @ ?
+^ approach
+  4 Republic Jarl @ ?
+  1 Republic Pytara @ ?
+  3 Republic Norn @ ?
+^ approach
+  1 Republic Venis @ ?
+  1 Republic Nutia @ ?
+  2 Republic Pytara @ ?
+  1 Republic Jotun @ ?
+
+= m4-score-mi | The Score | minmatar | 4
+! Kill the Republic battleships guarding the stolen goods
+> First Pocket | open | 60
+  6 Republic Tribal Ormur @ ?
+  1 Republic Tribal Venis @ ?
+  2 Republic Tribal Gleeda @ ?
+  2 Republic Tribal Rodul @ ?
+  1 Chief Republic Iflin @ ?
+  1 Chief Republic Isak @ ?
+  2 Chief Republic Kvarm @ ?
+  1 Republic Faxi @ ?
+  6 Republic Kvarm @ ?
+  1 Republic Austri @ ?
+  1 Republic Norn @ ?
+  1 Republic Venis @ ?
+  1 Republic Sigur @ ?
+> Second Pocket | open | 40
+  5 Republic Tribal Rodul @ ?
+  3 Republic Tribal Ormur @ ?
+  2 Republic Norn @ ?
+  1 Republic Venis @ ?
+  2 Republic Jotun @ ?
+  2 Republic Jarl @ ?
+> Final Pocket | open | 0
+  1 Republic Tribal Gleeda @ ?
+  4 Republic Tribal Ormur @ ?
+  3 Republic Kvarm @ ?
+  1 Chief Republic Klaki @ ?
+  1 Chief Republic Orsin @ ?
+  3 Republic Jarl @ ?
+  1 Republic Nutia @ ?
+  1 Republic Tribal Venis @ ?
+  1 Republic Jotun @ ?
+
+= m4-score-at | The Score | ammatar | 4
+! Destroy the Ammatar Navy guarding the stolen goods
+> First Pocket | open | 60
+  2 Ammatar Navy Gamma I Support Frigate @ f
+  4 Ammatar Navy Maller @ c
+  1 Ammatar Navy Armageddon @ bs
+  4 Ammatar Navy Delta I Support Frigate/Ammatar Navy Delta II Support Frigate @ f
+  10 Ammatar Navy Soldier @ f
+  4 Ammatar Navy Augoror @ c
+  3 Ammatar Navy Apocalypse/Ammatar Navy Armageddon @ bs
+> Second Pocket | open | 44
+  2 Ammatar Navy Gamma II Support Frigate @ f
+  6 Ammatar Navy Maller @ c
+  1 Ammatar Navy Armageddon @ bs
+  4 Ammatar Navy Augoror @ c
+  4 Ammatar Navy Apocalypse @ bs
+> Final Pocket | open | 0
+  2 Ammatar Navy Gamma II Support Frigate @ f
+  4 Ammatar Navy Soldier @ f
+  4 Ammatar Navy Maller @ c
+  6 Ammatar Navy Armageddon/Ammatar Navy Apocalypse @ bs
+
+= m4-worlds-collide-segu | Worlds Collide | serpentis | 4
+! Clear the battle between the Serpentis and the Guristas
+> The Warzone | locked | 26
+  4 Guardian Veteran @ f
+  4 Corelatis Captain Sentry/Corelatis High Captain @ bc
+  4 Core Rear Admiral/Core Flotilla Admiral @ bs
+^ cleared
+  2 Dire Pithum Eraser/Dire Pithum Abolisher @ c
+  3 Pith Exterminator/Pith Eliminator/Pith Extinguisher @ bs
+^ cleared
+  * 1 Overseer @ bs
+> Serpentis Base | open | 21
+  3 Guardian Veteran @ f
+  1 Corelatis Captain Sentry @ bc
+  2 Core Rear Admiral/Core Flotilla Admiral @ bs
+^ cleared
+  2 Guardian Veteran @ f
+  4 Core Commodore/Core Baron @ bs
+^ cleared
+  3 Guardian Veteran @ f
+  1 Corelatis High Captain @ bc
+  3 Core Rear Admiral/Core Port Admiral @ bs
+^ cleared
+  * 1 Overseer @ bs
+> Guristas Base | open | 21
+  3 Pithi Invader @ f
+  4 Pithum Eraser @ c
+^ cleared
+  2 Pith Eliminator/Pith Exterminator/Pith Massacrer/Pith Usurper/Pith Extinguisher @ bs
+  2 Pithum Eraser @ c
+^ cleared
+  5 Pith Massacrer @ bs
+  3 Dire Pithi Infiltrator @ f
+> Research Outpost | open | 0
+  3 Corelatis High Captain/Corelatis Captain Sentry @ bc
+  3 Core Rear Admiral @ bs
+^ cleared
+  3 Core Rear Admiral/Core Vice Admiral/Core Flotilla Admiral @ bs
+^ cleared
+  3 Corelatis Squad Leader/Corelatis Wing Leader @ bc
+  1 Core Vice Admiral @ bs
+^ cleared
+  3 Corelior Trooper/Corelior Soldier @ d
+  2 Core Commodore/Core Port Admiral @ bs
+
+= m4-right-hand-of-zazzmatazz | The Right Hand of Zazzmatazz | mercenaries | 4
+! Destroy the outpost headquarters and Zor
+> Zor's Outpost | open | 0
+  2 Seven Deathguard @ f
+  6 Seven Assassin/Seven Thug/Seven Bodyguard @ c
+  1 Olufami/Schmidt/Elena Gazky @ c
+  4 Mercenary Wingman @ f
+  * 1 Zor @ bs
+
+= m4-smash-the-supplier-am | Smash the Supplier | amarr | 4
+! Destroy the Imperial supply control tower
+> Supply Depot | open | 0
+  3 Imperial Sixtus @ ?
+  6 Imperial Bahir/Imperial Templar Forian @ ?
+  4 Divine Imperial Bahir/Divine Imperial Napat @ ?
+  4 Divine Imperial Valok/Divine Imperial Paladin @ ?
+  6 Imperial Muzakir @ ?
+  4 Imperial Tamir @ ?
+  3 Imperial Agatho @ ?
+  7 Imperial Templar Mathura/Imperial Templar Donus/Imperial Templar Agatho @ ?
+  8 Imperial Bataivah/Imperial Tanakh @ ?
+  4 Imperial Ultara @ ?
+  2 Imperial Dominator/Imperial Martyr @ ?
+  4 Imperial Templar Dominator/Imperial Templar Martyr @ ?
+  
+= m4-smash-the-shipyard-am | Smash the Shipyard | amarr | 4
+! Destroy the Imperial shipyards and their control tower
+> Shipyard | open | 0
+  5 Imperial Bataivah @ ?
+  1 Imperial Dominator @ ?
+  1 Imperial Tanakh @ ?
+  1 Imperial Templar Dominator @ ?
+  2 Imperial Templar Martyr @ ?
+  1 Imperial Templar Ultara @ ?
+  3 Imperial Ultara @ ?
+  3 Imperial Agatho @ ?
+  3 Imperial Tamir @ ?
+  3 Imperial Templar Donus @ ?
+  3 Imperial Templar Mathura @ ?
+  2 Divine Imperial Bahir @ ?
+  2 Divine Imperial Valok @ ?
+  1 Imperial Bahir @ ?
+  3 Imperial Sixtus @ ?
+  3 Imperial Templar Forian @ ?
+  2 Imperial Templar Paladin @ ?
+
+= m4-diplomatic-incident-am | Diplomatic Incident | amarr | 4
+! Destroy the Imperial force
+> Minmatar Station | open | 0
+  2 Divine Imperial Napat @ ?
+  4 Divine Imperial Paladin/Divine Imperial Valok @ ?
+  4 Imperial Templar Tamir @ ?
+  4 Divine Imperial Justicar @ ?
+  9 Imperial Templar Ultara/Imperial Templar Martyr @ ?
+
+= m4-surprise-surprise | Surprise Surprise | amarr | 4
+! Destroy the Imperial battleship and the State battleship that set the trap
+> Ambush Point | open | 0
+  * 2 Imperial Tanakh/Imperial Ultara @ ?
+  1 Imperial Tanakh/Imperial Ultara @ ?
+  6 Imperial Templar Tamir/Imperial Templar Donus @ ?
+  1 Caldari Stasis Tower @ s
+^ approach
+  5 State Utaisho/State Tenkyu @ ?
+  1 Caldari Stasis Tower @ s
+
+= m4-war-situation-am | War Situation | amarr | 4
+! Destroy the Amarr Navy and the General's quarters
+> Lookout Post | locked | 20
+  4 Amarr Navy Soldier @ f
+  2 Amarr Navy Maller @ c
+  2 Amarr Navy Apocalypse @ bs
+> Forward Camp | locked | 20
+  5 Amarr Navy Scout/Amarr Navy Soldier @ f
+  3 Amarr Navy Maller @ c
+  1 Amarr Navy Armageddon @ bs
+> General's Quarters | open | 0
+  6 Amarr Navy Scout/Amarr Navy Soldier @ f
+  4 Amarr Navy Maller @ c
+  2 Amarr Navy Apocalypse @ bs
+  * 1 General 'Buck' Turgidson @ bs
+
+= m4-rogue-slave-trader-1 | The Rogue Slave Trader (1 of 2) | sansha | 4
+! Destroy the slave pen and pick up the prisoners
+> Slave Pen | open | 0
+  4 Sansha's Demon/Sansha's Berserker @ f
+  2 Centatis Devil @ ?
+  1 Centus Dark Lord/Centus Dread Lord @ ?
+^ cleared
+  * 1 Sansha Slaver/Centus Tyrant @ bs
+
+= m4-rogue-slave-trader-2 | The Rogue Slave Trader (2 of 2) | sansha | 4
+! Kill the two Sansha slaver cruisers
+> Initial Gate | locked | 20
+  1 Centum Loyal Fiend/Centum Loyal Hellhound @ c
+  3 Centatis Phantasm/Centatis Specter @ ?
+  2 Centus Lord/Centus Slave Lord @ ?
+> Slaver Hideout | open | 0
+  2 Sansha Stasis Tower @ s
+  2 Sansha Sentry Gun @ s
+  4 Sansha Heavy Missile Battery @ s
+  2 Sansha Cruise Missile Battery @ s
+  3 Sansha's Demon/Sansha's Berserker @ f
+  * 2 Sansha Slaver/Centum Loyal Hellhound/Centum Loyal Fiend @ c
+  3 Centatis Specter/Centatis Wraith @ ?
+  1 Centus Slave Lord/Centus Plague Lord/Centus Savage Lord @ ?
+
+= m4-mining-misappropriation | Mining Misappropriation | blood | 4
+! Destroy the illegal miner and its Blood Raider escort
+> Mining Site | open | 0
+  * 1 Illegal Miner @ c
+^ killed Illegal Miner
+  * 3 Corpus Patriarch @ bs
+^ killed Corpus Patriarch
+  * 4 Corpus Pope @ bs
+^ killed Corpus Pope
+  4 Corpus Pope @ bs
+
+= m4-pot-and-kettle | Pot and Kettle | amarr | 4
+! Destroy the Imperial outpost's defenders
+> Outpost Approach | locked | 45
+  2 Imperial Templar Forian @ ?
+  2 Imperial Templar Champion @ ?
+  1 Imperial Templar Justicar @ ?
+  1 Imperial Ultara @ ?
+^ approach
+  4 Divine Imperial Felix @ ?
+  2 Imperial Tanakh @ ?
+  2 Divine Imperial Nabih @ ?
+  2 Imperial Avenger @ ?
+  1 Imperial Justicar @ ?
+  1 Imperial Dominator @ ?
+  3 Imperial Origen @ ?
+^ cleared
+  2 Divine Imperial Nabih @ ?
+  1 Divine Imperial Felix @ ?
+  1 Divine Imperial Champion @ ?
+  1 Imperial Templar Dominator @ ?
+  3 Imperial Tanakh @ ?
+  1 Imperial Origen @ ?
+  1 Imperial Dominator @ ?
+  1 Imperial Bataivah @ ?
+> Outpost | open | 0
+  5 Divine Imperial Felix @ ?
+  3 Imperial Equalizer @ ?
+  6 Imperial Bataivah/Imperial Dominator/Imperial Origen @ ?
+  4 Imperial Caius/Imperial Crusader/Divine Imperial Napat @ ?
+  2 Divine Imperial Justicar @ ?
+  4 Imperial Ultara @ ?
+
+= m4-khanid-nobleman | Khanid Nobleman | mercenaries | 4
+! Destroy the nobleman's pleasure cruiser and its escort
+> Pleasure Garden | open | 0
+  * 1 Pleasure Cruiser @ c
+  6 Mercenary Commander @ c
+  5 Mercenary Elite Fighter @ f
+  4 Mercenary Wingman @ f
+  7 Khanid Hawk @ f
+  7 Khanid Eagle @ c
+  10 Khanid Officer @ d
+  9 Khanid Sparrow @ f
+  1 Khanid High Commander @ bs
+
+= m4-exploited-sensitivities-ca | Exploited Sensitivities | caldari | 4
+! Destroy the Taibu State force
+> Taibu Camp | open | 0
+  1 Taibu State Bajo @ ?
+  * 1 Taibu State Bajo @ ?
+  2 Taibu State Oni @ ?
+  1 Taibu State Kanpaku @ ?
+  2 Taibu State Wakizashi @ ?
+  1 Taibu State Suriage @ ?
+^ killed Taibu State Bajo
+  * 1 Taibu State Shirasaya @ ?
+  1 Taibu State Katana @ ?
+  3 Taibu State Wakizashi @ ?
+^ killed Taibu State Shirasaya
+  * 1 Taibu State Wakizashi @ ?
+  2 Taibu State Shirasaya @ ?
+  1 Taibu State Suriage @ ?
+  2 Taibu State Tendai @ ?
+^ killed Taibu State Wakizashi
+  * 1 Taibu State Tendai @ ?
+  3 Taibu State Bajo @ ?
+^ killed Taibu State Tendai
+  * 1 Taibu State Samurai @ ?
+  2 Taibu State Shugo @ ?
+  1 Taibu State Daimyo @ ?
+
+= m4-federal-confidence | Federal Confidence | caldari | 4
+! Recover the objective item from the cargo container
+> Public Confidence Base | open | 0
+  2 Caldari Cruise Missile Battery @ s
+  2 Tower Sentry Caldari III @ s
+  4 Taibu State Bajo/Taibu State Samurai @ ?
+  * 1 Public Confidence Operative @ bs
+  6 State Zen/State Oshiro/State Shukuro Tenno @ ?
+  4 State Shukuro Bishamon/State Shukuro Daijo/State Shukuro Taisho @ ?
+
+
+= m4-intercept-saboteurs-se | Intercept the Saboteurs | serpentis | 4
+! Destroy the saboteurs' transports and their escort
+> Warp-In | open | 20
+  3 Coreli Protector/Coreli Defender @ f
+  2 Corelior Sentinel/Corelior Cannoneer @ d
+> Freight Pad | open | 0
+  2 Corelior Cannoneer/Corelior Sentinel @ d
+  3 Corelum Chief Safeguard/Corelum Chief Guard @ c
+  2 Corelatis Squad Leader @ bc
+  1 Core Baron/Core Commodore @ bs
+^ approach
+  3 Coreli Protector @ f
+  3 Coreli Guardian Agent/Coreli Guardian Spy @ f
+^ approach
+  3 Coreli Defender/Coreli Protector @ f
+  2 Corelior Cannoneer/Corelior Sentinel @ d
+  3 Corelum Chief Defender/Corelum Chief Protector @ c
+  2 Corelatis Squad Leader/Corelatis Platoon Leader @ bc
+  1 Core Rear Admiral @ bs
+  3 Serpentis Transport Ship @ c
+^ approach
+  3 Coreli Protector @ f
+  3 Coreli Guardian Spy/Coreli Guardian Agent @ f
+^ approach
+  2 Corelior Cannoneer/Corelior Sentinel @ d
+  3 Corelum Chief Guard @ c
+  2 Corelatis Squad Leader/Corelatis Platoon Leader @ bc
+  1 Core Baron/Core Commodore @ bs

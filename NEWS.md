@@ -2,6 +2,426 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## 2,500 m to loot, jump and take acceleration gates
+
+*2026-11-12 23:54 UTC*
+
+- **Fixed:** containers and wrecks could be opened and looted from too far away. You now have to be within **2,500 m** to open one or take anything out of it. Starbase structures follow the same rule.
+- **Fixed:** stargates let you jump from up to about 3,100 m. It's now **2,500 m**, as the game says.
+- **Fixed:** acceleration gates in deadspace complexes and missions worked from about 5,000 m. They now need you within **2,500 m** of the gate itself, and tell you how far away you are if you're not.
+- All distances are measured from the edge of your ship to the edge of the object, as the overview shows them.
+
+## Dashboard: control sovereignty warfare and battle size
+
+*2026-11-12 23:46 UTC*
+
+The Bots page has a new **Sovereignty warfare** section, in case the null-sec wars weigh on the server. Both settings apply at once and are saved for the next start.
+
+### Sov warfare: low, moderate or war
+
+- **Low**: sieges are rare, at most 2 at once across New Eden, with one allied alliance a side. Alliances claim systems and found outposts slowly.
+- **Moderate** (the default, as before): regular sieges, at most 6 at once, with up to 3 allies a side.
+- **War**: sieges all over null-sec, up to 24 at once, with up to 5 allies a side. Alliances expand fast. This is the heaviest setting for the server.
+- Turning it down stops new sieges. Those already announced or being fought play out.
+
+### Battle size
+
+- Choose the most ships one side brings to a battle, allies included: 50, 100, 250, 500, 1,000 or 2,000. You can also type any number from 10 to 3,000.
+- It takes effect from the next battle. A side still brings fewer when the stakes are low or it hasn't the pilots.
+- How many ships you see on grid is still capped by **Bot ships shown per system**. The rest come in as reserves or fight in the background.
+
+## The System Scanner names the complexes it finds
+
+*2026-11-12 23:34 UTC*
+
+- **Fixed:** the System Scanner listed each result by a long ID number. It now lists the complex by name and rating, e.g. **Pith's Penal Complex (DED 8/10)**.
+- Complexes you give yourself from the dashboard are named straight away.
+- A complex you scan down shows as **Cosmic Signature** until your probes pin it close enough to warp to. Then its name appears.
+- Warp To from the results list works as before.
+
+## Null-sec security reads 0.0 again
+
+*2026-11-12 23:29 UTC*
+
+- **Fixed:** null-sec systems showed their true security (−0.0 down to −1.0) everywhere: the location panel, the star map, the route, Show Info and killmails. As in 2007, every null-sec system now reads **0.0**.
+- Null-sec systems also had the wrong colour on the star map and route. The client looked their negative value up from the far end of its colour table and painted them like high-sec. They're now the deep red of 0.0.
+- The dashboard shows 0.0 for null-sec too.
+- Display only: the true security still decides rats, ores, belts and everything else about a system.
+
+## Bots are friendly in high-sec, and CONCORD always gets its criminal
+
+*2026-11-12 23:27 UTC*
+
+### Bots in high-sec
+
+- **Fixed:** bots attacked players in high-sec (1.0 to 0.5). They no longer start a fight there for any reason: not war targets, grudges and hunters, pirate raids, fight calls in Local, or the dashboard's aggressive mode.
+- In high-sec a bot only shoots back, at a pilot who attacked it or its corporation. It lets go of anyone else at once, even mid-fight.
+- Hunters sent after you wait for you to leave high-sec instead of following you around it. Bots from different corporations no longer start fights in high-sec asteroid belts either.
+- Pirate **raids** now hit a low-sec system (0.1 to 0.4) near the pirates' space instead of high-sec.
+- Low and null-sec are unchanged: pirates, roaming gangs, hunters and war targets still come for you there.
+
+### CONCORD
+
+- **Fixed:** CONCORD only ever went after players. A bot that commits a crime in high-sec is now hunted and destroyed like anyone else.
+- **Fixed:** docking, jumping out or warping away before CONCORD arrived got a criminal off. Now the warrant follows you for the 15 minutes of your criminal flag: CONCORD comes for your ship in any high-sec system you fly in. It warps in again wherever you land if you warp off.
+- The criminal flag counts everywhere, so other pilots can shoot a criminal in any system, not just the one where the crime happened.
+- Once CONCORD has destroyed the criminal's ship the hunt is over, but the flag stays until it runs out. Response times are unchanged: about 5 seconds in 1.0, up to about 25 in 0.5.
+
+## People and Places lists every agent who will work with you
+
+*2026-11-12 23:20 UTC*
+
+### Agents tab
+
+- **Fixed:** the **Agents** tab in **People and Places** only showed agents you already had a mission with. It now lists **every mission agent who will work with you**, using the same standing rule the agents use: level 1 for anyone, level 2 at 1.0, level 3 at 3.0, level 4 at 5.0 and level 5 at 7.0. That's your best standing with the agent, its corporation or its faction. An agent at −2 or worse with you on any of those won't be listed.
+- The agents are arranged like the Character Sheet: one group per level, then by faction, then by corporation, each group showing its count. Names are fetched a group at a time, so opening a big group doesn't freeze the window.
+- The built-in **All** group still holds the full list, and it now loads its names in a few batches instead of one at a time.
+- Right-click any agent to start a conversation, show info or set a route to their station. The list is built when you log in, so a new level unlocked by a standing gain appears the next time you log in.
+
+## Corporation and alliance chat list their members
+
+*2026-11-12 23:13 UTC*
+
+### Fixes
+
+- **Fixed:** the **Corp** and **Alliance** chat channels listed nobody but you. They only counted pilots who had opened the channel themselves, and never the bot corporations and pilots in your corporation or alliance.
+- Each now lists everyone in the corporation or alliance who is online, players and bots alike (up to 3,000), and the member count matches.
+- Members carry their standing icons as they do in Local: the green star for your corporation, the blue star for your alliance.
+
+## Sovereignty warfare: thousand-ship battles, and bots who hold space for you
+
+*2026-11-12 23:09 UTC*
+
+### Battles at real scale
+
+- Sieges are now fought by whole fleets. Each one is a **skirmish** (around a tenth of an alliance's fleet), a **battle** (a third or more) or a **decisive battle** (nearly everything they have), so you'll see fights from **100 against 100** to **well over 1,000 a side**.
+- **Coalitions:** alliances at war with one side often join the other, so many battles are several alliances against several more.
+- **Watch it in space:** fly to a battle and it is fought ship against ship. The front line is as big as your system can show, and as ships die, reinforcements warp in from the rest of the fleet until a side is spent or routs. It also plays out if you're **docked** in the system, so you can undock into it.
+- **Or follow it from anywhere:** where no one is watching, the battle is still fought out second by second with the full numbers, and **every ship lost is a killmail**. It switches seamlessly between the two as pilots arrive and leave.
+- A fleet worn down to a fifth and outnumbered two to one withdraws. Sieges come round more than twice as often as before.
+
+### Bots who hold space for your alliance
+
+- Once your alliance takes in bot corporations, they claim null-sec for it: a home region of its own (where your towers already stand, or free space), with control towers anchored and fuelled by them.
+- They **defend your space**: shoot one of your alliance's towers and all its bots turn out, not just the corporation that owns it.
+- Your alliance becomes part of null-sec politics: neighbouring bot alliances go to war with it and besiege its systems, and your bots besiege theirs.
+- With four or more settled systems, an alliance's bots **found outposts** in its space, one for every four systems held.
+
+### Space draws numbers
+
+- The more systems an alliance holds, the more corporations want in: recruits favour corporations in big alliances, free bot corporations join the bot alliances holding the most space, and more corporations apply to player alliances holding space.
+
+### Watching it all
+
+- The dashboard's **Sieges and battles** page shows every siege massing and every battle under way: the stakes, both sides and their allies, ships left of what each brought, losses, and whether it's being fought in view or beyond sight. Every battle and its result also goes in the null-sec news.
+- To see bigger battles on one grid, raise **Bot ships shown per system** on the Bots page. It now goes up to 2,500.
+
+## Mission and DED complex guides on the dashboard
+
+*2026-11-12 22:44 UTC*
+
+### A guide for everything
+
+- The dashboard's **New Eden** section has a new page, **Mission & DED guides**, with a walkthrough for every agent mission (375) and every DED complex (45).
+- Each guide gives the objective, the enemy, the damage they deal and what to shoot them with, and which agents offer the mission.
+- It then goes pocket by pocket: what is waiting when you land, what joins as you close in, and what arrives once a group dies, ship by ship, with overseers and trigger ships marked.
+- For every acceleration gate it says how far away it is and whether it stays locked until the pocket is clear.
+- Complexes laid out from CCP's originals also list the structures in each pocket.
+
+### Finding a guide
+
+- Show **missions**, **DED complexes** or both.
+- Narrow down by **mission level** (1 to 4) or **DED rating** (1/10 to 10/10), and by **faction**.
+- **Search** by mission or complex name, or by any ship or pocket in it: search a ship's name to see every mission and complex it turns up in.
+- The guides are written from the same files the server spawns from, so they always match what you meet in space.
+
+## The Strike chains, more real DED layouts, and every mission spawning
+
+*2026-11-12 22:05 UTC*
+
+### The Strike chains
+
+- Level 3 agents now offer the fighting parts of **Angel Strike** and **Guristas Strike**: Ambush in the Dark, The Kidnapping, Incriminating Evidence, The Secret Meeting, Defend the Civilian Convoy, Retrieve the Prisoners and The Final Battle.
+- Each comes in its Blood Raider, Guristas, Sansha or Serpentis version, with the Darkonnen, Komni, Maru and Odamian gangs, Drazin Jaruk and Zerak Cheryn as they were.
+- **Kidnappers Strike** is the same set of missions, so it is covered too.
+- Each part is offered as a mission of its own. The courier parts in between have no fighting and aren't offered.
+
+### More missions
+
+- Level 3: all three parts of **Missing Reporters**, **Intercept the Saboteurs** (Sansha) and **What Comes Around Goes Around**.
+- Level 4: **Intercept the Saboteurs** (Serpentis).
+- Level 2: all three parts of **Minmatar Plot**.
+- Agents now hand out **375** missions: 78 at level 1, 86 at level 2, 126 at level 3 and 85 at level 4.
+
+### DED complexes
+
+- **28 of the 45** complexes now use CCP's own layouts. 21 of them have their acceleration gates where they really stood, and 24 have their original structures and scenery: over 2,000 pieces in all.
+- Newly laid out include the **Serpentis Corporation Hydroponics Site**, **Serpentis Logistical Outpost**, **Serpentis Prison Camp**, **Angel Repurposed Outpost**, **Angel Cartel Occupied Mining Colony**, **Blood Raider Intelligence Collection Point**, **Pith's Penal Complex**, **Sansha's Nation Occupied Mining Colony** and **Sansha Prison Camp**.
+
+### Fixes
+
+- **Vigilance** (Gallente, level 2) and **No Honor** now spawn their suspicious industrial, as a Gallente transport ship.
+- The R.S. Officer in **Illegal Activity** now always appears.
+- **For Justice** could be offered but never spawned anything: its ships came later than this era, so it has been removed.
+
+### Kept true to the era
+
+- Left out because their ships came later: **New Frontiers** (Professor Delainen's drones), **Head Hunter Threat** (Malbreth) and **For Justice**.
+
+## DED complexes get their real layouts, and 33 more missions
+
+*2026-11-12 21:58 UTC*
+
+### DED complexes: CCP's own layouts
+
+- Eight complexes are now laid out as CCP built them: **Serpentis Narcotic Warehouses** (3/10), **Serpentis Fleet Shipyard** (10/10), **Angel's Red Light District** (5/10), **Crimson Hand Supply Depot** (6/10), **Guristas Scout Outpost** (4/10), **Guristas Troop Reinvigoration Camp** (6/10), **Sansha Military Outpost** (1/10) and **Sansha's Command Relay Outpost** (3/10).
+- Their acceleration gates stand where and how far away they really were.
+- Their rooms are no longer empty space: bunkers, junctions, elevators, lookouts, habitation modules, neon signs, rock fields and gas clouds sit where the original layouts put them, up to 80 per room.
+- The other complexes keep their current layouts until their rooms can be matched reliably.
+
+### Level 3: now 99 missions
+
+- New: **Id & Egonics Inc.**, **Scout It Out** and both parts of **Secret Project X**; **Lights Out**, **A Million Little Pieces**, **No Excuse** and **Illegal Activity** (Gallente); **Revenge Attack**, **Trespassers** and both parts of **Technological Secrets** (Thukker and Minmatar); **Mannar Mining Colony** (rogue drones).
+
+### Level 2: now 82 missions
+
+- New: **Ammatar Scouts Spotted**, **Imperial Scouts Spotted**, **Break the Slave Trade**, **Delving Into the Past**, **Human Cattle**, both **Deadly Arrival**s, **Clearing a Path**, **Communications Cold War**, **Elopement**, **Illegal Activity**, **Intercept the Saboteurs** and **Pirate Business** (Minmatar), **Freedom Must Not Prevail**, **Eliminate the Pirate Campers** (Thukker), **Trimming the Fat**, **Save a Man's Career**, **Preliminary Strike**, **The Seven's Brothel** and **No Honor**.
+- Minmatar agents now also send pilots against the **Khanid** and **Thukker** renegades, so missions like The Score (Khanid) can finally be offered.
+
+### Kept true to the era
+
+- Left out because their ships came later: **Lasers Softly Beaming**, plus multi-part chains and pages with no ship lists.
+
+## 30 more missions, and transports that carry the goods
+
+*2026-11-12 21:45 UTC*
+
+### Level 4: now 84 missions
+
+- New: **Pot and Kettle** (Amarr), **Khanid Nobleman** (mercenaries and Khanid), **Exploited Sensitivities** and **Federal Confidence** (Caldari).
+
+### Level 3: now 86 missions
+
+- All four parts of **The Uprising** against Mordu's Legion and its militia.
+- **Intercept the Saboteurs**, **Probing Question** and **Deadly Arrival** against the Amarr; **Retribution**, **Transport Duty** and **Pirate Business** against the Caldari; **Friendly Spies** (Gallente); **Pirate Radio**, **The Slaves Must Be Returned** and the other **Deadly Arrival** (Minmatar); **Ammatar Detective Spotted**.
+- Both parts of **The Rogue Slave Trader** (Blood Raiders), **Silence Deep as Death** (Angels), **The Space Telescope** and **Success Comes at a Price** (Guristas), **Striking Down Two Flies With One Swing**.
+- Mercenary jobs: **The Black Market Hub**, **Operation Hamstring**, **Crystal Dreams Shattered**, **The Seven's Prison Facility**; and **Down with the Legion**.
+
+### Kept true to the era
+
+- Left out because their ships came later: **Dark Alliance**, **Amarrian Tyrants** and **Save the Miners**.
+
+### Fixes
+
+- **Transports and industrials now turn up in missions at every level.** They were being left out, so in Smuggler Interception, Unauthorized Military Presence and the like the ship carrying the mission item never appeared.
+- **Vigilance** (Guristas, level 3) can be offered again: its suspicious industrial is flown by a Guristas cruiser.
+
+## 32 more level 4 missions
+
+*2026-11-12 21:35 UTC*
+
+### New level 4 missions
+
+Level 4 security agents now hand out **80** missions, up from 48. The new ones, rebuilt pocket by pocket from the old mission reports:
+
+- **Massive Attack** (Amarr, Sansha, Serpentis), **Pirate Slaughter** (Angels, Guristas) and **Cargo Delivery** (Blood Raiders, Serpentis).
+- **Intercept the Saboteurs** (Amarr, Blood Raiders, Guristas, Minmatar), **Navy Armada** (Caldari, Gallente), **Police Invasion** and **The Score** (Minmatar, Ammatar).
+- **Smash the Supplier**, **Smash the Shipyard**, **Diplomatic Incident**, **War Situation** and **Surprise Surprise** against the Amarr Empire.
+- **Ambush the Convoy**, **Buzz Kill**, **Ritualist Raids**, **Mining Misappropriation**, **Worlds Collide** (Serpentis and Guristas) and both parts of **The Rogue Slave Trader**.
+- **Gone Berserk** and **The Kidnapping** against the EoM, **Mordus Folly** and **The Right Hand of Zazzmatazz**.
+
+### Kept true to the era
+
+- Missions whose ships this client doesn't have came later, so they are left out: **Serpentis Ship Builders** (Colonel 'Bat' Guano) and **The Wildcat Strike** (reprogrammed mining drones).
+- Where a mission report only lists ship classes, you meet that faction's own ships of each class.
+
+### Fixes
+
+- Ships the reports spell differently from the game, such as Angel Centurions and Phalanxes or Serpentis Guardian SafeGuards, now spawn in missions at every level instead of being replaced.
+
+## 248 classic agent missions added
+
+*2026-11-12 20:28 UTC*
+
+### Real agent missions are here
+
+Security agents now hand out **248 classic combat missions** from the Revelations to Apocrypha era, rebuilt pocket by pocket from the old mission reports.
+
+### What's in
+
+- **Level 1:** 79 missions, including The Blockade, Worlds Collide, Pirate Intrusion, Hidden Stash and the Spies missions.
+- **Level 2:** 62 missions, including Recon, The Uprising (all 4 parts), Silence the Informant and Police Intrusion.
+- **Level 3:** 59 missions, including the Angel, Guristas and Serpentis Extravaganzas, Duo of Death, Pirate Invasion and The Missing Convoy.
+- **Level 4:** 48 missions, including The Blockade, Angel Extravaganza, The Assault, Vengeance, Worlds Collide, Recon and Attack of the Drones.
+
+### How they play
+
+- Every mission has its own pockets, acceleration gates and gate distances.
+- Waves come the way they used to: some when you arrive, some when the room is clear, and many when a particular *trigger ship* dies. Pick your targets carefully!
+- Locked gates stay shut until their pocket is cleared.
+- You'll fight the pirates who raid your agent's space, plus rogue drones, mercenaries, Mordu's Legion and the EoM. Empire agents also send you against their rival navy.
+
+*More missions, and refreshed DED complex layouts, are on the way.*
+
+## Tech II missiles no longer drain your capacitor
+
+*2026-11-12 19:35 UTC*
+
+### Tech II missiles no longer drain your capacitor
+
+Capacitor Power Relays were working all along. Something else was quietly undoing them.
+
+### What was happening
+
+- Every Tech II missile (**Fury**, **Precision**, **Javelin**, **Rage** and the rest) carried a hidden drawback: **+20% capacitor recharge time**.
+- It applied once *per loaded launcher*, so a full rack of Fury cruise missiles made your capacitor recharge over three times slower.
+- On a Raven Navy Issue with five Capacitor Power Relay IIs, that wiped out nearly the whole relay bonus.
+
+### What's changed
+
+- Tech II missiles no longer affect your capacitor at all.
+- Capacitor Power Relays now give their full bonus whatever you have loaded.
+- Example: that Raven Navy Issue goes from about **13.5 GJ/s** peak regen to about **48.5 GJ/s**.
+
+*Load the good missiles without worrying about your cap.*
+
+## Missile visuals and one-drag ammo loading
+
+*2026-11-12 19:10 UTC*
+
+### Missiles you can see, and one-drag ammo loading
+
+### Missile visuals
+
+- Missiles now fly across space from the launcher to their target instead of only being heard.
+- When a missile hits, it explodes on the target ship.
+- A missile fired at a target beyond its flight range burns out and vanishes without a hit.
+- This covers your launchers, rat missiles and starbase missile batteries.
+
+### Ammo loading
+
+- Dropping ammo on the fitting window now fills **every** matching weapon to the brim in a single drag.
+- No more dragging the stack over again and again.
+
+*See you in the belts.*
+
+## Reload all and drag-and-drop ammo loading
+
+*2026-11-12 19:02 UTC*
+
+### Ammo loading fixed
+
+You can reload all your guns from space again, and docked loading now works the way you'd expect.
+
+### Reload all in space
+
+- Right-click any weapon or launcher on your HUD and pick **Reload all**.
+- Every module of that type gets topped up from your cargo hold, using the ammo already loaded.
+- If a module is empty, it loads the first matching ammo it finds in cargo.
+
+### Drag ammo onto the fitting window
+
+- While docked, drag an ammo stack from your hangar or cargo and drop it anywhere on the fitting window.
+- All fitted weapons that can use that ammo get loaded, filled to capacity.
+- Any different ammo they held goes back to your cargo hold.
+- Dropping onto a single slot loads just that weapon, swapping out its old ammo.
+- Wrong ammo for your guns? You'll get a clear message, and nothing moves.
+
+*Fly safe, and keep your hold stocked.*
+
+## The repair shop fixes armor
+
+*2026-11-12 18:01 UTC*
+
+### Fixes
+
+- **Fixed:** the station **Repair Items** window only saw structure damage, so armor damage could not be repaired. A quote now covers a ship's armor and structure together, and **Repair** restores both.
+- Your ship shows repaired straight away, in the fitting window and elsewhere, with no need to undock first.
+- Repairs are still free.
+
+## Unfitting and moving items in built outposts
+
+*2026-11-12 17:54 UTC*
+
+### Fixes
+
+- **Fixed:** in an outpost built from a construction platform, nothing could be moved into the item hangar. Unfitting a module by dragging it or with **Unfit** silently failed. Outposts were built without the station item that NPC stations have, so the client could not tell what kind of container the hangar was.
+- New outposts get that item when they are built, and the server adds it at start-up to any station missing one, so existing outposts are fixed with nothing else changed.
+
+## Spawned complexes show in the scanner and open from their bookmark
+
+*2026-11-12 17:43 UTC*
+
+### Fixes
+
+- **Fixed:** a complex spawned from the dashboard did not appear in the **System Scanner**. The window threw away its whole results list because each result's position arrived in a form it could not measure the distance to. Results now arrive as positions it can use, so spawned complexes and scanned signatures are listed with their distance and accuracy.
+- **Fixed:** warping to a complex's **DED bookmark** landed you in empty space. A bookmark warp that lands near a complex you were given, or have scanned down, now opens it as you arrive, gates and defenders included.
+
+### Good to know
+
+- Signatures and spawned complexes are kept in memory, so a server restart clears them. Spawn a fresh one from the dashboard after restarting.
+
+## Gallente outposts get a proper hangar
+
+*2026-11-12 17:17 UTC*
+
+### Fixes
+
+- **Fixed:** docking in a **Gallente Administrative Outpost** showed the unfinished CONCORD hangar. Its docking platform was see-through, and your ship struggled to load as you zoomed. Gallente outposts now use the Gallente station hangar, as Caldari, Minmatar and Amarr outposts already use their own race's.
+
+## Outposts keep their names and hangars
+
+*2026-11-12 16:51 UTC*
+
+### Fixes
+
+- **Fixed:** an outpost could show up as **"Strip bar at the bottom of the universe"** after a restart or relog, and items bought there did not show in its hangar. The game's static data has a few named locations sharing outpost IDs, and outposts were being given those IDs. The client took the static location's name and position over the station's.
+- At start-up an outpost's static location is now set to the outpost's own name and position, so existing outposts are fixed with no changes to their items, offices or market. Location lookups prefer the station's own name, and new outposts get IDs clear of the static ones.
+- **Buying at your own station delivers there.** A market buy now fills from sell orders at the station you are buying from first, and only reaches other stations in range for anything that station cannot cover. Before, it took the cheapest order anywhere in range, so purchases at an outpost often went to an NPC hub instead.
+
+## Exploration: scan down DED complexes, with deadspace and faction loot
+
+*2026-11-12 16:40 UTC*
+
+### Scanning
+
+- Every system now hides **cosmic signatures**: DED complexes of the local pirate faction. High-sec holds 1/10 to 5/10, low-sec 3/10 to 8/10 and null-sec 6/10 to 10/10, somewhere between 3 and 25 AU from the sun. They last one to three days, and a completed complex is gone for good.
+- Fit a **Scan Probe Launcher**, load scanner probes and activate it **once**: it launches all its probes together, **up to 8 in space**, spread round your ship in a pattern so their ranges overlap where you are. Each covers its rated range (3, 12, 48 AU and so on) for its lifetime, and the system scanner lists them. Probes can't be moved once launched in this client, so to scan somewhere else, fly there and launch more.
+- Select **three or more probes**, press Analyze and choose **Cosmic Signature**. Any signature inside all of your selected probes' ranges shows as a result. More probes give better accuracy, and harder complexes are harder to pin down.
+- **Warp To** a result. Within 150 km of the truth takes you to the complex, which opens there with its acceleration gates. A rougher result only gets you close, so analyse again with more probes.
+- **Tip:** start with big probes (Spook 48AU, Fathom 12AU) to see which signatures are about, warp towards a rough result, then launch Snoop 3AU probes there. Six or more give a fix close enough to warp straight in.
+
+### DED loot
+
+- Overseers now drop **Overseer's Personal Effects** of a tier to match the complex's rating.
+- They may also drop a **deadspace module** of their faction, sized to the complex: Coreli, Gistii, Corpii, Pithi and Centii in 1/10 to 3/10; Corelum, Gistum, Corpum, Pithum and Centum in 4/10 to 6/10; Core, Gist, Corpus, Pith and Centus in 7/10 and up. Most are C-Type, fewer B-Type, rarely A-Type, and X-Type is possible in 10/10s.
+- Now and then they drop **pirate faction modules**: Shadow Serpentis, Domination, Dark Blood, Dread Guristas and True Sansha.
+- The last room's overseer drops more and better. A complex with no overseer in its last room pays out when that room is cleared.
+
+## Deadspace complexes: DED 1/10 to 10/10, with acceleration gates
+
+*2026-11-12 16:29 UTC*
+
+### Dungeons
+
+- Sites can now have **several rooms** (deadspace pockets) joined by **acceleration gates**. Right-click a gate and choose **Activate Gate** to be flung into the next room. **Locked gates** open once that room's defenders are dead.
+- Rooms have **waves**: some ships wait for you when you arrive, and **reinforcements** come once a room is cleared. Overseers lead the last rooms, and clearing the last room completes the complex.
+- Rats in complexes are the factions' proper **deadspace ships** (Coreli, Gistii, Corpii, Pithi, Centii and their bigger kin) and named overseers, scaled to the complex's rating.
+
+### 45 DED complexes
+
+- **Serpentis, Angel Cartel, Blood Raiders, Guristas and Sansha's Nation** each have their 1/10 to 8/10 and 10/10 complexes, such as the Drug Outlet, Red Light District, Mul-Zatah Monastery, The Maze and Centus Assembly T.P. Co.: 165 rooms in all. There were no 9/10s in this era.
+- Layouts, ship groups and overseers follow the published guides for these sites. Gate distances are estimates. Where the game's data lacks an overseer, a strong deadspace ship stands in under its name.
+- Complexes are data files (`dungeons/`), so more can be added without rebuilding the server.
+
+### Dashboard
+
+- A new **Deadspace complexes** page lists every complex. Pick an online pilot, optionally a system, and press **Spawn for pilot**. A pilot in space in that system warps straight in. Otherwise the complex waits in their **System Scanner** as a result already pinned down: no probes needed, just **Warp To**.
+
+### Coming next
+
+- Finding complexes with **scan probes**, then agent missions built on the same rooms and gates.
+
 ## Bots that play: roaming gangs, wingmen, mining fleets and traders
 
 *2026-11-12 15:35 UTC*

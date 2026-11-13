@@ -131,7 +131,7 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
     let mut parts = head.lines().next().unwrap_or("").split_whitespace();
     let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
     let path = target.split('?').next().unwrap_or("/");
-    let body = if method == "POST" && matches!(path, "/api/articles" | "/api/articles/preview" | "/api/downtime" | "/api/seed" | "/api/bots") {
+    let body = if method == "POST" && matches!(path, "/api/articles" | "/api/articles/preview" | "/api/downtime" | "/api/seed" | "/api/bots" | "/api/dungeon-spawn" | "/api/dungeons-reload") {
         let Some(len) = header(&head, "Content-Length").and_then(|n| n.parse::<usize>().ok()) else {
             return respond(&mut stream, 400, "application/json", br#"{"error":"Content-Length is required."}"#).await;
         };
@@ -143,7 +143,7 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
         }
         buf[head_end..head_end + len].to_vec()
     } else { Vec::new() };
-    if matches!(path, "/api/articles" | "/api/articles/preview" | "/api/downtime" | "/api/seed" | "/api/bots") && method == "POST" {
+    if matches!(path, "/api/articles" | "/api/articles/preview" | "/api/downtime" | "/api/seed" | "/api/bots" | "/api/dungeon-spawn" | "/api/dungeons-reload") && method == "POST" {
         let host = header(&head, "Host").unwrap_or("");
         if !local || !local_host(host, stream.local_addr()?.port()) ||
             header(&head, "X-RMR-Admin") != Some("1") ||
@@ -155,6 +155,8 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
             "/api/articles/preview" => preview_article(&body),
             "/api/seed" => change_seeding(server, &body).await,
             "/api/bots" => change_bots(server, &body).await,
+            "/api/dungeon-spawn" => spawn_dungeon(server, &body).await,
+            "/api/dungeons-reload" => Ok(json!({"ok": format!("{} dungeon(s) loaded.", crate::dungeons::load_catalog())})),
             _ => change_downtime(server, &body).await,
         };
         let (status, reply) = match result {
@@ -273,6 +275,8 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
                 }
                 "/api/sovmap/static" => Some(sov_map_static(server).await),
                 "/api/sovmap" => Some(sov_map(server).await),
+                "/api/dungeons" => Some(Ok(crate::dungeons::catalog_json())),
+                "/api/guides" => Some(Ok(crate::dungeons::guides_json())),
                 "/api/kill" => {
                     let query = target.split_once('?').map_or("", |(_, q)| q);
                     let id = query.split('&').find_map(|kv| kv.strip_prefix("id=")).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
@@ -503,9 +507,11 @@ fn sieges(server: &Server) -> Answer {
             .map(|s| {
                 json!({
                     "attacker": s.attacker, "defender": s.defender, "system": s.system, "region": s.region,
-                    "security": (s.security * 10.0).round() / 10.0, "starts": s.starts / 10_000 - UNIX_EPOCH_MS,
+                    "security": (s.security.max(0.0) * 10.0).round() / 10.0, "starts": s.starts / 10_000 - UNIX_EPOCH_MS,
                     "fighting": s.fleets.is_some(),
                     "attackers": s.fleets.map(|f| f.0), "defenders": s.fleets.map(|f| f.1),
+                    "stakes": s.stakes, "brought": [s.brought.0, s.brought.1], "lost": [s.lost.0, s.lost.1],
+                    "attackerAllies": s.allies.0, "defenderAllies": s.allies.1, "seen": s.seen,
                 })
             })
             .collect(),
@@ -568,6 +574,9 @@ fn bot_settings() -> Json {
         "clearBelts": crate::bots::clear_belts(),
         "wingmen": crate::bots::wingmen().as_str(),
         "botMarket": crate::bots::bot_market().as_str(),
+        "sovWarfare": crate::bots::sov_warfare().as_str(),
+        "battleSize": crate::bots::battle_size(),
+        "battleSizeRange": [crate::bots::BATTLE_SIZE_RANGE.0, crate::bots::BATTLE_SIZE_RANGE.1],
         "countOverridden": crate::config::overridden("RMR_BOTS"),
         "aggressionOverridden": crate::config::overridden("RMR_BOTS_AGGRESSION"),
         "restartAvailable": restart_available(),
@@ -585,7 +594,7 @@ fn save_bots_setting(key: &str, value: &str) -> Result<(), (u16, String)> {
 /// Changes the bots: the count (saved for the next start, optionally
 /// restarting now) and their behaviour (at once, and saved).
 async fn change_bots(server: &Server, body: &[u8]) -> EditResult {
-    use crate::bots::{Aggression, Chatter, Door, Rate, Wingmen};
+    use crate::bots::{Aggression, Chatter, Door, Rate, SovWarfare, Wingmen};
     let input: Json = serde_json::from_slice(body).map_err(|_| (400, "Invalid bot settings.".to_string()))?;
     let mut said: Vec<String> = Vec::new();
     let choice = |key: &str, choices: &str| (400, format!("{key}: choose {choices}."));
@@ -688,6 +697,27 @@ async fn change_bots(server: &Server, body: &[u8]) -> EditResult {
         crate::bots::set_bot_market(r);
         save_bots_setting("botMarket", r.as_str())?;
         said.push(format!("Bot traders' market orders: {}.", r.as_str()));
+    }
+    if let Some(word) = input["sovWarfare"].as_str() {
+        let w = SovWarfare::parse(word).ok_or_else(|| choice("Sovereignty warfare", "low, moderate or war"))?;
+        crate::bots::set_sov_warfare(w);
+        save_bots_setting("sovWarfare", w.as_str())?;
+        said.push(match w {
+            SovWarfare::Low => "Sovereignty warfare: low. Rare sieges, at most 2 at once, one ally a side, and slow expansion.",
+            SovWarfare::Moderate => "Sovereignty warfare: moderate. Regular sieges, at most 6 at once, up to 3 allies a side.",
+            SovWarfare::War => "Sovereignty warfare: war. Sieges everywhere, up to 24 at once, up to 5 allies a side, and fast expansion.",
+        }.to_string());
+    }
+    // A number, or a preset button's value as text.
+    let battle = input["battleSize"].as_u64().or_else(|| input["battleSize"].as_str().and_then(|t| t.trim().parse().ok()));
+    if let Some(n) = battle {
+        let (lo, hi) = crate::bots::BATTLE_SIZE_RANGE;
+        if !(lo as u64..=hi as u64).contains(&n) {
+            return Err((400, format!("Battle size must be from {lo} to {hi} ships a side.")));
+        }
+        crate::bots::set_battle_size(n as usize);
+        save_bots_setting("battleSize", &n.to_string())?;
+        said.push(format!("Battles: up to {n} ships a side, from the next battle on."));
     }
     let restart = input["restart"].as_bool().unwrap_or(false);
     if !input["count"].is_null() {
@@ -809,7 +839,7 @@ async fn stations(server: &Server, q: &str) -> Answer {
     let pattern = format!("%{}%", q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
     let sql = r#"SELECT s."stationID" AS id, COALESCE(s."stationName", '') AS name,
                         COALESCE(m."solarSystemName", '') AS system, COALESCE(r."regionName", '') AS region,
-                        round(COALESCE(m."security", 0)::numeric, 1)::float8 AS security,
+                        round(GREATEST(COALESCE(m."security", 0), 0)::numeric, 1)::float8 AS security,
                         COALESCE(co."corporationName", '') AS owner,
                         (s."corporationID" >= $3) AS "playerOwned",
                         (s."stationID" = ANY($1::int[])) AS seeded,
@@ -825,6 +855,94 @@ async fn stations(server: &Server, q: &str) -> Answer {
                   ORDER BY (s."stationID" = ANY($1::int[])) DESC, (s."corporationID" >= $3) DESC, s."stationName"
                   LIMIT 40"#;
     Ok(rows(&server.db.query(sql, &[&seeded, &pattern, &crate::market_seed::FIRST_PLAYER]).await?))
+}
+
+/// Opens a dungeon for a pilot in space, out of sight of where they are, and
+/// warps them to it; a bookmark marks it for later.
+async fn spawn_dungeon(server: &Server, body: &[u8]) -> EditResult {
+    let input: Json = serde_json::from_slice(body).map_err(|_| (400, "Invalid request.".to_string()))?;
+    let id = input["dungeon"].as_str().unwrap_or("");
+    let pilot = input["characterID"].as_i64().unwrap_or(0);
+    let def = crate::dungeons::find(id).ok_or((404, format!("There is no dungeon {id}.")))?;
+    let presence = server.world.lock().presence_of(pilot).ok_or((400, "That pilot is not online.".to_string()))?;
+    // The system: one named, else wherever the pilot is.
+    let wanted = input["system"].as_str().unwrap_or("").trim();
+    let (system, system_name): (i64, String) = if wanted.is_empty() {
+        let name = server.db.query_opt(r#"SELECT "solarSystemName" FROM "mapSolarSystems" WHERE "solarSystemID" = $1"#, &[&(presence.solar_system_id as i32)])
+            .await.ok().flatten().map(|r| r.get::<_, String>(0)).unwrap_or_default();
+        (presence.solar_system_id, name)
+    } else {
+        let row = server.db.query_opt(r#"SELECT "solarSystemID", "solarSystemName" FROM "mapSolarSystems" WHERE lower("solarSystemName") = lower($1)"#, &[&wanted])
+            .await.map_err(|e| (500, format!("Looking up the system failed: {}", crate::logging::chain(&e))))?
+            .ok_or((400, format!("There is no solar system called {wanted}.")))?;
+        (i64::from(row.get::<_, i32>(0)), row.get(1))
+    };
+    let here = system == presence.solar_system_id && !presence.docked;
+    if !here {
+        // Not in space there: the complex waits as a signature already found,
+        // somewhere 3 to 15 AU from the sun, and opens when they warp to it.
+        const AU: f64 = 149_597_870_700.0;
+        let mut rng = crate::combat::Rng::seeded(crate::bulkdata::filetime_now() as u64 ^ pilot as u64);
+        let dir = rng.in_sphere(1.0);
+        let dir = if dir.len() > 0.1 { dir.unit() } else { crate::ballpark::Vec3::new(1.0, 0.0, 0.0) };
+        let at = crate::ballpark::Vec3::new(dir.x, dir.y * 0.15, dir.z) * (rng.range(3.0, 15.0) * AU);
+        crate::exploration::grant(pilot, system, &def.id, def.rating, at, None);
+        bookmark_site(server, pilot, system, &def, at).await;
+        info!(pilot, dungeon = %def.id, system, "dashboard gave a pilot a dungeon");
+        return Ok(json!({"ok": format!(
+            "{} (DED {}/10, {} rooms) is waiting in {system_name}. In that system, open the System Scanner: it is listed as a result already pinned down, with no probes needed. Right-click it and Warp To, and the complex opens as you arrive.",
+            def.name, def.rating, def.rooms.len()
+        )}));
+    }
+    let rats = crate::npc::load_dungeon_rats(&server.db, &def.faction, &def.ship_names(), &def.name_classes())
+        .await
+        .map_err(|e| (500, format!("Loading the site's ships failed: {}", crate::logging::chain(&e))))?
+        .ok_or((400, format!("There is no pirate faction {}.", def.faction)))?;
+    let now = crate::combat::now_ms();
+    let (at, landing) = {
+        let mut w = server.world.lock();
+        let (ship_id, at, landing, nearby) = {
+            let Some(park) = w.parks.get_mut(&system) else { return Err((400, "That pilot's system is not loaded.".into())) };
+            let Some((ship_id, pos)) = park.ships.values().find(|s| s.is_player() && s.pilot.char_id == pilot).map(|s| (s.id, s.pos)) else {
+                return Err((400, "That pilot's ship is not in space.".into()));
+            };
+            // Out of sight of where they are: about 0.03 AU off, any way.
+            let dir = crate::combat::Rng::seeded(now as u64 ^ pilot as u64).in_sphere(1.0);
+            let dir = if dir.len() > 0.1 { dir.unit() } else { crate::ballpark::Vec3::new(1.0, 0.0, 0.0) };
+            let at = pos + dir * 5.0e9;
+            let landing = at + (pos - at).unit() * 2_500.0;
+            let (site, nearby) = crate::dungeons::open(park, std::sync::Arc::clone(&def), std::sync::Arc::new(rats), at, pilot, 0, now);
+            crate::exploration::grant(pilot, system, &def.id, def.rating, at, Some(site));
+            (ship_id, at, landing, nearby)
+        };
+        crate::svc::space::notify_targeted_updates(&w, nearby);
+        crate::svc::space::order(&mut w, system, ship_id, crate::ballpark::Command::Warp { target: landing, range: 0.0 });
+        (at, landing)
+    };
+    let _ = landing;
+    bookmark_site(server, pilot, system, &def, at).await;
+    info!(pilot, dungeon = %def.id, "dashboard spawned a dungeon");
+    Ok(json!({"ok": format!(
+        "{} (DED {}/10, {} rooms) is open in {system_name}, and the pilot's ship is warping there now. It is also listed in their System Scanner to warp back to.",
+        def.name, def.rating, def.rooms.len()
+    )}))
+}
+
+/// A bookmark at a dungeon given from the dashboard (People & Places shows
+/// it from the pilot's next login).
+async fn bookmark_site(server: &Server, pilot: i64, system: i64, def: &crate::dungeons::Dungeon, at: crate::ballpark::Vec3) {
+    let memo = format!("DED {}/10 {}", def.rating, def.name);
+    if let Err(e) = server
+        .db
+        .execute(
+            r#"INSERT INTO bookmarks ("ownerID","itemID","typeID","flag","memo","created","x","y","z","locationID")
+               VALUES ($1, $2, 5, NULL, $3, $4, $5, $6, $7, $2)"#,
+            &[&(pilot as i32), &(system as i32), &memo, &crate::bulkdata::filetime_now(), &at.x, &at.y, &at.z],
+        )
+        .await
+    {
+        warn!("dungeon bookmark: {}", crate::logging::chain(&e));
+    }
 }
 
 async fn change_seeding(server: &Server, body: &[u8]) -> EditResult {
@@ -937,7 +1055,7 @@ async fn players(server: &Server) -> Answer {
             if let Some(p) = present.iter().find(|p| p.char_id == id) {
                 let (system, security) = names.get(&(p.solar_system_id as i32)).cloned().unwrap_or_default();
                 item["system"] = json!(system);
-                item["systemSecurity"] = json!((security * 10.0).round() / 10.0);
+                item["systemSecurity"] = json!((security.max(0.0) * 10.0).round() / 10.0);
                 item["docked"] = json!(p.docked);
             }
         }
@@ -980,7 +1098,7 @@ async fn systems(server: &Server) -> Answer {
     busiest.sort_by(|a, b| (b.1 + b.2).cmp(&(a.1 + a.2)).then(a.0.cmp(&b.0)));
     busiest.truncate(30);
     let ids: Vec<i32> = busiest.iter().map(|(s, _, _)| *s as i32).collect();
-    let sql = r#"SELECT s."solarSystemID", s."solarSystemName", round(s."security"::numeric, 1)::float8, r."regionName"
+    let sql = r#"SELECT s."solarSystemID", s."solarSystemName", round(GREATEST(s."security", 0)::numeric, 1)::float8, r."regionName"
                    FROM "mapSolarSystems" s JOIN "mapRegions" r ON r."regionID" = s."regionID"
                   WHERE s."solarSystemID" = ANY($1)"#;
     let names: HashMap<i32, (String, f64, String)> = server

@@ -26,7 +26,9 @@ pub async fn map(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
 
 async fn pseudo_securities(ctx: &Ctx<'_>) -> Value {
     const HEADER: &[&str] = &["solarSystemID", "security"];
-    let sql = r#"SELECT "solarSystemID", "security"
+    // As the client was shown in 2007: null-sec reads 0.0, never below
+    // (and a negative value would index the colour table from its far end).
+    let sql = r#"SELECT "solarSystemID", GREATEST("security", 0) AS "security"
                    FROM "mapSolarSystems" WHERE "security" IS NOT NULL"#;
     ctx.rowset(HEADER, sql, &[]).await
 }

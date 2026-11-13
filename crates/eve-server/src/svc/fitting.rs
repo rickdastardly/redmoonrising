@@ -69,7 +69,7 @@ pub fn is_slot(flag: i64) -> bool {
 }
 
 pub fn is_fitting_flag(flag: i64) -> bool {
-    flag == FLAG_AUTO_FIT || is_slot(flag)
+    flag == FLAG_AUTO_FIT || flag == FLAG_RELOAD || is_slot(flag)
 }
 
 /// Put `item` (a module, or up to `quantity` of a charge) into `ship` at `flag`.
@@ -207,54 +207,115 @@ async fn set_online_attr(txn: &ItemTxn<'_>, item_id: i64, on: bool) -> Result<()
 
 /// Load up to `wanted` of a charge into the module at `flag`, as far as the
 /// module holds.
+/// A charge sent to the ship with no slot of its own (dropped on the fitting
+/// window: flagAutoFit) loads every fitted module that takes it, swapping
+/// out other charges. FLAG_RELOAD does the same without swapping: the
+/// client's "Reload all" (Start.bat).
+pub const FLAG_RELOAD: i64 = -9;
+const FLAG_CARGO: i64 = 5;
+
 async fn load_charge(ctx: &Ctx<'_>, txn: &mut ItemTxn<'_>, ship: &Item, charge: &Item, flag: i64, wanted: i64) -> Result<(), MoveError> {
     let char_id = ctx.session.char_id.unwrap_or(0);
     let loadout = Loadout::load(txn.tx(), ctx.dogma, char_id, Some(ship.id), &HashSet::new()).await?;
-    let Some(module) = loadout.pieces.iter().position(|p| p.category_id == category::MODULE && p.flag == flag) else {
+    let charge_group = charge_group(txn, charge.type_id).await?;
+    let charge_size = type_attribute(txn, charge.type_id, CHARGE_SIZE).await?;
+    // The fitted modules that take this charge (by group and size), with
+    // their type and what they hold now.
+    let targets: Vec<(i64, i64, Option<(i64, i64)>)> = {
+        let takes = |module: usize| {
+            let groups: Vec<i64> = CHARGE_GROUPS.iter().map(|a| loadout.value(module, *a) as i64).filter(|g| *g > 0).collect();
+            let size = loadout.value(module, CHARGE_SIZE);
+            groups.contains(&charge_group) && (size <= 0.0 || (charge_size - size).abs() < 1e-6)
+        };
+        loadout
+            .pieces
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.category_id == category::MODULE && is_slot(p.flag))
+            .filter(|(_, p)| flag == FLAG_AUTO_FIT || flag == FLAG_RELOAD || p.flag == flag)
+            .filter(|(i, _)| takes(*i))
+            .map(|(_, p)| {
+                let loaded = loadout.pieces.iter().find(|c| c.category_id == category::CHARGE && c.flag == p.flag).map(|c| (c.item_id, c.type_id));
+                (p.type_id, p.flag, loaded)
+            })
+            .collect()
+    };
+    let has_slot = flag == FLAG_AUTO_FIT || flag == FLAG_RELOAD
+        || loadout.pieces.iter().any(|p| p.category_id == category::MODULE && p.flag == flag);
+    drop(loadout);
+    if !has_slot {
         return refuse("There is no module in that slot to load.");
-    };
-    let groups: Vec<i64> = CHARGE_GROUPS
-        .iter()
-        .map(|a| loadout.value(module, *a) as i64)
-        .filter(|g| *g > 0)
-        .collect();
-    if !groups.contains(&charge_group(txn, charge.type_id).await?) {
-        return refuse("That charge does not fit that module.");
     }
-    let size = loadout.value(module, CHARGE_SIZE);
-    if size > 0.0 {
-        let charge_size = type_attribute(txn, charge.type_id, CHARGE_SIZE).await?;
-        if (charge_size - size).abs() > 1e-6 {
-            return refuse("That charge is the wrong size for that module.");
+    let mut targets = targets;
+    if targets.is_empty() {
+        return refuse(if flag == FLAG_AUTO_FIT || flag == FLAG_RELOAD {
+            "None of your fitted modules use that charge."
+        } else {
+            "That charge does not fit that module."
+        });
+    }
+    // Empty modules and those holding this charge first; then, unless only
+    // reloading, those holding another charge, which comes out to the hold.
+    targets.sort_by_key(|(_, slot, loaded)| (loaded.is_some_and(|(_, t)| t != charge.type_id), *slot));
+    // The fitting window's drop asks for a single charge (qty=1), but loading
+    // always fills: each module takes as many as it holds, from the whole stack.
+    let _ = wanted;
+    let mut left = charge.quantity;
+    let start = left;
+    for (module_type, slot, loaded) in targets {
+        if left == 0 {
+            break;
         }
-    }
-    let loaded = loadout.pieces.iter().find(|p| p.category_id == category::CHARGE && p.flag == flag);
-    if let Some(loaded) = loaded {
-        if loaded.type_id != charge.type_id {
-            return refuse("Unload the current charges first.");
+        let mut have = 0;
+        let mut stack = None;
+        match loaded {
+            Some((id, t)) if t == charge.type_id => {
+                have = txn.item(id).await?.map_or(0, |i| i.quantity);
+                stack = Some(id);
+            }
+            Some((id, _)) => {
+                if flag == FLAG_RELOAD {
+                    continue;
+                }
+                to_cargo(txn, ship.id, id).await?;
+            }
+            None => {}
         }
-    }
-    let capacity = type_capacity(txn, loadout.pieces[module].type_id).await?;
-    let room = if charge.volume > 0.0 { (capacity / charge.volume).floor() as i64 } else { charge.quantity };
-    let have = match loaded {
-        Some(l) => txn.item(l.item_id).await?.map_or(0, |i| i.quantity),
-        None => 0,
-    };
-    let quantity = wanted.clamp(1, charge.quantity).min(room - have);
-    if quantity <= 0 {
-        return refuse("That module is already full.");
-    }
-    match loaded {
-        Some(l) => txn.set_quantity(l.item_id, have + quantity).await?,
-        None if quantity == charge.quantity => txn.move_to(charge.id, ship.id, flag).await?,
-        None => {
-            let new = NewItem { type_id: charge.type_id, owner_id: charge.owner_id, location_id: ship.id, flag, quantity, singleton: false };
-            txn.create(new).await?;
+        let capacity = type_capacity(txn, module_type).await?;
+        let room = if charge.volume > 0.0 { (capacity / charge.volume).floor() as i64 } else { left };
+        let n = left.min(room - have);
+        if n <= 0 {
+            continue;
         }
+        match stack {
+            Some(id) => txn.set_quantity(id, have + n).await?,
+            None => {
+                let new = NewItem { type_id: charge.type_id, owner_id: charge.owner_id, location_id: ship.id, flag: slot, quantity: n, singleton: false };
+                txn.create(new).await?;
+            }
+        }
+        left -= n;
     }
-    if !(loaded.is_none() && quantity == charge.quantity) {
-        txn.set_quantity(charge.id, charge.quantity - quantity).await?;
+    let used = start - left;
+    if used == 0 {
+        return refuse(if flag == FLAG_AUTO_FIT || flag == FLAG_RELOAD { "Those modules are already full." } else { "That module is already full." });
     }
+    if used >= charge.quantity {
+        txn.destroy(charge.id).await?;
+    } else {
+        txn.set_quantity(charge.id, charge.quantity - used).await?;
+    }
+    info!("loaded {used} of type {} into {}", charge.type_id, if flag == FLAG_AUTO_FIT || flag == FLAG_RELOAD { "every matching module".to_string() } else { format!("slot {flag}") });
+    Ok(())
+}
+
+/// Charges taken out of a module go to the ship's hold, onto a stack of the
+/// same kind if there is one.
+async fn to_cargo(txn: &mut ItemTxn<'_>, ship_id: i64, charge_id: i64) -> Result<(), MoveError> {
+    let Some(item) = txn.item(charge_id).await? else { return Ok(()) };
+    txn.destroy(item.id).await?;
+    let back = NewItem { type_id: item.type_id, owner_id: item.owner_id, location_id: ship_id, flag: FLAG_CARGO, quantity: item.quantity, singleton: false };
+    txn.stack_onto(back).await?;
     Ok(())
 }
 

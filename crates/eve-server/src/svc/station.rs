@@ -92,7 +92,7 @@ async fn get_station(ctx: &Ctx<'_>, station_id: i64) -> Value {
         "reprocessingEfficiency", "reprocessingStationsTake", "reprocessingHangarFlag",
         "ownerID", "description", "serviceMask", "hangarGraphicID", "dockingBayGraphicID",
     ];
-    let sql = r#"SELECT st."stationID", st."security", st."dockingCostPerVolume",
+    let sql = r#"SELECT st."stationID", GREATEST(st."security", 0) AS "security", st."dockingCostPerVolume",
                         st."maxShipVolumeDockable", st."officeRentalCost", st."operationID",
                         st."stationTypeID", st."corporationID", st."solarSystemID",
                         st."constellationID", st."regionID", st."stationName",
@@ -125,7 +125,7 @@ async fn get_solar_system(ctx: &Ctx<'_>, solar_system_id: i64) -> Value {
     ];
     let sql = r#"SELECT "solarSystemID", "solarSystemName", "regionID", "constellationID",
                         "x", "y", "z", "luminosity", "border", "fringe", "corridor", "hub",
-                        "international", "regional", "constellation", "security", "factionID",
+                        "international", "regional", "constellation", GREATEST("security", 0) AS "security", "factionID",
                         "radius", "sunTypeID", "securityClass", "allianceID",
                         "solarSystemID" AS "itemID"
                    FROM "mapSolarSystems" WHERE "solarSystemID" = $1"#;
@@ -194,7 +194,7 @@ async fn station_extra_info(ctx: &Ctx<'_>) -> Value {
                                                   = COALESCE(st."operationID",
                                                              stt."operationID")), 0)
                                    AS "serviceMask",
-                                 st."security", st."officeRentalCost",
+                                 GREATEST(st."security", 0) AS "security", st."officeRentalCost",
                                  st."maxShipVolumeDockable", st."dockingCostPerVolume",
                                  st."reprocessingEfficiency", st."reprocessingStationsTake",
                                  st."reprocessingHangarFlag"

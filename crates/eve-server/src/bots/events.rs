@@ -8,10 +8,10 @@
 //!   corporations go their own way.
 //! - **Coalition**: an alliance holding far more space than any other finds
 //!   its neighbours declaring war on it together.
-//! - **Raid**: a pirate alliance sends a fleet into a high-sec system near
+//! - **Raid**: a pirate alliance sends a fleet into a low-sec system near
 //!   its space for a couple of hours. The raiders attack players there on
-//!   sight (CONCORD answers them as it would anyone) and pick off the bots
-//!   they find.
+//!   sight and pick off the bots they find. High-sec is left alone: bots
+//!   start no fights there (`npc::think_one`).
 //!
 //! - **Roam**: a pirate or null-sec alliance sends a gang of its fighters
 //!   roaming through low and null-sec for a couple of hours, a few systems
@@ -175,7 +175,7 @@ async fn executor(db: &Client, alliance: i32) -> Option<i32> {
 
 /// Moves a corporation into an alliance (0: out of any), in the database
 /// and in memory.
-async fn move_corp(db: &Client, p: &mut Politics, ids: &mut [Identity], corp: i32, to: i32) -> Result<(), tokio_postgres::Error> {
+pub(super) async fn move_corp(db: &Client, p: &mut Politics, ids: &mut [Identity], corp: i32, to: i32) -> Result<(), tokio_postgres::Error> {
     let from = p.corps.get(&corp).and_then(|c| c.alliance).unwrap_or(0);
     let now = crate::bulkdata::filetime_now();
     db.execute(r#"UPDATE "corporation" SET "allianceID" = $2 WHERE "corporationID" = $1"#, &[&corp, &to]).await?;
@@ -359,7 +359,7 @@ async fn coalition(ev: &mut Events, db: &Client, p: &mut Politics, rng: &mut Rng
     Ok(())
 }
 
-/// A pirate alliance raids a high-sec system near its space.
+/// A pirate alliance raids a low-sec system near its space.
 #[allow(clippy::too_many_arguments)]
 async fn raid(
     ev: &mut Events,
@@ -377,13 +377,14 @@ async fn raid(
     pirates.retain(|(a, _)| !ev.raids.iter().any(|r| r.alliance == *a));
     pirates.sort_unstable();
     let Some(&(alliance, region)) = pirates.get(rng.below(pirates.len().max(1))) else { return Ok(Vec::new()) };
-    // A high-sec system (0.5 to 0.7) within a few jumps of the region.
+    // A low-sec system (0.1 to 0.4) within a few jumps of the region: high-sec
+    // is CONCORD's, and bots start no fights there.
     let start = atlas.systems.iter().filter(|(_, s)| s.region == region).map(|(id, _)| *id).min();
     let Some(start) = start else { return Ok(Vec::new()) };
     let mut targets: Vec<i32> = crate::gates::reach_on(atlas.graph, start as i64, 8)
         .into_iter()
         .map(|(s, _)| s as i32)
-        .filter(|s| atlas.systems.get(s).is_some_and(|x| (0.5..0.75).contains(&x.security)))
+        .filter(|s| atlas.systems.get(s).is_some_and(|x| (0.05..0.45).contains(&x.security)))
         .collect();
     targets.sort_unstable();
     let Some(&system) = targets.get(rng.below(targets.len().max(1))) else { return Ok(Vec::new()) };
@@ -410,7 +411,7 @@ async fn raid(
     }
     let name = super::sov::system_name(db, system).await;
     let who = super::sov::alliance_name(db, alliance).await;
-    ev.tell(news, format!("Raid: {} pirates of {who} are on their way to {name}, in high-sec", fit.len()));
+    ev.tell(news, format!("Raid: {} pirates of {who} are on their way to {name}, in low-sec", fit.len()));
     ev.raids.push(Raid { alliance, system, until: clock + RAID_SECS, raiders: fit, kills: 0, lost: 0, name, roam: false, stops: 0, settle_at: 0 });
     Ok(moved)
 }

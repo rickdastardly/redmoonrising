@@ -1,16 +1,27 @@
-//! Sieges fought where someone can see them.
+//! Sieges: battles between whole fleets, from a hundred ships a side to
+//! well over a thousand.
 //!
-//! When a siege comes due (`run`) where no player is in space, it is settled
-//! by the odds (`sov::conclude`). Where one is, both alliances send a fleet:
-//! the defenders form up outside their tower's force field, the attackers
-//! come through a gate and warp in further out. They fight with the guns and
-//! brains bot ships have (their war makes them enemies on sight), and the
-//! ships lost are lost for real, killmails and all. When one fleet is gone
-//! the other has won; attackers who clear the field bombard the tower for
-//! `BOMBARD`, and it falls. A fight still going after `MAX_FIGHT` goes to
-//! whoever has more ships left, and one nobody watches any more to the odds
-//! of what is left. Then the survivors go home.
+//! When a siege comes due, each side brings a fleet: its own alliance's
+//! armed pilots and, often, allies at war with the other side. How many it
+//! commits depends on the stakes (`Stakes`): a border skirmish, a battle, or
+//! a war-deciding fight with nearly everything they have.
+//!
+//! A battle is one fight with two ways to be seen:
+//! - Where a player is in the system (in space, or docked with the system's
+//!   grid loaded), it is fought ship against ship. The front line is as big
+//!   as the system can show (the dashboard's bots-shown-per-system); as ships
+//!   die, reinforcements from the rest of the fleet warp in, until one side
+//!   is spent or routs. Defenders form up outside their tower's force field;
+//!   attackers who clear the field bombard the tower for `BOMBARD`.
+//! - Elsewhere, it is fought out second by second with the full numbers:
+//!   each side loses ships in proportion to the other's (Lanchester's square
+//!   law), and every ship lost is a real killmail.
+//!
+//! It switches between the two as players come and go. A side reduced to a
+//! fifth of what it brought, and outnumbered two to one, withdraws. A fight
+//! still going after `MAX_FIGHT` goes to whoever has more ships left.
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use tokio_postgres::Client;
@@ -23,40 +34,120 @@ use super::sov::{self, News, Siege};
 use crate::combat::Rng;
 use crate::world::World;
 
-/// A fleet is one ship for this many pilots in its alliance, within bounds.
-const PILOTS_PER_SHIP: u32 = 30;
-const FLEET_MIN: usize = 6;
-const FLEET_MAX: usize = 40;
+/// The most ships one side brings to a battle, allies included.
+pub const SIDE_MAX: u32 = 3_000;
+const FLEET_MIN: u32 = 6;
 /// Room left in the system for bots that are not in either fleet.
 const ROOM_FOR_OTHERS: usize = 10;
 /// Where the fleets form up, beyond the tower's force field.
 const DEFENDERS_OUT: f64 = 15_000.0;
 const ATTACKERS_IN: f64 = 55_000.0;
 const ATTACKERS_ORBIT: f64 = 35_000.0;
-const MAX_FIGHT: Duration = Duration::from_secs(15 * 60);
+const MAX_FIGHT: Duration = Duration::from_secs(45 * 60);
 const BOMBARD: Duration = Duration::from_secs(60);
+/// Fought unseen, a side loses this share of the other's numbers a second:
+/// even fleets lose about half their ships in ten minutes.
+const ATTRITION: f64 = 1.0 / 900.0;
+/// A side that falls to this share of what it brought, outnumbered two to
+/// one, withdraws.
+const ROUT: f64 = 0.2;
+/// Reinforcements warp in this often, in waves.
+const REINFORCE: Duration = Duration::from_secs(8);
+/// Allies at war with the other side who may join each side.
+const ALLIES_MAX: usize = 3;
+const ALLY_CHANCE: f64 = 0.5;
 
-/// The two fleets of a siege being fought, as indexes into the bots.
+/// How much of themselves the sides commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stakes {
+    /// A border skirmish: a tenth of the fleet or so.
+    Skirmish,
+    /// A real fight for a system: a third.
+    Battle,
+    /// Everything they can field.
+    Decisive,
+}
+
+impl Stakes {
+    fn roll(rng: &mut Rng) -> Stakes {
+        let r = rng.unit();
+        if r < 0.45 {
+            Stakes::Skirmish
+        } else if r < 0.82 {
+            Stakes::Battle
+        } else {
+            Stakes::Decisive
+        }
+    }
+
+    fn share(self, rng: &mut Rng) -> f64 {
+        let (lo, hi) = match self {
+            Stakes::Skirmish => (0.05, 0.15),
+            Stakes::Battle => (0.2, 0.45),
+            Stakes::Decisive => (0.6, 0.95),
+        };
+        lo + rng.unit() * (hi - lo)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Stakes::Skirmish => "skirmish",
+            Stakes::Battle => "battle",
+            Stakes::Decisive => "decisive battle",
+        }
+    }
+}
+
+/// One side of a battle.
+pub struct Side {
+    /// The alliances fighting on it: the first is the siege's own.
+    pub alliances: Vec<i32>,
+    pub ally_names: Vec<String>,
+    /// Its ships on the grid now, as indexes into the bots.
+    pub on_grid: Vec<u32>,
+    /// Its ships still to come (or fighting unseen), nearest last.
+    reserve: Vec<u32>,
+    pub brought: u32,
+    /// Ships lost so far.
+    pub lost: u32,
+    /// Unseen losses owed, a fraction of a ship.
+    owed: f64,
+    /// How well it fights (a rich alliance's ships are better fitted).
+    quality: f64,
+    pub withdrew: bool,
+}
+
+impl Side {
+    /// Ships it has left, on the grid and to come.
+    pub fn left(&self) -> u32 {
+        (self.on_grid.len() + self.reserve.len()) as u32
+    }
+}
+
+/// A battle being fought.
 pub struct Fight {
-    pub attackers: Vec<u32>,
-    pub defenders: Vec<u32>,
+    pub stakes: Stakes,
+    pub attack: Side,
+    pub defend: Side,
+    /// Whether it is being fought ship against ship, where players see it.
+    pub seen: bool,
     began: Instant,
+    last: Instant,
+    last_wave: Instant,
     /// When the last defender fell, and the bombardment began.
     cleared: Option<Instant>,
+    rallies: Option<(Rally, Rally)>,
 }
 
 impl Fight {
-    /// Ships still fighting on each side.
-    pub fn standing(&self, bots: &[Bot], system: i32) -> (usize, usize) {
-        let up = |list: &[u32]| {
-            list.iter()
-                .filter(|i| {
-                    let b = &bots[**i as usize];
-                    b.activity == Activity::Sieging && b.pod.is_none() && b.system == system
-                })
-                .count()
-        };
-        (up(&self.attackers), up(&self.defenders))
+    /// Ships each side has left.
+    pub fn standing(&self) -> (u32, u32) {
+        (self.attack.left(), self.defend.left())
+    }
+
+    /// Every bot either side has on the grid.
+    fn on_grid(&self) -> impl Iterator<Item = u32> + '_ {
+        self.attack.on_grid.iter().chain(&self.defend.on_grid).copied()
     }
 }
 
@@ -81,7 +172,18 @@ impl Report {
     }
 }
 
-/// Starts the sieges that are due, and follows the ones being fought.
+/// Whether a battle in `system` can be seen: a player in space there, or
+/// one docked there with the system's grid loaded.
+fn seen_in(world: &World, presence: &Presence, system: i32) -> bool {
+    if presence.watched().contains(&system) {
+        return true;
+    }
+    let w = world.lock();
+    let docked = w.parks.contains_key(&(system as i64)) && w.local_players(system as i64).values().any(|p| p.docked);
+    docked
+}
+
+/// Starts the sieges that are due, and fights the ones under way.
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     sieges: &mut Vec<Siege>,
@@ -99,66 +201,295 @@ pub async fn run(
 ) -> Result<Report, tokio_postgres::Error> {
     let mut report = Report::default();
     let mut kept = Vec::new();
+    let mut seen_systems = HashSet::new();
     for mut s in std::mem::take(sieges) {
-        let watched = presence.watched().contains(&s.system);
-        let verdict = match &mut s.fight {
-            None if clock < s.starts => None,
-            None => {
-                let fight = if watched { muster(&s, world, bots, ids, presence, rng, clock) } else { None };
-                match fight {
-                    Some(f) => {
-                        info!("bots: the siege of {} begins: {} ships against {}", s.names.system, f.attackers.len(), f.defenders.len());
-                        let now = crate::bulkdata::filetime_now();
-                        report.news.push((now, format!("Battle in {}: {} ships of {} engage {} of {}", s.names.system, f.attackers.len(), s.names.attacker, f.defenders.len(), s.names.defender)));
-                        report.touched.extend(f.attackers.iter().chain(&f.defenders));
-                        s.fight = Some(f);
-                        None
-                    }
-                    // Nobody to see it (or nothing there to fight over): the odds.
-                    None => {
-                        let won = rng.unit() < s.attackers as f64 / (s.attackers + s.defenders).max(1) as f64;
-                        let lost = if won { (1 + rng.below(4), 3 + rng.below(8)) } else { (3 + rng.below(8), 1 + rng.below(4)) };
-                        Some((won, (lost.0 as u32, lost.1 as u32)))
-                    }
+        if s.fight.is_none() {
+            if clock < s.starts {
+                kept.push(s);
+                continue;
+            }
+            let Some(mut f) = assemble(&s, bots, ids, presence, p, rng, &mut report) else {
+                // One side has nobody who can fight: the other walks in.
+                let won = s.attackers >= s.defenders;
+                report.news.push(sov::conclude(db, p, &s, won, (0, 0), rng, claim_delay_secs, speed).await?);
+                sov::show_towers(db, world, s.system).await;
+                continue;
+            };
+            for side in [&mut f.attack, &mut f.defend] {
+                for a in side.alliances.iter().skip(1) {
+                    side.ally_names.push(sov::alliance_name(db, *a).await);
                 }
             }
-            Some(f) => {
-                let (a, d) = f.standing(bots, s.system);
-                let lost = ((f.attackers.len() - a) as u32, (f.defenders.len() - d) as u32);
-                if !watched {
-                    Some((rng.unit() < a as f64 / (a + d).max(1) as f64, lost))
-                } else if a == 0 {
-                    Some((false, lost))
-                } else if d == 0 {
-                    let since = *f.cleared.get_or_insert_with(Instant::now);
-                    (since.elapsed() >= BOMBARD).then_some((true, lost))
-                } else if f.began.elapsed() >= MAX_FIGHT {
-                    Some((a > d, lost))
-                } else {
-                    None
-                }
+            let allies = |side: &Side| if side.ally_names.is_empty() { String::new() } else { format!(" with {}", side.ally_names.join(", ")) };
+            let now = crate::bulkdata::filetime_now();
+            report.news.push((
+                now,
+                format!(
+                    "{} in {}: {} ships of {}{} against {} of {}{}",
+                    capitalise(f.stakes.label()),
+                    s.names.system,
+                    f.attack.brought,
+                    s.names.attacker,
+                    allies(&f.attack),
+                    f.defend.brought,
+                    s.names.defender,
+                    allies(&f.defend)
+                ),
+            ));
+            info!("bots: {} in {}: {} against {}", f.stakes.label(), s.names.system, f.attack.brought, f.defend.brought);
+            s.fight = Some(f);
+        }
+        let seen = seen_in(world, presence, s.system);
+        let verdict = {
+            let f = s.fight.as_mut().expect("a fight under way");
+            if seen && !f.seen {
+                f.seen = muster(&s.system, s.defender, world, f, bots, presence, rng, clock, &mut report);
+            } else if !seen && f.seen {
+                stand_down(f, bots, atlas, presence, rng, &mut report);
+            }
+            if f.seen {
+                seen_systems.insert(s.system);
+                fight_seen(f, &s.system, bots, presence, clock, &mut report)
+            } else {
+                fight_unseen(f, s.system, atlas, bots, p, rng, &mut report)
             }
         };
-        let Some((won, lost)) = verdict else {
+        let Some(won) = verdict else {
             kept.push(s);
             continue;
         };
-        report.news.push(sov::conclude(db, p, &s, won, lost, rng, claim_delay_secs, speed).await?);
+        let f = s.fight.take().expect("a fight under way");
+        let lost = (f.attack.lost, f.defend.lost);
+        let mut news = sov::conclude(db, p, &s, won, lost, rng, claim_delay_secs, speed).await?;
+        news.1 = format!("{} ({} ships lost: {} of {}'s side, {} of {}'s)", news.1, lost.0 + lost.1, lost.0, s.names.attacker, lost.1, s.names.defender);
+        report.news.push(news);
         sov::show_towers(db, world, s.system).await;
-        if let Some(f) = s.fight.take() {
-            for i in f.attackers.into_iter().chain(f.defenders) {
-                presence.dismiss(i);
-                let bot = &mut bots[i as usize];
-                if bot.activity == Activity::Sieging {
-                    behaviour::release(bot, atlas, rng);
-                    report.released.push(i);
-                }
-                report.touched.push(i);
+        for i in f.on_grid().collect::<Vec<_>>() {
+            presence.dismiss(i);
+            let bot = &mut bots[i as usize];
+            if bot.activity == Activity::Sieging {
+                behaviour::release(bot, atlas, rng);
+                report.released.push(i);
+            }
+            report.touched.push(i);
+        }
+    }
+    presence.set_battles(seen_systems);
+    *sieges = kept;
+    Ok(report)
+}
+
+fn capitalise(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+}
+
+/// Both fleets for a siege: each side's alliance, allies who join, and how
+/// many ships they commit. None if a side has nobody to send.
+fn assemble(s: &Siege, bots: &[Bot], ids: &[Identity], presence: &Presence, p: &Politics, rng: &mut Rng, report: &mut Report) -> Option<Fight> {
+    let _ = report;
+    let stakes = Stakes::roll(rng);
+    let wealth = |side: i32| 1.0 + (p.treasury.get(&side).copied().unwrap_or(0.0) / 5_000_000_000.0).clamp(0.0, 1.0);
+    // Allies: others at war with the enemy, some of whom come.
+    let allies_of = |me: i32, enemy: i32, rng: &mut Rng| -> Vec<i32> {
+        let mut out: Vec<i32> = p
+            .wars
+            .iter()
+            .filter_map(|w| if w.a == enemy { Some(w.b) } else if w.b == enemy { Some(w.a) } else { None })
+            .filter(|a| *a != me && p.alliances.contains_key(a))
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out.retain(|_| rng.unit() < ALLY_CHANCE);
+        out.truncate(ALLIES_MAX.min(super::sov_warfare().max_allies()));
+        out
+    };
+    let attack_allies = allies_of(s.attacker, s.defender, rng);
+    let defend_allies = allies_of(s.defender, s.attacker, rng);
+    let side = |main: i32, allies: &[i32], home: bool, rng: &mut Rng| -> Option<Side> {
+        let alliances: Vec<i32> = std::iter::once(main).chain(allies.iter().copied()).collect();
+        let members: HashSet<i32> = alliances.iter().copied().collect();
+        let mut fit: Vec<u32> = (0..bots.len() as u32)
+            .filter(|i| {
+                let (b, id) = (&bots[*i as usize], &ids[*i as usize]);
+                id.alliance.is_some_and(|a| members.contains(&a)) && b.pod.is_none() && b.activity != Activity::Sieging && presence.armed(id.hull)
+            })
+            .collect();
+        if fit.is_empty() {
+            return None;
+        }
+        // The defenders turn out for their own space a little more.
+        let share = (stakes.share(rng) + if home { 0.1 } else { 0.0 }).min(1.0);
+        let brought = ((fit.len() as f64 * share) as u32).clamp(FLEET_MIN.min(fit.len() as u32), (super::battle_size() as u32).clamp(FLEET_MIN, SIDE_MAX));
+        // The nearest come; the reserve is kept nearest last, to call up in turn.
+        fit.sort_by_key(|i| std::cmp::Reverse(nearness(&bots[*i as usize], s.system)));
+        let reserve = fit.split_off(fit.len() - brought as usize);
+        Some(Side { alliances, ally_names: Vec::new(), on_grid: Vec::new(), reserve, brought, lost: 0, owed: 0.0, quality: wealth(main), withdrew: false })
+    };
+    let attack = side(s.attacker, &attack_allies, false, rng)?;
+    let defend = side(s.defender, &defend_allies, true, rng)?;
+    let now = Instant::now();
+    Some(Fight { stakes, attack, defend, seen: false, began: now, last: now, last_wave: now - REINFORCE, cleared: None, rallies: None })
+}
+
+/// The fight comes into view: rally points round the defender's tower. False
+/// if there is no tower left to fight round (it is fought unseen).
+#[allow(clippy::too_many_arguments)]
+fn muster(system: &i32, defender: i32, world: &World, f: &mut Fight, bots: &mut [Bot], presence: &mut Presence, rng: &mut Rng, clock: u32, report: &mut Report) -> bool {
+    let place = {
+        let w = world.lock();
+        let found = w.parks.get(&(*system as i64)).and_then(|park| {
+            park.structures.values().find(|t| t.is_tower() && t.alliance_id == Some(defender as i64)).map(|t| (t.id, t.pos, t.field_radius.max(t.radius)))
+        });
+        found
+    };
+    let Some((tower, at, field)) = place else { return false };
+    let dir = rng.in_sphere(1.0);
+    let dir = if dir.len() > 1e-6 { dir.unit() } else { crate::ballpark::Vec3::new(1.0, 0.0, 0.0) };
+    let defend = Rally { anchor: tower, point: at + dir * (field + DEFENDERS_OUT), orbit: field + DEFENDERS_OUT, target: None };
+    let attack = Rally { anchor: tower, point: at + dir * (field + ATTACKERS_IN), orbit: field + ATTACKERS_ORBIT, target: None };
+    f.rallies = Some((attack, defend));
+    f.last_wave = Instant::now() - REINFORCE;
+    reinforce(f, *system, bots, presence, clock, report);
+    true
+}
+
+/// Both sides' reserves warp in, as far as the grid has room.
+fn reinforce(f: &mut Fight, system: i32, bots: &mut [Bot], presence: &mut Presence, clock: u32, report: &mut Report) {
+    if f.last_wave.elapsed() < REINFORCE {
+        return;
+    }
+    f.last_wave = Instant::now();
+    let Some((attack, defend)) = f.rallies else { return };
+    let room = (presence.cap().saturating_sub(ROOM_FOR_OTHERS) / 2).max(1);
+    for (side, rally) in [(&mut f.attack, attack), (&mut f.defend, defend)] {
+        if side.withdrew {
+            continue;
+        }
+        while side.on_grid.len() < room {
+            let Some(i) = side.reserve.pop() else { break };
+            if bots[i as usize].pod.is_some() || bots[i as usize].activity == Activity::Sieging {
+                continue;
+            }
+            enlist(bots, presence, i, system, rally, clock);
+            side.on_grid.push(i);
+            report.touched.push(i);
+        }
+    }
+}
+
+/// The fight goes out of view: the ships on the grid go back to the
+/// reserves, to fight on unseen.
+fn stand_down(f: &mut Fight, bots: &mut [Bot], atlas: &Atlas, presence: &mut Presence, rng: &mut Rng, report: &mut Report) {
+    for side in [&mut f.attack, &mut f.defend] {
+        for i in std::mem::take(&mut side.on_grid) {
+            presence.dismiss(i);
+            let bot = &mut bots[i as usize];
+            if bot.activity == Activity::Sieging {
+                behaviour::release(bot, atlas, rng);
+                report.released.push(i);
+            }
+            report.touched.push(i);
+            if bot.pod.is_none() {
+                side.reserve.push(i);
             }
         }
     }
-    *sieges = kept;
-    Ok(report)
+    f.seen = false;
+    f.rallies = None;
+}
+
+/// A second of a fight players can see: losses counted, reinforcements
+/// called, and the verdict once there is one (true: the attackers won).
+fn fight_seen(f: &mut Fight, system: &i32, bots: &mut [Bot], presence: &mut Presence, clock: u32, report: &mut Report) -> Option<bool> {
+    for side in [&mut f.attack, &mut f.defend] {
+        let mut lost = 0;
+        side.on_grid.retain(|i| {
+            let b = &bots[*i as usize];
+            if b.pod.is_some() {
+                lost += 1;
+                return false;
+            }
+            b.activity == Activity::Sieging && b.system == *system
+        });
+        side.lost += lost;
+    }
+    rout(f);
+    reinforce(f, *system, bots, presence, clock, report);
+    verdict(f, true)
+}
+
+/// A second of a fight nobody sees: each side loses ships in proportion to
+/// the other's, every one a killmail.
+fn fight_unseen(f: &mut Fight, system: i32, atlas: &Atlas, bots: &mut [Bot], p: &mut Politics, rng: &mut Rng, report: &mut Report) -> Option<bool> {
+    let dt = f.last.elapsed().as_secs_f64().min(5.0);
+    f.last = Instant::now();
+    let (a, d) = (f.attack.left() as f64, f.defend.left() as f64);
+    let noise = |rng: &mut Rng| 0.7 + rng.unit() * 0.6;
+    if !f.attack.withdrew && !f.defend.withdrew {
+        f.attack.owed += ATTRITION * d * f.defend.quality / f.attack.quality.max(0.1) * dt * noise(rng);
+        f.defend.owed += ATTRITION * a * f.attack.quality / f.defend.quality.max(0.1) * dt * noise(rng);
+    }
+    for (victims, killers) in [(0usize, 1usize), (1, 0)] {
+        let whole = {
+            let side = if victims == 0 { &mut f.attack } else { &mut f.defend };
+            let whole = side.owed.floor() as u32;
+            side.owed -= whole as f64;
+            whole
+        };
+        for _ in 0..whole {
+            let (victim_side, killer_side) = if victims == 0 { (&mut f.attack, &f.defend) } else { (&mut f.defend, &f.attack) };
+            if victim_side.reserve.is_empty() {
+                break;
+            }
+            let v = victim_side.reserve.swap_remove(rng.below(victim_side.reserve.len()));
+            victim_side.lost += 1;
+            let killer = if killer_side.reserve.is_empty() { killer_side.on_grid.first().copied() } else { Some(killer_side.reserve[rng.below(killer_side.reserve.len())]) };
+            if let Some(k) = killer {
+                p.unseen_kills.push((v, k, system, bots[v as usize].hull));
+            }
+            p.lost += 1;
+            let bot = &mut bots[v as usize];
+            if bot.activity != Activity::Sieging {
+                let _ = behaviour::reclone(bot, atlas, rng);
+                report.touched.push(v);
+            }
+        }
+        let _ = killers;
+    }
+    rout(f);
+    verdict(f, false)
+}
+
+/// A side worn down to a fifth and outnumbered two to one withdraws.
+fn rout(f: &mut Fight) {
+    let (a, d) = f.standing();
+    if !f.attack.withdrew && a as f64 <= f.attack.brought as f64 * ROUT && d >= 2 * a.max(1) {
+        f.attack.withdrew = true;
+    }
+    if !f.defend.withdrew && d as f64 <= f.defend.brought as f64 * ROUT && a >= 2 * d.max(1) {
+        f.defend.withdrew = true;
+    }
+}
+
+/// Who has won, if anyone yet: true for the attackers.
+fn verdict(f: &mut Fight, seen: bool) -> Option<bool> {
+    let (a, d) = f.standing();
+    if f.attack.withdrew || a == 0 {
+        return Some(false);
+    }
+    if f.defend.withdrew || d == 0 {
+        if !seen {
+            return Some(true);
+        }
+        // The field is clear: the tower is bombarded before it falls.
+        let since = *f.cleared.get_or_insert_with(Instant::now);
+        return (since.elapsed() >= BOMBARD).then_some(true);
+    }
+    if f.began.elapsed() >= MAX_FIGHT {
+        return Some(a > d);
+    }
+    None
 }
 
 /// How near a bot is to answer a call to `system`: 0 in space there, 1
@@ -195,35 +526,6 @@ pub fn enlist(bots: &mut [Bot], presence: &mut Presence, i: u32, system: i32, ra
     let docked_here = (b.online && b.system == system && b.station != 0).then_some(b.station);
     behaviour::muster(b, system, clock);
     presence.muster(i, rally, docked_here);
-}
-
-/// Calls up both fleets for a siege in a watched system, around the
-/// defender's tower there. None if the defender has no tower left there.
-#[allow(clippy::too_many_arguments)]
-fn muster(s: &Siege, world: &World, bots: &mut [Bot], ids: &[Identity], presence: &mut Presence, rng: &mut Rng, clock: u32) -> Option<Fight> {
-    let (tower, at, field) = {
-        let w = world.lock();
-        let park = w.parks.get(&(s.system as i64))?;
-        let t = park.structures.values().find(|t| t.is_tower() && t.alliance_id == Some(s.defender as i64))?;
-        (t.id, t.pos, t.field_radius.max(t.radius))
-    };
-    let dir = rng.in_sphere(1.0);
-    let dir = if dir.len() > 1e-6 { dir.unit() } else { crate::ballpark::Vec3::new(1.0, 0.0, 0.0) };
-    let room = presence.cap().saturating_sub(ROOM_FOR_OTHERS) / 2;
-    let size = |pilots: u32| ((pilots / PILOTS_PER_SHIP) as usize).clamp(FLEET_MIN, FLEET_MAX).min(room.max(1));
-    let attackers = pick(bots, ids, presence, size(s.attackers), s.system, 3, |id| id.alliance == Some(s.attacker));
-    let defenders = pick(bots, ids, presence, size(s.defenders), s.system, 3, |id| id.alliance == Some(s.defender));
-    if attackers.is_empty() || defenders.is_empty() {
-        return None;
-    }
-    let defend = Rally { anchor: tower, point: at + dir * (field + DEFENDERS_OUT), orbit: field + DEFENDERS_OUT, target: None };
-    let attack = Rally { anchor: tower, point: at + dir * (field + ATTACKERS_IN), orbit: field + ATTACKERS_ORBIT, target: None };
-    for (list, rally) in [(&attackers, attack), (&defenders, defend)] {
-        for i in list {
-            enlist(bots, presence, *i, s.system, rally, clock);
-        }
-    }
-    Some(Fight { attackers, defenders, began: Instant::now(), cleared: None })
 }
 
 #[cfg(test)]
@@ -325,14 +627,18 @@ mod tests {
         presence.sync(&world, &atlas, &mut bots, &ids, &by_char, Vec::new(), &mut rng);
         let names = sov::SiegeNames { attacker: "A".into(), defender: "D".into(), system: "Here".into(), region: "R".into(), security: -0.3 };
         let siege = Siege { war: 1, attacker: ATTACKER, defender: DEFENDER, attacker_exec: 1, attacker_race: 1, attackers: 300, defenders: 300, system: HERE, names, starts: 0, starts_at: 0, fight: None };
-        let fight = muster(&siege, &world, &mut bots, &ids, &mut presence, &mut rng, 0).expect("both sides have armed ships");
-        assert_eq!((fight.attackers.len(), fight.defenders.len()), (6, 6));
+        let politics = Politics::new(&atlas);
+        let mut report = Report::default();
+        let mut fight = assemble(&siege, &bots, &ids, &presence, &politics, &mut rng, &mut report).expect("both sides have armed ships");
+        assert_eq!((fight.attack.brought, fight.defend.brought), (6, 6), "small alliances bring everyone");
+        assert!(muster(&HERE, DEFENDER, &world, &mut fight, &mut bots, &mut presence, &mut rng, 0, &mut report), "fought round the tower");
+        assert_eq!((fight.attack.on_grid.len(), fight.defend.on_grid.len()), (6, 6));
         presence.sync(&world, &atlas, &mut bots, &ids, &by_char, Vec::new(), &mut rng);
         assert_eq!(presence.shown(), 12, "both fleets are in space");
 
         // They fight: ships are lost on both sides' account.
         let mut now = crate::combat::now_ms();
-        let mut lost = 0;
+        let mut verdict = None;
         for _ in 0..600 {
             now += 1_000;
             let mut w = world.lock();
@@ -340,16 +646,16 @@ mod tests {
             let tick = park.tick + 1;
             park.advance(tick);
             crate::fight::step(park, now, &mut crate::heartbeat::Out::default());
-            lost += park.bot_losses.iter().filter(|l| l.pod.is_some()).count();
             drop(w);
             presence.sync(&world, &atlas, &mut bots, &ids, &by_char, Vec::new(), &mut rng);
-            let (a, d) = fight.standing(&bots, HERE);
-            if a == 0 || d == 0 {
+            fight.cleared = fight.cleared.map(|_| Instant::now() - BOMBARD);
+            verdict = fight_seen(&mut fight, &HERE, &mut bots, &mut presence, 0, &mut report);
+            if verdict.is_some() {
                 break;
             }
         }
-        let (a, d) = fight.standing(&bots, HERE);
-        assert!(lost >= 6, "ships were destroyed: {lost}, standing {a} and {d}");
-        assert!(a == 0 || d == 0, "one side was wiped out: {a} and {d}");
+        let (a, d) = fight.standing();
+        assert!(fight.attack.lost + fight.defend.lost >= 2, "ships were destroyed: standing {a} and {d}");
+        assert!(verdict.is_some() || a == 0 || d == 0, "the battle was decided: {a} and {d}");
     }
 }

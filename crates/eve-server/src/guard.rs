@@ -384,6 +384,7 @@ fn act(park: &mut Park, id: i64, target: i64, now: i64, out: &mut Out) {
     let distance = ((ship.pos - s.pos).len() - ship.stats.radius - s.radius).max(0.0);
     let by = Attacker { ship_id: id, char_id: 0, client_id: None, ship_type: s.type_id, weapon_type: s.type_id };
     let name = s.name.clone();
+    let owner = s.owner_id;
     let (spos, tpos, tvel) = (s.pos, ship.pos, ship.vel);
     let signature = ship.fight.as_ref().map_or(ship.stats.radius, |f| f.sig());
     let sensors = ship.fight.as_ref().map_or([0.0; 4], |f| f.sensors);
@@ -404,6 +405,7 @@ fn act(park: &mut Park, id: i64, target: i64, now: i64, out: &mut Out) {
             let Some(ammo) = g.ammo.clone().filter(|a| a.quantity > 0) else { return };
             use_round(park, id, out);
             let speed = if ammo.flight_ms > 0 { ammo.range / ammo.flight_ms as f64 } else { 1.0 };
+            let ball = crate::fight::missile_ball(park, id, target, ammo.type_id, None, owner, speed * 1000.0, out);
             park.missiles.push(Missile {
                 attacker: by,
                 target,
@@ -413,6 +415,7 @@ fn act(park: &mut Park, id: i64, target: i64, now: i64, out: &mut Out) {
                 aoe_velocity: ammo.aoe_velocity,
                 reaches: distance <= ammo.range,
                 weapon: name,
+                ball,
             });
         }
         Weapon::Ew { action, optimal, falloff } => {

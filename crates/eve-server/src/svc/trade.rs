@@ -221,7 +221,9 @@ async fn place(txn: &mut ItemTxn<'_>, fx: &mut Effects, me: i64, order: NewOrder
 }
 
 async fn buy(txn: &mut ItemTxn<'_>, fx: &mut Effects, me: i64, order: &NewOrder, at: &Where) -> Result<(), Refusal> {
-    // Sell orders inside the buy order's range, cheapest first.
+    // Sell orders inside the buy order's range: those at the buyer's own
+    // station first, so what is bought there is delivered there, then the
+    // cheapest elsewhere for whatever that station cannot cover.
     let rows = txn
         .tx()
         .query(
@@ -230,7 +232,7 @@ async fn buy(txn: &mut ItemTxn<'_>, fx: &mut Effects, me: i64, order: &NewOrder,
                 WHERE "typeID" = $1 AND "regionID" = $2 AND "bid" = 0 AND "orderState" = 0
                   AND "volRemaining" > 0 AND "price" <= $3 AND "charID" <> $4
                   AND ($5 > 0 OR ($5 = -1 AND "stationID" = $6) OR ($5 = 0 AND "solarSystemID" = $7))
-                ORDER BY "price", "issued"
+                ORDER BY ("stationID" = $6) DESC, "price", "issued"
                   FOR UPDATE"#,
             &[
                 &(order.type_id as i32),

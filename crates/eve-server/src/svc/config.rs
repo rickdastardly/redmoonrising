@@ -131,15 +131,16 @@ async fn owners(ctx: &Ctx<'_>, ids: &[i32]) -> Value {
 async fn locations(ctx: &Ctx<'_>, ids: &[i32]) -> Value {
     const SQL: &str = r#"
         SELECT k.id AS "locationID",
-               COALESCE(l."locationName", d."itemName", e."itemName") AS "locationName",
+               COALESCE(s."stationName", l."locationName", d."itemName", e."itemName") AS "locationName",
                COALESCE(l."x", d."x", e."x") AS "x",
                COALESCE(l."y", d."y", e."y") AS "y",
                COALESCE(l."z", d."z", e."z") AS "z"
           FROM unnest($1::int[]) AS k(id)
+          LEFT JOIN "staStations"        s ON s."stationID"  = k.id
           LEFT JOIN "eveStaticLocations" l ON l."locationID" = k.id
           LEFT JOIN "mapDenormalize"     d ON d."itemID"     = k.id
           LEFT JOIN "entity"             e ON e."itemID"     = k.id
-         WHERE COALESCE(l."locationName", d."itemName", e."itemName") IS NOT NULL"#;
+         WHERE COALESCE(s."stationName", l."locationName", d."itemName", e."itemName") IS NOT NULL"#;
     keyed(ctx, "GetMultiLocationsEx", SQL, ids).await
 }
 
@@ -212,12 +213,13 @@ const CONSTELLATIONS_SQL: &str = r#"
 const SYSTEMS_SQL: &str = r#"
     SELECT "solarSystemID" AS "itemID", "solarSystemName" AS "itemName", 5 AS "typeID",
            5 AS "groupID", "constellationID" AS "locationID", NULL::int AS "orbitID",
-           "x", "y", "z", "factionID", "radius", "security"
+           "x", "y", "z", "factionID", "radius", GREATEST("security", 0) AS "security"
       FROM "mapSolarSystems" WHERE $1 = 9 OR "constellationID" = $1"#;
 
 const CELESTIALS_SQL: &str = r#"
     SELECT "itemID", "itemName", "typeID", "groupID", "solarSystemID" AS "locationID",
-           "orbitID", "x", "y", "z", NULL::int AS "factionID", "radius", "security"
+           "orbitID", "x", "y", "z", NULL::int AS "factionID", "radius",
+           GREATEST("security", 0) AS "security"
       FROM "mapDenormalize" WHERE $1 <> 9 AND "solarSystemID" = $1"#;
 
 async fn map_objects(

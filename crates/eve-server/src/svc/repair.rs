@@ -1,8 +1,7 @@
 //! `repairSvc`: the station repair shop (base_repairshop.py), bound per station,
 //! and repackaging from the item menu (menusvc.py UnasembleItems), unbound.
 //!
-//! Nothing takes damage yet, so every quote is for an undamaged item; damage
-//! is read from the item's `damage` attribute so repairs work once it does.
+//! A quote covers an item's armor (`armorDamage`) and structure (`damage`).
 //! There is no repair pricing data, so repairs cost nothing.
 
 use eve_marshal::Value;
@@ -15,6 +14,8 @@ use crate::svc::rows::{float, int, key_val};
 
 const ATTR_DAMAGE: i32 = 3;
 const ATTR_HP: i32 = 9;
+const ATTR_ARMOR_DAMAGE: i32 = 266;
+const ATTR_ARMOR_HP: i32 = 265;
 /// Column position of `singleton` in an item row (const.ixSingleton).
 const IX_SINGLETON: i64 = 6;
 
@@ -53,19 +54,22 @@ fn ids(v: Option<&Value>) -> Vec<i64> {
 
 /// {itemID: KeyVal(quote=[KeyVal(itemID, typeID, damage, maxHealth,
 /// costToRepairOneUnitOfDamage)])} for the caller's items
-/// (base_repairshop.py:176-187).
+/// (base_repairshop.py:176-187). The shop shows one line per item, so a
+/// ship's armor and structure damage are quoted together.
 async fn damage_reports(ctx: &Ctx<'_>, item_ids: &[i64]) -> Value {
     let Some(me) = ctx.session.char_id else { return Value::Dict(Vec::new()) };
     let ids: Vec<i32> = item_ids.iter().map(|i| *i as i32).collect();
     let sql = r#"
         SELECT e."itemID", e."typeID",
-               coalesce(d."valueFloat", d."valueInt"::float8, 0),
-               coalesce(hp."value"::float8, 0)
+               coalesce(d."valueFloat", d."valueInt"::float8, 0) + coalesce(ad."valueFloat", ad."valueInt"::float8, 0),
+               coalesce(hp."value"::float8, 0) + coalesce(ahp."value"::float8, 0)
           FROM entity e
           LEFT JOIN entity_attributes d ON d."itemID" = e."itemID" AND d."attributeID" = $3
+          LEFT JOIN entity_attributes ad ON ad."itemID" = e."itemID" AND ad."attributeID" = $5
           LEFT JOIN "dgmTypeAttribs" hp ON hp."typeID" = e."typeID" AND hp."attributeID" = $4
+          LEFT JOIN "dgmTypeAttribs" ahp ON ahp."typeID" = e."typeID" AND ahp."attributeID" = $6
          WHERE e."itemID" = ANY($1) AND e."ownerID" = $2"#;
-    let rows = ctx.query(sql, &[&ids, &(me as i32), &ATTR_DAMAGE, &ATTR_HP]).await;
+    let rows = ctx.query(sql, &[&ids, &(me as i32), &ATTR_DAMAGE, &ATTR_HP, &ATTR_ARMOR_DAMAGE, &ATTR_ARMOR_HP]).await;
     let reports = rows
         .iter()
         .map(|r| {
@@ -73,7 +77,7 @@ async fn damage_reports(ctx: &Ctx<'_>, item_ids: &[i64]) -> Value {
             let quote = key_val(vec![
                 ("itemID", Value::Int(item_id)),
                 ("typeID", Value::int_or_none(int(r, 1))),
-                ("damage", Value::Double(float(r, 2).unwrap_or(0.0))),
+                ("damage", Value::Double(float(r, 2).unwrap_or(0.0).max(0.0))),
                 ("maxHealth", Value::Double(float(r, 3).unwrap_or(0.0))),
                 ("costToRepairOneUnitOfDamage", Value::Double(0.0)),
             ]);
@@ -83,13 +87,37 @@ async fn damage_reports(ctx: &Ctx<'_>, item_ids: &[i64]) -> Value {
     Value::Dict(reports)
 }
 
+/// Repairs the caller's items in full: armor and structure. The client's
+/// gauges are told, so the ship shows repaired without undocking.
 async fn repair(ctx: &Ctx<'_>, item_ids: &[i64]) {
     let Some(me) = ctx.session.char_id else { return };
     let ids: Vec<i32> = item_ids.iter().map(|i| *i as i32).collect();
+    let attrs = [ATTR_DAMAGE, ATTR_ARMOR_DAMAGE];
     let sql = r#"DELETE FROM entity_attributes a USING entity e
-                  WHERE a."itemID" = e."itemID" AND a."attributeID" = $3
-                    AND e."itemID" = ANY($1) AND e."ownerID" = $2"#;
-    ctx.execute(sql, &[&ids, &(me as i32), &ATTR_DAMAGE]).await;
+                  WHERE a."itemID" = e."itemID" AND a."attributeID" = ANY($3)
+                    AND e."itemID" = ANY($1) AND e."ownerID" = $2
+              RETURNING a."itemID", a."attributeID""#;
+    let rows = ctx.query(sql, &[&ids, &(me as i32), &attrs.to_vec()]).await;
+    if rows.is_empty() {
+        return;
+    }
+    let now = crate::combat::filetime(crate::combat::now_ms());
+    let changes: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            Value::Tuple(vec![
+                Value::bytes("OnModuleAttributeChange"),
+                Value::Int(me),
+                Value::Int(int(r, 0).unwrap_or(0)),
+                Value::Int(int(r, 1).unwrap_or(0)),
+                Value::Long(now),
+                Value::Double(0.0),
+                Value::Double(0.0),
+            ])
+        })
+        .collect();
+    info!("{me} repaired {} item(s): {} damage value(s) cleared", ids.len(), changes.len());
+    ctx.world.lock().notify(&[ctx.client_id], "OnModuleAttributeChanges", Value::Tuple(vec![Value::List(changes)]));
 }
 
 /// Repackage assembled items the caller owns in `station`: never the active

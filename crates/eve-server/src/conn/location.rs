@@ -19,8 +19,6 @@ use crate::world::{Move, Notification};
 
 /// const.maxStargateJumpingDistance.
 const JUMP_RANGE: f64 = 2_500.0;
-/// The client runs its own simulation; allow for the two drifting apart.
-const RANGE_SLACK: f64 = 1.25;
 /// How long the gate's flash and the ship's jump-out play before the ship
 /// is gone. Their length is in the effects' models; this is a choice.
 const JUMP_OUT_TIME: Duration = Duration::from_secs(3);
@@ -427,7 +425,7 @@ impl Conn {
             })
         };
         match gap {
-            Some(gap) if gap <= JUMP_RANGE * RANGE_SLACK => {}
+            Some(gap) if gap <= JUMP_RANGE => {}
             Some(gap) => {
                 info!("jump refused: {gap:.0} m from gate {from_gate}");
                 let maxdist = [("maxdist", Value::Int(JUMP_RANGE as i64))];

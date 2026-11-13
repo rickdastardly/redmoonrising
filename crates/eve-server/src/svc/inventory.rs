@@ -104,6 +104,12 @@ async fn container_method(ctx: &Ctx<'_>, container: Container, call: &Call) -> O
             return Outcome::custom("You are not allowed to look inside that structure from here.");
         }
     }
+    // A can or wreck in space opens only within 2,500 m.
+    if let (Container::Item(id), "List", Some(system), Some(ship)) = (container, method, ctx.session.solar_system_id, ctx.session.ship_id) {
+        if crate::loot::is_can(ctx.world, system, id) && !crate::loot::in_reach(ctx.world, system, ship, id) {
+            return Outcome::custom(format!("You need to be within {:.0} m of that container to open it.", crate::loot::TRANSFER_RANGE));
+        }
+    }
     // An anchored outpost platform's hold has a Build button.
     if method == "Build" {
         if let Container::Item(id) = container {

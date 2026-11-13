@@ -814,7 +814,9 @@ pub async fn apply_to_alliances(db: &Client, world: &crate::world::World, p: &Po
                     AND NOT EXISTS (SELECT 1 FROM "botGroups" g WHERE g."ownerID" = a."allianceID" OR g."ownerID" = a."executorCorpID")"#;
     for row in db.query(sql, &[]).await? {
         let (alliance, pending) = (int(&row, 0).unwrap_or(0), int(&row, 1).unwrap_or(0));
-        if pending >= PENDING || rng.unit() >= CHANCE * factor {
+        // The more space an alliance holds, the more corporations want in.
+        let pull = 1.0 + p.held.get(&(alliance as i32)).copied().unwrap_or(0) as f64 / 4.0;
+        if pending >= PENDING || rng.unit() >= (CHANCE * factor * pull).min(0.5) {
             continue;
         }
         let corp = free[rng.below(free.len())];

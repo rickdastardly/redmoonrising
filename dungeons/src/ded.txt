@@ -1,0 +1,907 @@
+# DED complexes, researched from public guides (EVE University wiki) for the
+# sites as they stood after Red Moon Rising. Rooms, groups and bosses follow
+# the guides; gate distances are estimates where the guides give none.
+#
+# = id | name | faction | rating
+# > room name | open|locked | gate distance in km (0: last room)
+#   count names/separated/by/slash @ class        a group in the room's arrival wave
+#   * count name @ class                           a boss (overseer)
+#   + count names @ class                          starts a wave that comes once the room is clear
+# Classes: f frigate, d destroyer, c cruiser, bc battlecruiser, bs battleship.
+# A name the game does not have becomes a deadspace ship of that class.
+
+# ---- Serpentis ----------------------------------------------------------------
+
+= ded-serpentis-1 | Serpentis Drug Outlet | serpentis | 1
+# Gate distances from CCP's approximate layout of dungeon 116.
+> Dealer Gate | open | 20
+  1 Coreli Guardian Scout @ f
+> Storage Yard | locked | 40
+  3 Coreli Agent/Coreli Scout/Coreli Spy @ f
+  3 Coreli Agent/Coreli Scout/Coreli Spy @ f
+  * 1 Serpentis Drugstore Overseer @ f
+  + 8 Coreli Scout/Coreli Spy @ f
+> Outlet | open | 0
+  22 Coreli Agent/Coreli Initiate/Coreli Scout/Coreli Spy @ f
+  * 1 Serpentis Outlet Crime Boss @ f
+
+= ded-serpentis-2 | Serpentis Live Cargo Distribution Facilities | serpentis | 2
+> First Pocket | locked | 25
+  25 Coreli Agent/Coreli Initiate/Coreli Scout @ f
+> Second Pocket | locked | 30
+  11 Coreli Agent/Coreli Initiate/Coreli Scout @ f
+> Third Pocket | locked | 30
+  26 Coreli Agent/Coreli Initiate/Coreli Scout @ f
+  6 Corelum Chief Scout/Corelum Chief Spy @ c
+  1 Corelum Chief Guard/Corelum Chief Safeguard @ c
+> Holding Pens | open | 0
+  16 Coreli Spy/Coreli Agent/Coreli Patroller/Coreli Watchman @ f
+  1 Corelum Chief Spy @ c
+  8 Corelum Chief Patroller/Corelum Chief Watchman @ c
+  * 1 Shadow Serpentis Warden @ c
+
+= ded-serpentis-3 | Serpentis Narcotic Warehouses | serpentis | 3
+# Gate distances from CCP's layout of dungeon 2244.
+> First Pocket | locked | 21
+  15 Coreli Guard/Coreli Patroller/Coreli Watchman @ f
+> Check-In Tunnel | locked | 20
+  18 Coreli Agent/Coreli Patroller/Coreli Spy @ f
+> Security Corridor | locked | 20
+  28 Coreli Agent/Coreli Patroller/Coreli Spy @ f
+  * 1 Serpentis Chief of Security @ c
+> Central Warehouses | locked | 20
+  16 Coreli Guard/Coreli Patroller/Coreli Safeguard @ f
+  * 1 Serpentis Refinery Headmaster @ c
+> Administration Sector | open | 0
+  31 Coreli Agent/Coreli Patroller/Coreli Spy @ f
+  * 1 Serpentis Supplystation Overseer @ c
+
+= ded-serpentis-4 | Serpentis Phi-Outpost | serpentis | 4
+> First Pocket | locked | 35
+  11 Coreli Guard/Coreli Defender/Coreli Safeguard @ f
+  6 Coreli Patroller/Coreli Watchman @ f
+  3 Corelum Chief Defender/Corelum Chief Protector @ c
+  2 Corelum Chief Guard/Corelum Chief Patroller @ c
+  3 Corelatis Wing Leader @ bc
+> Phi Operations | open | 0
+  * 1 Phi-Operation Protector @ bc
+  12 Coreli Guard/Coreli Defender/Coreli Safeguard @ f
+  6 Coreli Patroller/Coreli Watchman @ f
+  7 Corelum Chief Defender/Corelum Chief Protector @ c
+  3 Corelatis Platoon Leader/Corelatis Wing Leader @ bc
+
+= ded-serpentis-5 | Serpentis Corporation Hydroponics Site | serpentis | 5
+# Gate distances from CCP's layout of dungeon 5289.
+> 1st Pocket | locked | 54
+  21 Coreli Defender/Coreli Protector @ f
+  7 Corelum Chief Infantry/Corelum Chief Sentinel @ c
+  2 Corelatis Squad Leader/Corelatis Wing Leader @ bc
+  3 Core Rear Admiral/Core Flotilla Admiral @ bs
+> 2nd Pocket | locked | 53
+  6 Coreli Defender/Coreli Protector @ f
+  3 Corelior Soldier/Corelior Trooper @ d
+  5 Corelum Chief Defender/Corelum Chief Infantry/Corelum Chief Sentinel @ c
+  11 Corelatis Squad Leader/Corelatis Wing Leader @ bc
+  11 Core Admiral/Core Rear Admiral/Core Flotilla Admiral @ bs
+> Greenhouse | open | 0
+  11 Coreli Initiate/Coreli Defender/Coreli Protector/Coreli Scout @ f
+  1 Corelior Trooper @ d
+  9 Corelum Chief Defender/Corelum Chief Infantry/Corelum Chief Sentinel @ c
+  5 Core High Admiral/Core Rear Admiral @ bs
+  * 1 Sarpati Family Enforcer @ bc
+
+= ded-serpentis-6 | Serpentis Logistical Outpost | serpentis | 6
+# Gate distances from CCP's layout of dungeon 2455.
+> First Pocket | locked | 30
+  2 Coreli Guardian Spy @ f
+  2 Coreli Guardian Agent @ f
+  4 Corelum Guardian Chief Protector/Corelum Guardian Chief Defender @ c
+  4 Core Admiral/Core High Admiral @ bs
+  + 4 Corelum Guardian Chief Protector/Corelum Guardian Chief Defender @ c
+  3 Core Admiral/Core High Admiral @ bs
+  + 6 Coreli Guardian Patroller/Coreli Guardian Watchman @ f
+  3 Corelum Guardian Chief Sentinel @ c
+> Second Pocket | locked | 65
+  12 Coreli Guardian Initiate/Coreli Guardian Scout @ f
+  4 Corelum Guardian Chief Infantry @ c
+  16 Core Vice Admiral/Core Grand Admiral @ bs
+  + 2 Corelior Sentinel @ d
+> Third Pocket | open | 0
+  9 Coreli Guardian Watchman/Coreli Guardian Initiate/Coreli Guardian Scout @ f
+  3 Corelum Guardian Chief Infantry @ c
+  6 Core Admiral/Core High Admiral @ bs
+  9 Core Vice Admiral @ bs
+  * 1 Serpentis Major @ bs
+
+= ded-serpentis-7 | Serpentis Paramilitary Complex | serpentis | 7
+> Room 1 | locked | 40
+  13 Corelior Infantry/Corelior Soldier/Corelior Trooper @ d
+  9 Corelatis Platoon Leader/Corelatis Squad Leader @ bc
+  8 Core Admiral/Core High Admiral @ bs
+> Room 2 | locked | 40
+  11 Corelior Infantry/Corelior Soldier/Corelior Trooper @ d
+  10 Corelatis Platoon Leader/Corelatis Squad Leader @ bc
+  10 Core Admiral/Core High Admiral @ bs
+> Room 3 | locked | 40
+  12 Corelior Infantry/Corelior Soldier/Corelior Trooper @ d
+  11 Corelatis Platoon Leader/Corelatis Squad Leader @ bc
+  9 Core Admiral/Core High Admiral @ bs
+  * 1 Shadow Corelum Chief Guard/Shadow Corelum Chief Patroller @ c
+> Room 4 | locked | 40
+  12 Corelior Infantry/Corelior Sentinel/Corelior Soldier/Corelior Trooper @ d
+  13 Corelatis Platoon Leader/Corelatis Squad Leader/Corelatis Wing Leader @ bc
+  6 Core Admiral/Core High Admiral/Core Rear Admiral @ bs
+  1 Core Vice Admiral @ bs
+  * 1 Shadow Core Lord Admiral/Shadow Core Grand Admiral @ bs
+> Room 5 | open | 0
+  16 Corelior Infantry/Corelior Soldier/Corelior Trooper @ d
+  1 Corelum Chief Infantry @ c
+  10 Corelatis Platoon Leader/Corelatis Squad Leader @ bc
+  11 Core Admiral/Core High Admiral @ bs
+  * 1 Shadow Serpentis Big Boss @ bs
+
+= ded-serpentis-8 | Serpentis Prison Camp | serpentis | 8
+# Gate distances from CCP's layout of dungeon 5251.
+> Room 1 | locked | 36
+  13 Corelior Infantry/Corelior Sentinel @ d
+  2 Core Admiral/Core Rear Admiral @ bs
+  1 Core Vice Admiral @ bs
+> Room 2 | locked | 11
+  33 Corelior Infantry/Corelior Sentinel @ d
+  6 Corelatis Platoon Leader @ bc
+  10 Core Admiral/Core High Admiral @ bs
+  2 Core Vice Admiral @ bs
+> Room 3 | locked | 10
+  13 Corelior Infantry @ d
+  8 Corelum Chief Infantry/Corelum Chief Sentinel @ c
+  5 Corelatis Platoon Leader @ bc
+  14 Core Admiral/Core High Admiral @ bs
+  * 1 Shadow Core Grand Admiral @ bs
+> Isolation Block | open | 0
+  8 Coreli Defender @ f
+  14 Coreli Guardian Agent/Coreli Spy @ f
+  32 Corelior Infantry/Corelior Sentinel @ d
+  8 Corelum Chief Infantry/Corelum Chief Sentinel @ c
+  6 Corelum Guardian Chief Defender @ c
+  10 Corelatis Captain Sentry @ bc
+  6 Core Admiral/Core Vice Admiral @ bs
+
+= ded-serpentis-10 | Serpentis Fleet Shipyard | serpentis | 10
+# Gate distances from CCP's layout of dungeon 2259.
+> Entrance Pocket | locked | 20
+  4 Corelior Infantry/Corelior Sentinel @ d
+  1 Corelatis Captain @ bc
+  4 Core Grand Admiral/Core Lord Admiral @ bs
+  12 Corelior Infantry/Corelior Sentinel @ d
+  5 Corelatis Captain/Corelatis High Captain @ bc
+  4 Core Grand Admiral/Core Lord Admiral @ bs
+  * 1 Serpentis Shipyard Defender @ bs
+> Central Pocket | locked | 30
+  6 Corelior Artillery/Corelior Cannoneer @ d
+  11 Corelatis Captain/Corelatis High Captain @ bc
+  8 Core Grand Admiral/Core Lord Admiral @ bs
+  * 1 Serpentis Major Overseer @ bs
+> Alpha Hangar | locked | 19
+  15 Corelior Artillery/Corelior Cannoneer @ d
+  5 Corelatis Captain/Corelatis High Captain @ bc
+  8 Core Grand Admiral/Core Lord Admiral @ bs
+  * 1 Serpentis Executive Officer @ bs
+> Beta Hangar | locked | 15
+  15 Corelior Artillery/Corelior Cannoneer @ d
+  5 Corelatis Captain/Corelatis High Captain @ bc
+  7 Core Grand Admiral/Core Lord Admiral @ bs
+  * 1 Serpentis Deadspace Sergeant @ bs
+> Fleet HQ | open | 0
+  12 Corelior Artillery/Corelior Cannoneer @ d
+  9 Corelatis Captain/Corelatis High Captain @ bc
+  9 Core Grand Admiral/Core Lord Admiral @ bs
+  * 1 Shadow Core Lord Admiral @ bs
+
+# ---- Angel Cartel -------------------------------------------------------------
+
+= ded-angel-1 | Minmatar Contracted Bio-Farm | angel | 1
+> Bio-Farm Approach | locked | 20
+  20 Gistii Hijacker @ f
+  1 Gistii Rogue @ f
+> Bio-Farm | open | 0
+  24 Gistii Hijacker @ f
+  4 Gistii Rogue @ f
+  * 1 Arch Gistii Rogue @ f
+
+= ded-angel-2 | Angel Creo-Corp Mining | angel | 2
+# Gate distances from CCP's approximate layout of dungeon 150.
+> Deadspace Synchronization Gate | locked | 17
+  12 Gistii Hijacker/Gistii Thug @ f
+  3 Gistii Ruffian @ f
+> CreoCorp Main Factory | locked | 19
+  23 Gistii Hijacker @ f
+  3 Gistii Ruffian @ f
+  1 Gistum Depredator @ c
+> Deadspace Control Station | open | 0
+  22 Gistii Hijacker/Gistii Thug @ f
+  6 Gistii Ruffian @ f
+  * 1 Gistum Depredator @ c
+
+= ded-angel-3 | Angel Repurposed Outpost | angel | 3
+# Gate distances from CCP's layout of dungeon 5278.
+> Room 1 | open | 47
+  6 Gistii Nomad @ f
+  1 Gistii Raider @ f
+  8 Gistii Ruffian @ f
+> Room 2 | locked | 45
+  6 Gistii Nomad @ f
+  3 Gistii Outlaw @ f
+  1 Gistii Raider @ f
+  7 Gistii Ruffian @ f
+  1 Gistii Thug @ f
+> Room 3 | locked | 47
+  5 Gistii Nomad @ f
+  7 Gistii Outlaw @ f
+  7 Gistii Ruffian @ f
+  9 Gistii Thug @ f
+> Room 4 | locked | 39
+  4 Gistii Ambusher @ f
+  7 Gistii Nomad @ f
+  7 Gistii Ruffian @ f
+  + 6 Gistii Nomad @ f
+  1 Gistii Raider @ f
+  6 Gistii Ruffian @ f
+> Room 5 | open | 0
+  9 Gistii Ambusher @ f
+  10 Gistii Nomad @ f
+  6 Gistii Raider @ f
+  9 Gistii Ruffian @ f
+  1 Gistum Liquidator/Gistum Marauder @ c
+  * 1 Domination Grigori @ c
+
+= ded-angel-4 | Angel Cartel Occupied Mining Colony | angel | 4
+# Gate distances from CCP's layout of dungeon 5275.
+> Colony Outskirts | locked | 53
+  2 Gistii Outlaw @ f
+  4 Gistii Raider @ f
+  3 Gistii Nomad/Gistii Ruffian @ f
+  3 Gistum Liquidator @ c
+  1 Gistatis Legionnaire @ bc
+  + 5 Gistii Ambusher/Gistii Hunter @ f
+  3 Gistii Ruffian @ f
+  2 Gistum Breaker @ c
+  2 Gistatis Primus @ bc
+> Mining Colony | open | 0
+  2 Gistii Outlaw @ f
+  4 Gistii Ambusher/Gistii Raider/Gistii Rogue @ f
+  3 Gistii Nomad @ f
+  1 Gistum Crusher @ c
+  1 Gistum Breaker/Gistum Defeater @ c
+  3 Gistum Liquidator @ c
+  2 Gistatis Legionnaire/Gistatis Primus @ bc
+  + 5 Gistii Ambusher/Gistii Hijacker/Gistii Raider @ f
+  3 Gistii Nomad/Gistii Ruffian @ f
+  1 Gistum Smasher @ c
+  3 Gistum Liquidator/Gistum Marauder @ c
+  2 Gistatis Primus @ bc
+  * 1 Domination Excavator @ bc
+
+= ded-angel-5 | Angel's Red Light District | angel | 5
+# Gate distances from CCP's layout of dungeon 2264.
+> Red Light Street | locked | 23
+  21 Gistii Hunter/Gistii Impaler @ f
+  8 Gistum Centurion/Gistum Phalanx @ c
+  2 Gistatis Legionnaire/Gistatis Primus @ bc
+  3 Gist Saint/Gist Warlord @ bs
+  * 1 Captain Rouge @ bs
+> Gardan's Fantasy Complex | locked | 17
+  6 Gistii Hunter/Gistii Impaler @ f
+  4 Gistior Defacer/Gistior Shatterer @ d
+  5 Gistum Centurion/Gistum Liquidator/Gistum Phalanx @ c
+  11 Gistatis Legionnaire/Gistatis Primus @ bc
+  3 Gist Warlord @ bs
+  3 Gist Malakim @ bs
+  2 Gist Nephilim @ bs
+> Angel Retirement Home | open | 0
+  11 Gistii Hijacker/Gistii Hunter/Gistii Impaler @ f
+  1 Gistior Defacer/Gistior Shatterer @ d
+  10 Gistum Centurion/Gistum Phalanx @ c
+  1 Gist Warlord @ bs
+  1 Gist Nephilim @ bs
+  2 Elite Warden @ bs
+  1 Bobo the Bruised @ bs
+  * 1 Dingo @ bs
+
+= ded-angel-6 | Angel Mineral Acquisition Outpost | angel | 6
+> Acquisition Outpost | locked | 40
+  4 Gistatis Legatus/Gistatis Tribuni @ bc
+  6 Gist Malakim/Gist Nephilim/Gist Throne @ bs
+  + 5 Gist Cherubim/Gist Saint/Gist Throne/Gist Warlord @ bs
+> Refinery | open | 0
+  10 Gistior Defacer/Gistior Defiler @ d
+  8 Gistatis Legatus/Gistatis Tribuni @ bc
+  8 Gist Cherubim/Gist Throne @ bs
+  * 1 Domination Excavator @ bs
+
+= ded-angel-7 | Angel Military Operations Complex | angel | 7
+> 1st Pocket | locked | 40
+  12 Gistior Defacer/Gistior Defiler/Gistior Seizer/Gistior Trasher @ d
+  9 Gistatis Legatus/Gistatis Tribuni @ bc
+  10 Gist Malakim/Gist Nephilim/Gist Throne @ bs
+> 2nd Pocket | locked | 40
+  10 Gistior Defacer/Gistior Defiler @ d
+  9 Gistatis Legatus/Gistatis Tribuni @ bc
+  9 Gist Cherubim/Gist Throne @ bs
+> Supply Depot | locked | 40
+  10 Gistior Defacer/Gistior Defiler @ d
+  8 Gistatis Legatus/Gistatis Tribuni @ bc
+  9 Gist Cherubim/Gist Throne @ bs
+  * 1 The Stronghold General @ bs
+> Tactical Operations Center | locked | 40
+  10 Gistior Defacer/Gistior Defiler @ d
+  10 Gistatis Legatus/Gistatis Tribuni @ bc
+  11 Gist Cherubim/Gist Throne @ bs
+  * 1 Control Headquarters @ c
+> Watchpost | locked | 40
+  12 Gistior Defacer/Gistior Defiler @ d
+  11 Gistatis Legatus/Gistatis Tribuni @ bc
+  9 Gist Cherubim/Gist Throne @ bs
+  * 1 Security Coordinator @ c
+> 4th Pocket | locked | 45
+  11 Gistior Defacer/Gistior Defiler @ d
+  12 Gistatis Legatus/Gistatis Tribuni @ bc
+  7 Gist Cherubim/Gist Throne @ bs
+  * 1 Tritan - The Underground Overseer @ bs
+> 5th Pocket | open | 0
+  19 Gistior Defacer/Gistior Defiler/Gistior Seizer/Gistior Trasher @ d
+  1 Gistum Centurion @ c
+  12 Gistatis Legatus/Gistatis Tribuni @ bc
+  12 Gist Cherubim/Gist Throne @ bs
+  * 1 The Battlestation Admiral @ bs
+
+= ded-angel-8 | Angel Cartel Prisoner Retention | angel | 8
+> Prison Battlements | locked | 50
+  7 Gistii Ambusher/Gistii Hunter/Gistii Impaler @ f
+  6 Arch Gistii Outlaw/Arch Gistii Thug @ f
+  16 Gistior Defacer/Gistior Defiler/Gistior Haunter/Gistior Shatterer @ d
+  6 Gistatis Primus/Gistatis Tribuni @ bc
+  6 Gist Malakim/Gist Nephilim/Gist Throne @ bs
+  * 1 Angel Cartel Jailor @ bs
+> Retention Core | locked | 50
+  16 Gistior Defiler/Gistior Haunter @ d
+  7 Arch Gistum Centurion/Arch Gistum Phalanx @ c
+  8 Gistatis Legatus/Gistatis Praefectus/Gistatis Tribuni @ bc
+  * 1 Watch Officer @ bs
+> Prisoner Block | open | 0
+  8 Gistum Centurion/Gistum Phalanx @ c
+  10 Gistatis Legatus/Gistatis Tribuni @ bc
+  5 Gist Cherubim/Gist Throne @ bs
+  + 10 Gistii Ambusher/Gistii Hunter/Gistii Impaler @ f
+  5 Gist Malakim/Gist War General @ bs
+  * 1 Angel Prison Warden @ bs
+
+= ded-angel-10 | Angel Cartel Naval Shipyard | angel | 10
+> Shipyard Approach | locked | 50
+  6 Arch Gistii Outlaw/Arch Gistii Thug @ f
+  10 Gist Cherubim/Gist Throne @ bs
+> Construction Docks | locked | 50
+  10 Gistior Defacer/Gistior Defiler @ d
+  10 Gistatis Legatus/Gistatis Tribuni @ bc
+  8 Gist Cherubim/Gist Throne @ bs
+  * 1 The Antimatter Channeler @ bs
+> Armor Testing Arrays | locked | 55
+  8 Gist Cherubim/Gist Throne @ bs
+  6 Arch Gistum Centurion/Arch Gistum Phalanx @ c
+  * 1 Purple Particle Research Patrol @ bs
+> Hangar Ring | locked | 55
+  10 Gistior Defacer/Gistior Defiler @ d
+  10 Gistatis Legatus/Gistatis Tribuni @ bc
+  8 Gist Cherubim/Gist Throne @ bs
+  * 1 Supply Headman @ bs
+> Admiralty | open | 0
+  12 Gistatis Legatus/Gistatis Tribuni @ bc
+  12 Gist Cherubim/Gist Throne @ bs
+  1 Megathron Under Frantic Repair @ bs
+  * 1 General Hixous Puxley @ bs
+
+# ---- Blood Raiders ------------------------------------------------------------
+
+= ded-blood-1 | Old Meanie - Cultivation Center | blood | 1
+> Cultivation Fields | locked | 20
+  15 Corpii Follower @ f
+> Cultivation Center | open | 0
+  21 Corpii Follower @ f
+  * 1 Corpii Worshipper @ f
+
+= ded-blood-2 | Blood Raider Human Farm | blood | 2
+> Holding Pens | locked | 20
+  24 Corpii Follower/Corpii Herald/Corpii Upholder @ f
+> Processing | locked | 20
+  10 Corpii Follower/Corpii Herald/Corpii Upholder @ f
+> Harvesting Bay | locked | 25
+  13 Corpii Herald/Corpii Upholder @ f
+  4 Corpior Converter/Corpior Templar @ d
+> Farm Overseer's Quarters | open | 0
+  4 Corpii Collector/Corpii Seeker @ f
+  4 Corpii Herald/Corpii Upholder @ f
+  4 Corpior Templar @ d
+  * 1 Dark Blood Keeper @ d
+
+= ded-blood-3 | Blood Raider Intelligence Collection Point | blood | 3
+# Gate distances from CCP's layout of dungeon 5279.
+> Room 1 | locked | 40
+  14 Corpii Collector/Corpii Seeker @ f
+  1 Corpii Raider/Corpii Diviner @ f
+> Room 2 | locked | 45
+  13 Corpii Collector/Corpii Seeker @ f
+  5 Corpii Herald/Corpii Raider @ f
+> Room 3 | locked | 48
+  12 Corpii Collector/Corpii Seeker @ f
+  16 Corpii Herald/Corpii Upholder @ f
+> Room 4 | locked | 44
+  16 Corpii Collector/Corpii Seeker @ f
+  16 Corpii Diviner/Corpii Upholder @ f
+> Collection Point | open | 0
+  19 Corpii Collector/Corpii Seeker @ f
+  15 Corpii Diviner/Corpii Raider @ f
+  1 Corpum Arch Priest @ c
+  * 1 Dark Blood Alpha @ f
+
+= ded-blood-4 | Mul-Zatah Monastery | blood | 4
+> Monastery Gates | locked | 30
+  4 Corpum Arch Reaver/Corpum Arch Engraver @ c
+  2 Corpum Sage @ c
+  * 1 Mul-Zatah Gatekeeper @ c
+> Monastery | open | 0
+  21 Corpum Priest/Corpum Sage @ c
+  * 1 Corpus Crimson Commander @ bc
+
+= ded-blood-5 | Blood Raider Psychotropics Depot | blood | 5
+> Depot Perimeter | locked | 35
+  10 Corpii Engraver @ f
+  11 Corpii Reaver @ f
+  6 Corpum Dark Priest @ c
+  1 Corpum Shadow Siege @ c
+  2 Corpior Bishop/Corpior Seer @ bc
+  2 Corpus Archbishop/Corpus Harbinger @ bs
+> Storage | locked | 35
+  6 Corpii Reaver/Corpii Engraver @ f
+  3 Corpior Converter/Corpior Visionary @ d
+  5 Corpum Shadow Sage/Corpum Arch Priest @ c
+  11 Corpior Bishop/Corpior Seer @ bc
+  1 Corpus Harbinger @ bs
+  5 Corpus Oracle/Corpus Monsignor/Corpus Apostle @ bs
+> Psychotropics Lab | open | 0
+  11 Corpii Engraver/Corpii Worshipper/Corpii Reaver @ f
+  1 Corpior Visionary @ d
+  10 Corpum Dark Priest/Corpum Shadow Sage @ c
+  4 Corpus Cardinal/Corpus Apostle/Corpus Oracle @ bs
+  1 Corpus Archbishop/Corpus Harbinger @ bs
+  * 1 Exsanguinator @ bs
+
+= ded-blood-6 | Crimson Hand Supply Depot | blood | 6
+# Gate distances from CCP's layout of dungeon 2245.
+> Supply Approach | locked | 9
+  2 Gistior Seizer/Gistior Trasher @ d
+  2 Gistior Defacer/Gistior Defiler @ d
+  2 Corpior Devoter/Corpior Friar @ d
+  6 Corelior Infantry/Corelior Sentinel @ d
+  5 Crimson Squire @ c
+  3 Crimson Paladin @ bs
+> Industrial Sector | locked | 16
+  8 Crimson Squire @ c
+  5 Crimson Elder @ bs
+> Central Processing | locked | 10
+  12 Crimson Paladin/Crimson Elder @ bs
+> Supply Sector | locked | 50
+  21 Crimson Squire @ c
+  5 Crimson Elder @ bs
+> Command Sector | open | 0
+  6 Crimson Elder @ bs
+  * 1 Crimson Lord @ bs
+
+= ded-blood-7 | Blood Raider Coordination Center | blood | 7
+> Room 1 | locked | 40
+  13 Corpior Converter/Corpior Templar/Corpior Visionary @ d
+  9 Corpior Seer/Corpior Shade @ bc
+  8 Corpus Monsignor/Corpus Cardinal/Corpus Harbinger @ bs
+> Room 2 | locked | 40
+  11 Corpior Converter/Corpior Templar/Corpior Visionary @ d
+  9 Corpior Seer/Corpior Shade @ bc
+  9 Corpus Monsignor/Corpus Cardinal/Corpus Harbinger @ bs
+> Room 3 | locked | 40
+  12 Corpior Converter/Corpior Templar/Corpior Visionary @ d
+  11 Corpior Seer/Corpior Shade/Corpior Fanatic @ bc
+  9 Corpus Monsignor/Corpus Cardinal/Corpus Harbinger @ bs
+  * 1 Dark Blood Sage @ c
+> Room 4 | locked | 40
+  12 Corpior Converter/Corpior Templar/Corpior Visionary @ d
+  13 Corpior Seer/Corpior Shade @ bc
+  9 Corpus Monsignor/Corpus Cardinal/Corpus Harbinger @ bs
+  * 1 Dark Blood Cardinal @ bs
+> Coordination Center | open | 0
+  16 Corpior Converter/Corpior Templar/Corpior Visionary @ d
+  1 Corpum Shadow Sage @ c
+  10 Corpior Seer/Corpior Shade/Corpior Bishop @ bc
+  11 Corpus Monsignor/Corpus Cardinal/Corpus Harbinger @ bs
+  * 1 Dark Blood Hunter @ bs
+
+= ded-blood-8 | Blood Raider Prison Camp | blood | 8
+> Room 1 | locked | 40
+  8 Corpior Devoter/Corpior Templar/Corpior Friar @ d
+  2 Corpus Monsignor @ bs
+> Room 2 | locked | 40
+  14 Corpior Devoter/Corpior Templar/Corpior Friar @ d
+  6 Corpior Bishop/Corpior Seer @ bc
+  8 Corpus Monsignor/Corpus Oracle/Corpus Cardinal/Corpus Harbinger @ bs
+> Room 3 | locked | 45
+  14 Corpior Devoter/Corpior Templar/Corpior Friar @ d
+  8 Corpior Bishop/Corpior Seer @ bc
+  8 Corpus Monsignor/Corpus Oracle/Corpus Cardinal/Corpus Harbinger @ bs
+  * 1 Dark Blood Pope @ bs
+> Cell Block | open | 0
+  6 Elder Corpii Herald/Elder Corpii Follower @ f
+  20 Corpior Devoter/Corpior Templar/Corpior Friar @ d
+  16 Corpior Bishop/Corpior Seer @ bc
+  8 Corpus Archbishop/Corpus Harbinger @ bs
+
+= ded-blood-10 | Blood Raider Naval Shipyard | blood | 10
+> Shipyard Approach | locked | 55
+  11 Elder Corpii Upholder/Elder Corpii Herald @ f
+  5 Corpior Devoter @ d
+  2 Dark Corpior Bishop @ bc
+  12 Corpus Oracle/Corpus Monsignor/Corpus Apostle @ bs
+> Drydocks | locked | 55
+  10 Elder Corpii Upholder/Elder Corpii Herald @ f
+  2 Dark Corpior Bishop @ bc
+  9 Corpus Patriarch/Corpus Monsignor/Corpus Pope @ bs
+> Fleet Stronghold | open | 0
+  15 Elder Corpii Upholder/Elder Corpii Herald @ f
+  10 Dark Corpior Bishop @ c
+  20 Corpus Archbishop/Corpus Harbinger @ bs
+  * 1 Dark Blood Patriarch @ bs
+
+# ---- Guristas -----------------------------------------------------------------
+
+= ded-guristas-1 | Pith-Robux Asteroid Mining Co. | guristas | 1
+# Gate distances from CCP's approximate layout of dungeon 149.
+> Mining Perimeter | locked | 17
+  22 Pithi Arrogator/Pithi Imputor @ f
+> Refinery Approach | locked | 11
+  24 Pithi Arrogator/Pithi Imputor @ f
+> Mining Headquarters | open | 0
+  28 Pithi Arrogator/Pithi Imputor @ f
+  * 1 Retired Mining Veteran @ f
+
+= ded-guristas-2 | Pith Merchant Depot | guristas | 2
+# Gate distances from CCP's approximate layout of dungeon 43.
+> Blockade | locked | 21
+  21 Pithi Infiltrator/Pithi Invader/Pithi Arrogator/Pithi Imputor @ f
+  * 1 Blockade General Sade @ d
+> Supply Station | locked | 24
+  * 1 Supply Station Manager @ d
+> Tax Office | locked | 25
+  6 Pithi Invader/Pithi Infiltrator @ f
+  10 Pithi Arrogator/Pithi Imputor @ f
+  * 1 The Pith Taxman @ d
+> Superintendent's Office | open | 0
+  8 Pithi Infiltrator/Pithi Plunderer @ f
+  * 1 The Superintendent @ d
+
+= ded-guristas-3 | Guristas Guerilla Grounds | guristas | 3
+> Room 1 | locked | 20
+  15 Pithi Plunderer/Pithi Wrecker @ f
+> Room 2 | locked | 20
+  18 Pithi Plunderer/Pithi Wrecker @ f
+> Room 3 | locked | 25
+  28 Pithi Plunderer/Pithi Wrecker/Pithi Invader/Pithi Infiltrator @ f
+> Room 4 | locked | 25
+  35 Pithi Plunderer/Pithi Wrecker @ f
+> Guerilla Camp | open | 0
+  34 Pithi Plunderer/Pithi Wrecker @ f
+  1 Pithum Inferno/Pithum Mortifier @ c
+  * 1 Dread Guristas Irregular @ c
+
+= ded-guristas-4 | Guristas Scout Outpost | guristas | 4
+# Gate distances from CCP's layout of dungeon 2249.
+> Outer Watch | locked | 22
+  16 Pithi Infiltrator/Pithi Invader/Pithi Plunderer/Pithi Wrecker @ f
+  5 Pithi Despoiler/Pithi Saboteur @ f
+  7 Pithum Inferno/Pithum Mortifier @ c
+  * 1 Guristas Scout Officer @ c
+> Scout Outpost | open | 0
+  8 Pithi Destructor/Pithi Plunderer/Pithi Wrecker @ f
+  5 Pithi Despoiler/Pithi Saboteur @ f
+  1 Pithum Ascriber/Pithum Silencer @ c
+  3 Pithum Annihilator/Pithum Killer/Pithum Nullifier @ c
+  5 Pithum Inferno/Pithum Mortifier @ c
+  * 1 Guristas Reconnaissance Officer @ bc
+
+= ded-guristas-5 | Guristas Hallucinogen Supply Waypoint | guristas | 5
+> Waypoint | locked | 35
+  21 Pithi Demolisher/Pithi Destructor @ f
+  8 Pithum Abolisher/Pithum Eraser @ c
+  2 Pithatis Executor @ bc
+  2 Pith Extinguisher @ bs
+  2 Pith Eliminator @ bs
+> Storage | locked | 35
+  6 Pithi Demolisher/Pithi Destructor @ f
+  3 Pithior Anarchist/Pithior Nihilist @ d
+  5 Pithum Abolisher/Pithum Eraser/Pithum Inferno/Pithum Mortifier @ c
+  11 Pithatis Enforcer/Pithatis Executor @ bc
+  9 Pith Conquistador/Pith Destroyer/Pith Extinguisher @ bs
+  1 Pith Eliminator @ bs
+> Distribution Hub | open | 0
+  11 Pithi Arrogator/Pithi Demolisher/Pithi Destructor/Pithi Imputor @ f
+  1 Pithior Nihilist @ d
+  10 Pithum Abolisher/Pithum Eraser @ c
+  6 Pith Conquistador/Pith Extinguisher/Pith Massacrer/Pith Eliminator @ bs
+  * 1 Gurista Distributor @ bs
+
+= ded-guristas-6 | Guristas Troop Reinvigoration Camp | guristas | 6
+# Gate distances from CCP's layout of dungeon 2265.
+> Reception | locked | 15
+  11 Pithior Anarchist/Pithior Nihilist @ d
+  * 1 Pithatis Speaker @ bc
+> Barracks | locked | 40
+  5 Pithi Demolisher/Pithi Destructor @ f
+  13 Pithior Anarchist/Pithior Nihilist/Pithior Renegade @ d
+  13 Pithatis Enforcer/Pithatis Executor @ bc
+  7 Pith Dismantler/Pith Eradicator/Pith Extinguisher/Pith Obliterator @ bs
+  * 1 Intoxicated Commander @ c
+> Entertainment Deck | locked | 24
+  21 Pithior Anarchist/Pithior Nihilist @ d
+  7 Pithatis Enforcer/Pithatis Executor @ bc
+  4 Pith Dismantler/Pith Extinguisher/Pith Obliterator @ bs
+  * 1 Guristas Harlot Procurer @ c
+> Officers' Lounge | open | 0
+  9 Pithi Demolisher/Pithi Destructor @ f
+  8 Pithior Anarchist/Pithior Guerilla/Pithior Nihilist/Pithior Renegade @ d
+  3 Pithum Ascriber/Pithum Silencer @ c
+  3 Pithum Killer/Pithum Murderer @ c
+  3 Pith Dismantler/Pith Extinguisher/Pith Obliterator @ bs
+  * 3 Guristas Entertainment Officer @ bs
+
+= ded-guristas-7 | Gurista Military Operations Complex | guristas | 7
+> Room 1 | locked | 40
+  13 Pithior Anarchist/Pithior Nihilist/Pithior Renegade @ d
+  9 Pithatis Assaulter/Pithatis Enforcer @ bc
+  7 Pith Conquistador/Pith Destroyer @ bs
+  12 Pith Eliminator @ bs
+> Room 2 | locked | 40
+  11 Pithior Anarchist/Pithior Guerilla/Pithior Nihilist/Pithior Renegade @ d
+  10 Pithatis Assaulter/Pithatis Enforcer @ bc
+  9 Pith Conquistador/Pith Destroyer/Pith Massacrer @ bs
+> Room 3 | locked | 40
+  12 Pithior Anarchist/Pithior Nihilist/Pithior Renegade @ d
+  11 Pithatis Assassin/Pithatis Assaulter/Pithatis Enforcer @ bc
+  9 Pith Conquistador/Pith Destroyer @ bs
+  * 1 Dread Guristas Murderer/Dread Guristas Killer @ c
+> Room 4 | locked | 40
+  12 Pithior Anarchist/Pithior Guerilla/Pithior Renegade @ d
+  13 Pithatis Assaulter/Pithatis Enforcer/Pithatis Executor @ bc
+  6 Pith Conquistador/Pith Destroyer @ bs
+  1 Pith Extinguisher @ bs
+  * 1 Dread Guristas Conquistador @ bs
+> Command Center | open | 0
+  15 Pithior Anarchist/Pithior Nihilist/Pithior Renegade @ d
+  1 Pithum Eraser @ c
+  10 Pithatis Assassin/Pithatis Assaulter/Pithatis Enforcer @ bc
+  11 Pith Conquistador/Pith Destroyer/Pith Massacrer @ bs
+  * 1 Dread Guristas Commanding Officer @ bs
+
+= ded-guristas-8 | Pith's Penal Complex | guristas | 8
+# Gate distances from CCP's layout of dungeon 2262.
+> Prison Gate | locked | 28
+  8 Pithior Anarchist/Pithior Nihilist @ d
+  10 Pithatis Enforcer/Pithatis Assaulter @ bc
+  10 Pith Conquistador/Pith Destroyer @ bs
+> Perimeter Watch | locked | 10
+  12 Pithior Anarchist/Pithior Nihilist @ d
+  9 Pithatis Enforcer/Pithatis Assaulter @ bc
+  9 Pith Conquistador/Pith Destroyer/Pith Massacrer @ bs
+> Penal Colony | open | 0
+  2 Pithi Demolisher @ f
+  20 Pithior Anarchist/Pithior Nihilist/Pithior Renegade @ d
+  21 Pithatis Enforcer/Pithatis Assaulter/Pithatis Executor @ bc
+  11 Pith Conquistador/Pith Destroyer/Pith Massacrer @ bs
+  * 1 'Screaming' Dewak Humfry @ bs
+
+= ded-guristas-10 | The Maze | guristas | 10
+> Entrance | open | 50
+  6 Dire Pithi Invader/Dire Pithi Infiltrator @ f
+  12 Pith Conquistador/Pith Massacrer @ bs
+> Outer Ring | locked | 50
+  10 Dire Pithi Invader/Dire Pithi Infiltrator @ f
+  6 Dire Pithi Arrogator/Dire Pithi Imputor @ f
+  15 Pithum Abolisher/Pithum Eraser @ c
+  15 Pith Conquistador/Pith Massacrer @ bs
+> Inner Ring | locked | 50
+  4 Dire Pithi Invader/Dire Pithi Infiltrator @ f
+  8 Pithum Abolisher/Pithum Eraser @ c
+  2 Pith Conquistador/Pith Massacrer @ bs
+> Core Approach | locked | 50
+  14 Pithum Abolisher/Pithum Eraser @ c
+> Fleet Stronghold | open | 0
+  18 Dire Pithi Invader/Dire Pithi Infiltrator @ f
+  5 Pithior Supremacist/Pithior Terrorist @ d
+  5 Pithum Abolisher/Pithum Eraser @ c
+  10 Pith Conquistador/Pith Massacrer @ bs
+  + 4 Pith Conquistador/Pith Massacrer @ bs
+  5 Dire Pithi Invader/Dire Pithi Infiltrator @ f
+  4 Pithum Abolisher/Pithum Eraser @ c
+  + 8 Pithum Abolisher/Pithum Eraser @ c
+  6 Pith Conquistador/Pith Massacrer @ bs
+  + 8 Dire Pithi Invader/Dire Pithi Infiltrator @ f
+  8 Pith Conquistador/Pith Massacrer @ bs
+  * 1 Dread Guristas Admiral @ bs
+
+# ---- Sansha's Nation ----------------------------------------------------------
+
+= ded-sansha-1 | Sansha Military Outpost | sansha | 1
+# Gate distances from CCP's layout of dungeon 2250.
+> Outpost Approach | open | 15
+  1 Centii Minion @ f
+> Outpost Grounds | locked | 20
+  11 Centii Minion/Centii Servant/Centii Scavenger/Centii Ravener @ f
+  * 1 Outpost Security Officer @ f
+> Military Outpost | open | 0
+  19 Centii Scavenger/Centii Ravener/Centii Servant/Centii Minion @ f
+  * 1 Sansha Outpost Commander @ f
+
+= ded-sansha-2 | Sansha Acclimatization Facility | sansha | 2
+> Intake | locked | 20
+  25 Centii Servant/Centii Minion @ f
+> Processing | locked | 20
+  10 Centii Scavenger @ f
+> Conditioning | locked | 25
+  15 Centii Scavenger @ f
+  6 Centior Cannibal/Centior Misshape @ d
+> Acclimatization Chamber | open | 0
+  12 Centii Slavehunter/Centii Servant/Centii Minion @ f
+  9 Centior Cannibal/Centior Misshape @ d
+  * 1 Sansha Tenebrus @ d
+
+= ded-sansha-3 | Sansha's Command Relay Outpost | sansha | 3
+# Gate distances from CCP's layout of dungeon 2251.
+> Relay Perimeter | locked | 24
+  10 Centii Enslaver/Centii Plague @ f
+  5 Centior Cannibal/Centior Misshape @ d
+  * 1 Sansha Black Ops Squad Leader @ c
+> Command Relay | open | 0
+  1 Centior Monster @ d
+  13 Centum Ravager/Centum Ravisher @ c
+  * 1 Centus Black Ops Commander @ c
+
+= ded-sansha-4 | Sansha's Nation Occupied Mining Colony | sansha | 4
+# Gate distances from CCP's layout of dungeon 5276.
+> Colony Outskirts | locked | 53
+  14 Centii Butcher/Centii Enslaver/Centii Plague/Centii Ravener/Centii Scavenger @ f
+  8 Centii Savage/Centii Slavehunter @ f
+  2 Centum Execrator @ c
+  3 Centum Mutilator/Centum Torturer @ c
+  3 Centatis Phantasm/Centatis Specter @ bc
+> Mining Colony | open | 0
+  12 Centii Enslaver/Centii Minion/Centii Plague/Centii Ravener/Centii Servant @ f
+  6 Centii Savage/Centii Slavehunter @ f
+  6 Centum Mutilator/Centum Torturer @ c
+  3 Centum Juggernaut/Centum Slaughterer @ c
+  4 Centatis Specter/Centatis Phantasm @ bc
+  * 1 True Sansha Foreman @ bc
+
+= ded-sansha-5 | Sansha's Nation Neural Paralytic Facility | sansha | 5
+> Containment | locked | 35
+  20 Centii Butcher/Centii Manslayer @ f
+  5 Centum Beast/Centum Hellhound @ c
+  2 Centatis Phantasm @ bc
+  3 Centus Savage Lord/Centus Beast Lord/Centus Plague Lord @ bs
+> Research Wing | open | 35
+  6 Centii Butcher/Centii Manslayer @ f
+  3 Centior Cannibal/Centior Misshape @ d
+  5 Centum Mutilator/Centum Hellhound @ c
+  11 Centatis Specter/Centatis Phantasm @ bc
+  8 Centus Plague Lord/Centus Savage Lord/Centus Beast Lord/Centus Overlord @ bs
+> Paralytic Lab | open | 0
+  11 Centii Butcher/Centii Manslayer @ f
+  1 Centior Monster @ d
+  10 Centum Beast/Centum Hellhound @ c
+  6 Centus Savage Lord/Centus Dread Lord @ bs
+  * 1 Slave Ation09 @ bs
+
+= ded-sansha-6 | Sansha War Supply Complex | sansha | 6
+> Supply Yard | locked | 40
+  4 Centii Butcher/Centii Manslayer @ f
+  4 Centum Fiend @ c
+  8 Centus Mutant Lord/Centus Savage Lord @ bs
+  * 1 Sansha Corpse Collector @ bs
+> Creation Park | locked | 40
+  3 Centus Mutant Lord/Centus Savage Lord @ bs
+  + 2 Centii Butcher/Centii Manslayer @ f
+  3 Centior Misshape @ d
+  1 Centum Fiend @ c
+  6 Centatis Phantasm/Centatis Specter @ bc
+  11 Centus Mutant Lord/Centus Overlord/Centus Savage Lord @ bs
+  * 1 True Creation's Park Overseer @ bs
+> Transit Hub | locked | 40
+  1 Centii Butcher/Centii Manslayer @ f
+  1 Centatis Phantasm @ bc
+  1 Centus Slave Lord @ bs
+  + 2 Centii Plague @ f
+  5 Centior Misshape @ d
+  7 Centatis Phantasm/Centatis Specter @ bc
+  11 Centus Plague Lord/Centus Savage Lord @ bs
+  * 1 Effotber's Transit Overseer @ bs
+> Effotber's Quarters | open | 0
+  3 Centior Devourer/Centior Cannibal @ d
+  1 Centatis Specter @ bc
+  2 Centus Savage Lord @ bs
+  + 6 Centior Cannibal/Centior Devourer @ d
+  10 Centatis Phantasm/Centatis Specter @ bc
+  7 Centus Beast Lord/Centus Plague Lord @ bs
+  * 1 Overseer Skomener Effotber @ bs
+
+= ded-sansha-7 | Sansha Military Operations Complex | sansha | 7
+> Room 1 | locked | 40
+  13 Centior Cannibal/Centior Misshape/Centior Abomination @ d
+  9 Centatis Specter/Centatis Wraith @ bc
+  8 Centus Beast Lord/Centus Dark Lord/Centus Overlord @ bs
+> Room 2 | locked | 40
+  11 Centior Cannibal/Centior Misshape/Centior Abomination @ d
+  10 Centatis Specter/Centatis Wraith @ bc
+  9 Centus Beast Lord/Centus Dark Lord/Centus Overlord @ bs
+> Room 3 | locked | 40
+  12 Centior Cannibal/Centior Misshape/Centior Abomination @ d
+  11 Centatis Specter/Centatis Wraith @ bc
+  9 Centus Beast Lord/Centus Dark Lord/Centus Overlord @ bs
+  * 1 True Sansha Slaughterer @ c
+> Room 4 | locked | 40
+  12 Centior Cannibal/Centior Misshape/Centior Abomination @ d
+  13 Centatis Specter/Centatis Wraith @ bc
+  7 Centus Beast Lord/Centus Dark Lord/Centus Overlord @ bs
+  * 1 True Sansha Overlord @ bs
+> Operations Command | open | 0
+  16 Centior Cannibal/Centior Misshape/Centior Abomination @ d
+  11 Centatis Specter/Centatis Wraith @ bc
+  11 Centus Beast Lord/Centus Dark Lord/Centus Overlord @ bs
+  * 1 True Sansha Archduke @ bs
+
+= ded-sansha-8 | Sansha Prison Camp | sansha | 8
+# Gate distances from CCP's layout of dungeon 5250.
+> Room 1 | locked | 36
+  7 Centior Cannibal/Centior Misshape @ d
+  2 Centus Dark Lord/Centus Overlord @ bs
+> Room 2 | locked | 11
+  16 Centior Cannibal/Centior Misshape @ d
+  6 Centatis Specter/Centatis Wraith @ bc
+  7 Centus Dark Lord/Centus Overlord @ bs
+> Room 3 | locked | 10
+  13 Centior Cannibal/Centior Misshape @ d
+  4 Centum Fiend/Centum Hellhound @ c
+  5 Centatis Specter/Centatis Wraith @ bc
+  7 Centus Dark Lord/Centus Overlord @ bs
+  * 1 True Sansha Tyrant @ bs
+> Cell Block | open | 0
+  13 Centii Butcher/Centii Manslayer @ f
+  7 Centii Savage/Centii Slavehunter @ f
+  16 Centior Cannibal/Centior Misshape @ d
+  7 Centum Fiend/Centum Hellhound @ c
+  10 Centatis Specter/Centatis Wraith @ bc
+  6 Centus Dark Lord/Centus Overlord @ bs
+
+= ded-sansha-10 | Centus Assembly T.P. Co. | sansha | 10
+> Assembly Gates | locked | 50
+  8 Centii Savage/Centii Slavehunter @ f
+  6 Centatis Daemon/Centatis Behemoth @ bc
+  7 Centus Dark Lord/Centus Overlord @ bs
+> Power Battalion Yard | locked | 50
+  4 Centii Savage/Centii Slavehunter @ f
+  5 Centatis Daemon/Centatis Behemoth @ bc
+  11 Centus Dark Lord/Centus Overlord @ bs
+> HQ Patrol Ring | locked | 50
+  15 Centii Savage/Centii Slavehunter @ f
+  5 Centum Fiend/Centum Hellhound @ c
+  8 Centus Dark Lord/Centus Overlord @ bs
+> Manufacturing | locked | 55
+  26 Centior Horror/Centior Monster @ d
+  9 Centatis Daemon/Centatis Behemoth @ bc
+  9 Centus Dark Lord/Centus Overlord @ bs
+> Assembly Core | open | 0
+  10 Centior Horror/Centior Monster @ d
+  10 Centatis Behemoth/Centatis Daemon @ bc
+  12 Centus Dark Lord/Centus Overlord @ bs
+  * 1 True Sansha Archduke @ bs

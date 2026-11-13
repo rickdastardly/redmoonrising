@@ -1,3 +1,5 @@
 tools/
 target/
 crates/eve-server/web/node_modules/
+__pycache__/
+_backup_*/

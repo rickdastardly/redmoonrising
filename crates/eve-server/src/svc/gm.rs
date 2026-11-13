@@ -537,10 +537,10 @@ async fn move_me(ctx: &Ctx<'_>, words: &[&str]) -> Result<String, String> {
 
 /// `keeper` and `dungeon`: the dungeon editor and acceleration gates. There
 /// are no dungeons, so there is nothing to edit or activate.
-pub async fn dungeon_tools(call: &Call, _ctx: &Ctx<'_>) -> Option<Outcome> {
+pub async fn dungeon_tools(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
     Some(match call.method.as_str() {
         "GetLevelEditor" => Outcome::Value(Value::None),
-        "ActivateAccelerationGate" => Outcome::custom("This gate leads nowhere."),
+        "ActivateAccelerationGate" => crate::dungeons::activate(ctx, call.arg_i64(0).unwrap_or(0)),
         "DEGetDungeons" | "DEGetFactions" | "DEGetRooms" => Outcome::Value(Value::List(Vec::new())),
         "EditObject" | "CopyObject" | "RemoveObject" => Outcome::custom("There are no dungeons to edit."),
         _ => return None,

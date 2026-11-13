@@ -2147,6 +2147,64 @@ def _rmr_install_self_info():
 import uthread
 uthread.new(_rmr_install_self_info)
 
+def _rmr_install_scan_results():
+    # The System Scanner subtracts the ship's position straight from each
+    # result's position, which needs a vector rather than a tuple.
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        import foo
+        import xtriui
+        svc = sm.StartService('scanservice')
+        cls = svc.__class__
+        if getattr(cls, '_rmr_scan_results_installed', False):
+            return
+        original = cls.GetScans
+        def get_scans(self, *args, **kwargs):
+            scans = original(self, *args, **kwargs)
+            if not scans:
+                return scans
+            probes, results = scans
+            fixed = []
+            for each in results or []:
+                try:
+                    pos = each[2]
+                    if isinstance(pos, (tuple, list)):
+                        pos = foo.Vector3(float(pos[0]), float(pos[1]), float(pos[2]))
+                    if len(each) >= 5 and each[4]:
+                        # List the site's name where the result ID was;
+                        # the ID rides along at the end for Warp To.
+                        each = (each[4], each[1], pos, each[3], each[0])
+                    else:
+                        each = (each[0], each[1], pos, each[3])
+                except:
+                    sys.exc_clear()
+                fixed.append(each)
+            return (probes, fixed)
+        cls.GetScans = get_scans
+        cls._rmr_scan_results_installed = True
+        scanner = xtriui.SystemScanner
+        original_refresh = scanner.Refresh
+        def refresh(self, *args, **kwargs):
+            try:
+                return original_refresh(self, *args, **kwargs)
+            except:
+                _rmr_log('System Scanner refresh failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+                sys.exc_clear()
+        scanner.Refresh = refresh
+        original_warp = scanner.WarpTo
+        def warp_to(self, scanResult, *args, **kwargs):
+            if len(scanResult) >= 5:
+                scanResult = (scanResult[4],) + tuple(scanResult[1:4])
+            return original_warp(self, scanResult, *args, **kwargs)
+        scanner.WarpTo = warp_to
+        _rmr_log('System Scanner results use vector positions and site names.')
+    except:
+        _rmr_log('System Scanner results hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+uthread.new(_rmr_install_scan_results)
+
 def _rmr_install_alliance_logos():
     while not getattr(eve.session, 'charid', None):
         blue.pyos.synchro.Sleep(1000)
@@ -2541,6 +2599,89 @@ def _rmr_install_shortcuts():
         sys.exc_clear()
 
 uthread.new(_rmr_install_shortcuts)
+
+def _rmr_install_reload_all():
+    # A weapon's right-click menu in space gets "Reload all": every fitted
+    # module of that kind refills from the cargo hold with the charge it
+    # already uses (or, empty, the first that fits). The server's reload
+    # flag fills without swapping charges (svc/fitting.rs FLAG_RELOAD).
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        import xtriui
+        cls = getattr(xtriui, 'ModuleButton', None)
+        if cls is None or not hasattr(cls, 'GetMenu'):
+            _rmr_log('Reload all: the module button has no menu to extend.')
+            return
+        if getattr(cls, '_rmr_reload_all', False):
+            return
+        original_menu = cls.GetMenu
+        reload_flag = -9
+
+        def add_to_modules(inv, stack):
+            try:
+                inv.Add(stack.itemID, stack.locationID, flag=reload_flag)
+            except TypeError:
+                inv.Add(stack.itemID, flag=reload_flag)
+
+        def reload_all(button):
+            try:
+                info = button.sr.moduleInfo
+                ship = eve.session.shipid
+                if not ship:
+                    return
+                inv = eve.GetInventoryFromId(ship)
+                items = inv.List()
+                group = getattr(info, 'groupID', None)
+                slots = [i.flag for i in items if i.categoryID == 7 and i.groupID == group]
+                loaded = [i for i in items if i.categoryID == 8 and i.flag in slots]
+                mine = getattr(info, 'flagID', None)
+                types = [i.typeID for i in loaded if i.flag == mine] + [i.typeID for i in loaded]
+                cargo = [i for i in items if i.categoryID == 8 and i.flag == 5]
+                done = []
+                for t in types:
+                    if t in done:
+                        continue
+                    done.append(t)
+                    for stack in [c for c in cargo if c.typeID == t]:
+                        try:
+                            add_to_modules(inv, stack)
+                        except:
+                            sys.exc_clear()
+                            break
+                if not types:
+                    for stack in cargo:
+                        try:
+                            add_to_modules(inv, stack)
+                            break
+                        except:
+                            sys.exc_clear()
+            except:
+                _rmr_log('Reload all failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+                sys.exc_clear()
+
+        def get_menu(self, *args, **kwargs):
+            menu = original_menu(self, *args, **kwargs)
+            try:
+                if eve.session.solarsystemid and getattr(self.sr, 'moduleInfo', None) is not None:
+                    labels = [str(entry[0]).lower() for entry in (menu or []) if entry and isinstance(entry, tuple)]
+                    if not [l for l in labels if 'reload all' in l]:
+                        menu = list(menu or [])
+                        menu.append(None)
+                        menu.append(('Reload all', reload_all, (self,)))
+            except:
+                _rmr_log('Reload all menu failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+                sys.exc_clear()
+            return menu
+
+        cls.GetMenu = get_menu
+        cls._rmr_reload_all = True
+        _rmr_log('Reload all added to module menus.')
+    except:
+        _rmr_log('Reload all setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+uthread.new(_rmr_install_reload_all)
 
 def _rmr_install_grid_recovery():
     while not getattr(eve.session, 'charid', None):
@@ -3077,6 +3218,168 @@ def _rmr_install_mission_agent_contacts():
         sys.exc_clear()
 
 uthread.new(_rmr_install_mission_agent_contacts)
+
+_RMR_AGENT_PRIME = 400
+
+def _rmr_prime_owners(ids):
+    # One GetOwners round trip per few hundred names instead of one per agent.
+    ids = [i for i in ids if i]
+    for start in range(0, len(ids), _RMR_AGENT_PRIME):
+        try:
+            cfg.eveowners.Prime(ids[start:start + _RMR_AGENT_PRIME])
+        except:
+            sys.exc_clear()
+
+def _rmr_owner_name(ownerID, fallback):
+    try:
+        return cfg.eveowners.Get(ownerID).name
+    except:
+        sys.exc_clear()
+        return fallback
+
+def _rmr_by_name(a, b):
+    return cmp(a[0].lower(), b[0].lower())
+
+def _rmr_agent_group(label, ident, items, sublevel, content):
+    import listentry
+    data = {
+        'GetSubContent': content,
+        'label': label,
+        'id': ident,
+        'items': items,
+        'headers': ['name'],
+        'iconMargin': 18,
+        'showlen': 0,
+        'state': None,
+        'npc': 1,
+        'allowCopy': 1,
+        'showicon': '_22_41',
+        'posttext': ' [%s]' % len(items),
+        'sublevel': sublevel,
+        'allowGuids': ['listentry.User', 'listentry.Sender'],
+    }
+    return listentry.Get('Group', data)
+
+def _rmr_agent_people(nodedata, *args):
+    import listentry
+    ids = list(getattr(nodedata, 'items', None) or [])
+    _rmr_prime_owners(ids)
+    named = []
+    for agentID in ids:
+        try:
+            named.append((cfg.eveowners.Get(agentID).name, agentID))
+        except:
+            sys.exc_clear()
+    named.sort(_rmr_by_name)
+    sublevel = getattr(nodedata, 'sublevel', 0) + 1
+    entries = []
+    for name, agentID in named:
+        entries.append(listentry.Get('User', {
+            'charID': agentID,
+            'info': cfg.eveowners.Get(agentID),
+            'sublevel': sublevel,
+        }))
+    return entries
+
+def _rmr_agent_corps(nodedata, *args):
+    # Faction -> its corporations, each a group of that corporation's agents.
+    agents = sm.StartService('agents').GetAgentsByID()
+    corps = {}
+    for agentID in getattr(nodedata, 'items', None) or []:
+        if agentID not in agents:
+            continue
+        agent = agents[agentID]
+        corps.setdefault(agent.corporationID, []).append(agentID)
+    _rmr_prime_owners(corps.keys())
+    named = [(_rmr_owner_name(corpID, 'Corporation %s' % corpID), corpID) for corpID in corps.keys()]
+    named.sort(_rmr_by_name)
+    sublevel = getattr(nodedata, 'sublevel', 0) + 1
+    return [_rmr_agent_group(name, nodedata.id + (corpID,), corps[corpID], sublevel, _rmr_agent_people)
+            for name, corpID in named]
+
+def _rmr_agent_factions(nodedata, *args):
+    # Level -> the factions with agents at that level for this pilot.
+    agents = sm.StartService('agents').GetAgentsByID()
+    factions = {}
+    for agentID in getattr(nodedata, 'items', None) or []:
+        if agentID not in agents:
+            continue
+        agent = agents[agentID]
+        factions.setdefault(agent.factionID or 0, []).append(agentID)
+    _rmr_prime_owners([f for f in factions.keys() if f])
+    named = [(_rmr_owner_name(factionID, 'Independent'), factionID) for factionID in factions.keys()]
+    named.sort(_rmr_by_name)
+    sublevel = getattr(nodedata, 'sublevel', 0) + 1
+    return [_rmr_agent_group(name, nodedata.id + (factionID,), factions[factionID], sublevel, _rmr_agent_corps)
+            for name, factionID in named]
+
+def _rmr_available_agent_groups():
+    # The server lists every mission agent that would work with this pilot on
+    # the personal channel's contacts. Arrange them like the Character Sheet:
+    # by level, then faction, then corporation, names fetched per group.
+    import util
+    agents = sm.StartService('agents').GetAgentsByID()
+    levels = {}
+    for buddyID in eve.LocalSvc('LSC').GetBuddies():
+        if not util.IsNPC(buddyID):
+            continue
+        if buddyID not in agents:
+            continue
+        agent = agents[buddyID]
+        levels.setdefault(agent.level or 1, []).append(buddyID)
+    keys = levels.keys()
+    keys.sort()
+    groups = []
+    for level in keys:
+        groups.append(_rmr_agent_group('Level %s agents available to you' % level,
+                                       ('agentgroups', 'rmr_available', level),
+                                       levels[level], 0, _rmr_agent_factions))
+    return groups
+
+def _rmr_install_available_agents():
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        book = sm.StartService('addressbook')
+        cls = book.__class__
+        if getattr(cls, '_rmr_available_agents_installed', False):
+            return
+        original_show = cls.ShowPersonal
+        original_sub = cls.GetBuddiesSubContent
+        def show_personal(self, npc):
+            result = original_show(self, npc)
+            if not npc:
+                return result
+            try:
+                wnd = self.wnd
+                if wnd is None or wnd.destroyed:
+                    return result
+                groups = _rmr_available_agent_groups()
+                if groups:
+                    wnd.sr.scroll.AddEntries(-1, groups)
+                    self.SetHint()
+            except:
+                _rmr_log('Available agent groups failed: ' +
+                         ''.join(traceback.format_exception(*sys.exc_info())))
+                sys.exc_clear()
+            return result
+        def buddies_sub_content(self, nodedata, *args):
+            # Fetch all the names in one go before the list builds its rows.
+            try:
+                if getattr(nodedata, 'npc', 0):
+                    _rmr_prime_owners(list(getattr(nodedata, 'items', None) or []))
+            except:
+                sys.exc_clear()
+            return original_sub(self, nodedata, *args)
+        cls.ShowPersonal = show_personal
+        cls.GetBuddiesSubContent = buddies_sub_content
+        cls._rmr_available_agents_installed = True
+        _rmr_log('People and Places lists every agent available to you.')
+    except:
+        _rmr_log('Available agents hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+uthread.new(_rmr_install_available_agents)
 
 def _rmr_install_area_doomsday():
     # An area doomsday has no targetID. The old confirmation path tries to

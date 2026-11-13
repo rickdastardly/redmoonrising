@@ -64,6 +64,8 @@ struct Pirates {
     corp_id: i64,
     groups: [i32; 5],
     commander_prefix: &'static str,
+    /// Its deadspace ships' groups, for dungeons (in [`CLASSES`] order).
+    deadspace: [i32; 5],
 }
 
 const ANGELS: Pirates = Pirates {
@@ -71,30 +73,35 @@ const ANGELS: Pirates = Pirates {
     corp_id: 1000124,
     groups: [550, 575, 551, 576, 552],
     commander_prefix: "Domination ",
+    deadspace: [597, 596, 595, 593, 594],
 };
 const BLOOD_RAIDERS: Pirates = Pirates {
     name: "Blood Raiders",
     corp_id: 1000134,
     groups: [557, 577, 555, 578, 556],
     commander_prefix: "Dark Blood ",
+    deadspace: [606, 605, 604, 602, 603],
 };
 const GURISTAS: Pirates = Pirates {
     name: "Guristas",
     corp_id: 1000127,
     groups: [562, 579, 561, 580, 560],
     commander_prefix: "Dread Guristas ",
+    deadspace: [615, 614, 613, 611, 612],
 };
 const SANSHA: Pirates = Pirates {
     name: "Sansha's Nation",
     corp_id: 1000162,
     groups: [567, 581, 566, 582, 565],
     commander_prefix: "True Sansha's ",
+    deadspace: [624, 623, 622, 620, 621],
 };
 const SERPENTIS: Pirates = Pirates {
     name: "Serpentis",
     corp_id: 1000135,
     groups: [572, 583, 571, 584, 570],
     commander_prefix: "Shadow Serpentis ",
+    deadspace: [633, 632, 631, 629, 630],
 };
 const ALL_PIRATES: [&Pirates; 5] = [&ANGELS, &BLOOD_RAIDERS, &GURISTAS, &SANSHA, &SERPENTIS];
 
@@ -107,6 +114,17 @@ fn pirates_for(faction_id: Option<i64>, solar_system_id: i64) -> &'static Pirate
         Some(500019) => &SANSHA,
         Some(500004 | 500009 | 500014 | 500020) => &SERPENTIS,
         _ => ALL_PIRATES[(solar_system_id % ALL_PIRATES.len() as i64) as usize],
+    }
+}
+
+/// The pirate faction raiding a system, as dungeons name it.
+pub fn pirate_key(faction_id: Option<i64>, solar_system_id: i64) -> &'static str {
+    match pirates_for(faction_id, solar_system_id).corp_id {
+        1000124 => "angel",
+        1000134 => "blood",
+        1000127 => "guristas",
+        1000162 => "sansha",
+        _ => "serpentis",
     }
 }
 
@@ -231,6 +249,8 @@ pub struct Missile {
     /// False if the target is beyond the missile's flight range.
     pub reaches: bool,
     pub weapon: String,
+    /// The missile ball the clients draw, and the clients shown it.
+    pub ball: Option<(i64, Vec<i64>)>,
 }
 
 /// Who fired, as it was at the time (it may be gone when the shot lands).
@@ -488,6 +508,150 @@ async fn fill_attributes(db: &tokio_postgres::Client, types: &mut HashMap<i64, N
         }
     }
     Ok(())
+}
+
+// ---- dungeons -------------------------------------------------------------------------
+
+/// A pirate faction's deadspace ships, and the NPC types a dungeon names, for
+/// a dungeon's rats (`dungeons`).
+#[derive(Debug, Clone)]
+pub struct DungeonRats {
+    pub wildlife: Wildlife,
+    /// Named types, by name.
+    pub named: HashMap<String, NpcType>,
+}
+
+/// The NPC corporation that flies a mission faction's ships, for the
+/// factions that are not pirates ("drones", "mordu", "caldari", ...).
+fn mission_corp(faction: &str) -> Option<i64> {
+    Some(match faction {
+        "caldari" => 1000035,
+        "minmatar" => 1000051,
+        "amarr" => 1000084,
+        "gallente" => 1000120,
+        "ammatar" => 1000123,
+        "concord" => 1000125,
+        "mordu" => 1000128,
+        "khanid" => 1000156,
+        "thukker" => 1000160,
+        // No corporation of their own in this era: the Intaki Syndicate's
+        // name goes on rogue drones, mercenaries and the EoM.
+        "drones" | "mercenaries" | "eom" => 1000147,
+        _ => return None,
+    })
+}
+
+/// The deadspace ships of a faction ("angel", "blood", "guristas", "sansha",
+/// "serpentis"), with the types named in `names`. A mission faction that is
+/// not a pirate one ("drones", "mordu", "caldari", ...) has no deadspace
+/// ships: its named types stand in for one another by class (`classes`, 0
+/// frigate to 4 battleship). None for a faction neither knows.
+pub async fn load_dungeon_rats(
+    db: &tokio_postgres::Client,
+    faction: &str,
+    names: &[String],
+    classes: &[(String, usize)],
+) -> Result<Option<DungeonRats>, tokio_postgres::Error> {
+    let wanted = faction.trim().to_ascii_lowercase();
+    if wanted.is_empty() {
+        return Ok(None);
+    }
+    let Some(pirates) = ALL_PIRATES.iter().copied().find(|p| p.name.to_ascii_lowercase().starts_with(&wanted)) else {
+        return load_mission_rats(db, &wanted, names, classes).await;
+    };
+    let rows = db
+        .query(
+            r#"SELECT t."typeID", t."groupID", COALESCE(t."typeName", ''), COALESCE(t."radius", 0), COALESCE(t."mass", 0)
+                 FROM "invTypes" t WHERE t."groupID" = ANY($1) OR t."typeName" = ANY($2)"#,
+            &[&&pirates.deadspace[..], &names],
+        )
+        .await?;
+    let mut by_id: HashMap<i64, NpcType> = rows.iter().map(npc_type).map(|t| (t.type_id, t)).collect();
+    fill_attributes(db, &mut by_id).await?;
+    let missile_ids: Vec<i64> = by_id.values().map(|t| t.get(attr::ENTITY_MISSILE_TYPE_ID) as i64).filter(|id| *id > 0).collect();
+    let missiles = load_types(db, &missile_ids).await?;
+    let mut rats: [Vec<NpcType>; 5] = Default::default();
+    let mut named = HashMap::new();
+    for t in by_id.into_values() {
+        if names.iter().any(|n| *n == t.name) {
+            named.insert(t.name.clone(), t.clone());
+        }
+        if t.get(attr::HP) <= 0.0 || !t.armed(&missiles) {
+            continue;
+        }
+        if let Some(class) = pirates.deadspace.iter().position(|g| *g as i64 == t.group_id) {
+            rats[class].push(t);
+        }
+    }
+    for list in rats.iter_mut() {
+        list.sort_by(|a, b| a.bounty().total_cmp(&b.bounty()).then(a.type_id.cmp(&b.type_id)));
+    }
+    let wildlife = Wildlife { security: -1.0, corp_id: pirates.corp_id, rats, commanders: Default::default(), missiles, ores: Vec::new(), police: Vec::new() };
+    Ok(Some(DungeonRats { wildlife, named }))
+}
+
+async fn load_mission_rats(
+    db: &tokio_postgres::Client,
+    faction: &str,
+    names: &[String],
+    classes: &[(String, usize)],
+) -> Result<Option<DungeonRats>, tokio_postgres::Error> {
+    let Some(corp_id) = mission_corp(faction) else { return Ok(None) };
+    let rows = db
+        .query(
+            r#"SELECT t."typeID", t."groupID", COALESCE(t."typeName", ''), COALESCE(t."radius", 0), COALESCE(t."mass", 0)
+                 FROM "invTypes" t WHERE t."typeName" = ANY($1)"#,
+            &[&names],
+        )
+        .await?;
+    let mut by_id: HashMap<i64, NpcType> = rows.iter().map(npc_type).map(|t| (t.type_id, t)).collect();
+    fill_attributes(db, &mut by_id).await?;
+    let missile_ids: Vec<i64> = by_id.values().map(|t| t.get(attr::ENTITY_MISSILE_TYPE_ID) as i64).filter(|id| *id > 0).collect();
+    let missiles = load_types(db, &missile_ids).await?;
+    let mut rats: [Vec<NpcType>; 5] = Default::default();
+    let mut named = HashMap::new();
+    for t in by_id.into_values() {
+        named.insert(t.name.clone(), t.clone());
+        if t.get(attr::HP) <= 0.0 || !t.armed(&missiles) {
+            continue;
+        }
+        if let Some((_, class)) = classes.iter().find(|(n, _)| *n == t.name) {
+            rats[(*class).min(4)].push(t);
+        }
+    }
+    if named.is_empty() {
+        return Ok(None);
+    }
+    for list in rats.iter_mut() {
+        list.sort_by(|a, b| a.bounty().total_cmp(&b.bounty()).then(a.type_id.cmp(&b.type_id)));
+    }
+    let wildlife = Wildlife { security: -1.0, corp_id, rats, commanders: Default::default(), missiles, ores: Vec::new(), police: Vec::new() };
+    Ok(Some(DungeonRats { wildlife, named }))
+}
+
+/// A dungeon's ship: `name` if the dungeon's types include it, else one of
+/// the faction's deadspace ships of `class` (0 frigate to 4 battleship), as
+/// strong as `strength` (0 the weakest of its class, 1 the strongest). Its
+/// ID; None if the faction has no ships at all.
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_dungeon_ship(park: &mut Park, rats: &DungeonRats, name: Option<&str>, class: usize, strength: f64, anchor: i64, pos: Vec3, now: i64) -> Option<i64> {
+    let t = match name.and_then(|n| rats.named.get(n)) {
+        Some(t) => t,
+        None => {
+            let class = class.min(4);
+            let list = (0..=class)
+                .rev()
+                .map(|i| &rats.wildlife.rats[i])
+                .find(|l| !l.is_empty())
+                .or_else(|| rats.wildlife.rats.iter().find(|l| !l.is_empty()))?;
+            let index = (strength.clamp(0.0, 1.0) * (list.len() - 1) as f64).round() as usize;
+            &list[index.min(list.len() - 1)]
+        }
+    };
+    let rat = make_rat(t, &rats.wildlife, anchor, pos, now, &mut park.rng);
+    let id = rat.id;
+    park.ships.insert(id, rat);
+    Some(id)
 }
 
 // ---- the belts ------------------------------------------------------------------------
@@ -984,6 +1148,22 @@ fn think_one(park: &mut Park, id: i64, now: i64, seen: &[Seen], enemies: &HashSe
         .and_then(|t| park.ships.get(&t))
         .filter(|t| t.is_npc())
         .map(|t| t.pos);
+    // In high-sec (0.5 and up) bots start nothing: no war targets, grudges,
+    // raids, fight calls or belt quarrels. They only defend themselves and
+    // their corporation against pilots who opened fire first.
+    let defending: Option<HashSet<i64>> = park
+        .ships
+        .get(&id)
+        .filter(|s| s.bot && park.wildlife.security >= crate::concord::HIGH_SEC)
+        .map(|s| {
+            let (me, corp) = (s.pilot.char_id, s.pilot.corp_id);
+            let shot_me = |c: i64| s.fight.as_ref().is_some_and(|f| f.damage_log.contains_key(&c));
+            seen.iter()
+                .filter(|o| o.id != id)
+                .filter(|o| park.watch.aggressed(o.char_id, me, now) || park.watch.aggressed(o.char_id, corp, now) || shot_me(o.char_id))
+                .map(|o| o.id)
+                .collect()
+        });
     let Some(rat) = park.ships.get_mut(&id) else { return };
     // A bot also fights its war's enemies, wherever they come from, and
     // players its side holds to be hostile; and leaves its friends alone.
@@ -1026,7 +1206,9 @@ fn think_one(park: &mut Park, id: i64, now: i64, seen: &[Seen], enemies: &HashSe
         let calm_now = is_bot
             && crate::bots::aggression() == crate::bots::Aggression::Calm
             && seen.iter().find(|s| s.id == t && s.player).is_some_and(|s| !fight.damage_log.contains_key(&s.char_id));
-        if !keep || calm_now {
+        // High-sec: let go of any pilot who has not attacked it.
+        let unprovoked = defending.as_ref().is_some_and(|ok| seen.iter().any(|s| s.id == t) && !ok.contains(&t));
+        if !keep || calm_now || unprovoked {
             disengage(park, id, now, out);
             return;
         }
@@ -1046,6 +1228,10 @@ fn think_one(park: &mut Park, id: i64, now: i64, seen: &[Seen], enemies: &HashSe
                 .iter()
                 .filter(|s| s.id != id)
                 .filter_map(|s| {
+                    if let Some(ok) = &defending {
+                        let d = (s.pos - pos).len();
+                        return (ok.contains(&s.id) && d <= WAR_AGGRO_RANGE.max(on_sight)).then_some((s.id, d));
+                    }
                     if s.player && mode == crate::bots::Aggression::Calm {
                         return None;
                     }

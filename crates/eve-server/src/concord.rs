@@ -18,7 +18,8 @@
 //! criminal, outlaws (security status -5 or lower), and anyone whose
 //! corporation or alliance is at war with yours (svc/war.rs).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Mutex;
 
 use eve_marshal::Value;
 use tracing::info;
@@ -32,7 +33,45 @@ use crate::world::World;
 
 const AGGRESSION_MS: i64 = 15 * 60_000;
 /// Systems at or above this (as shown, rounded) are high-security.
-const HIGH_SEC: f64 = 0.45;
+pub const HIGH_SEC: f64 = 0.45;
+/// How far CONCORD lets a criminal get before it warps in on them again.
+const POLICE_REACH: f64 = 150_000.0;
+
+/// Criminals wanted anywhere in high-security space: character -> (when the
+/// criminal flag ends, when CONCORD is due; None once it has destroyed their
+/// ship). Docking, jumping out or logging off does not lose CONCORD: it comes
+/// for the criminal in whichever high-sec system they next fly in.
+static WANTED: Mutex<BTreeMap<i64, (i64, Option<i64>)>> = Mutex::new(BTreeMap::new());
+
+fn wanted() -> std::sync::MutexGuard<'static, BTreeMap<i64, (i64, Option<i64>)>> {
+    WANTED.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A crime: flags `char_id` for 15 minutes and sends CONCORD in `response`
+/// ms (or keeps the earlier time if they are wanted already).
+fn warrant(char_id: i64, now: i64, response: i64) {
+    let mut w = wanted();
+    w.retain(|_, (until, _)| *until > now);
+    let due = w.get(&char_id).and_then(|(_, due)| *due).unwrap_or(now + response);
+    w.insert(char_id, (now + AGGRESSION_MS, Some(due)));
+}
+
+/// Whether CONCORD should be on its way to `char_id` now.
+fn warrant_due(char_id: i64, now: i64) -> bool {
+    wanted().get(&char_id).is_some_and(|(until, due)| *until > now && due.is_some_and(|d| d <= now))
+}
+
+/// CONCORD destroyed the criminal's ship: the flag stays, the hunt is over.
+fn served(char_id: i64) {
+    if let Some(entry) = wanted().get_mut(&char_id) {
+        entry.1 = None;
+    }
+}
+
+/// Whether `char_id` carries a criminal flag anywhere.
+pub fn is_wanted(char_id: i64, now: i64) -> bool {
+    wanted().get(&char_id).is_some_and(|(until, _)| *until > now)
+}
 const OUTLAW: f64 = -5.0;
 const SQUAD: usize = 3;
 
@@ -48,7 +87,7 @@ pub struct Watch {
 
 impl Watch {
     pub fn is_criminal(&self, char_id: i64, now: i64) -> bool {
-        self.criminals.get(&char_id).is_some_and(|(until, _)| *until > now)
+        self.criminals.get(&char_id).is_some_and(|(until, _)| *until > now) || is_wanted(char_id, now)
     }
 
     pub fn aggressed(&self, by: i64, on: i64, now: i64) -> bool {
@@ -108,8 +147,8 @@ pub fn aggress(park: &mut Park, attacker: i64, target: i64, now: i64, out: &mut 
     let security = park.wildlife.security;
     if security >= HIGH_SEC {
         let response = (5.0 + (1.0 - security.clamp(0.5, 1.0)) * 40.0) as i64 * 1_000;
-        let already = park.watch.criminals.get(&by_char).and_then(|(_, at)| *at);
-        park.watch.criminals.insert(by_char, (now + AGGRESSION_MS, Some(already.unwrap_or(now + response))));
+        park.watch.criminals.insert(by_char, (now + AGGRESSION_MS, None));
+        warrant(by_char, now, response);
         out.jobs.push(Job::Security { char_id: by_char, delta: -0.5 * security });
         info!("{by_char} committed a crime against {on_char} in {}; CONCORD in {}s", park.solar_system_id, response / 1_000);
     } else if security > 0.0 {
@@ -142,8 +181,8 @@ pub fn aggress_structure(park: &mut Park, attacker: i64, id: i64, now: i64, out:
     let security = park.wildlife.security;
     if security >= HIGH_SEC {
         let response = (5.0 + (1.0 - security.clamp(0.5, 1.0)) * 40.0) as i64 * 1_000;
-        let already = park.watch.criminals.get(&by_char).and_then(|(_, at)| *at);
-        park.watch.criminals.insert(by_char, (now + AGGRESSION_MS, Some(already.unwrap_or(now + response))));
+        park.watch.criminals.insert(by_char, (now + AGGRESSION_MS, None));
+        warrant(by_char, now, response);
         out.jobs.push(Job::Security { char_id: by_char, delta: -0.5 * security });
         info!("{by_char} attacked structure {id} in {}; CONCORD in {}s", park.solar_system_id, response / 1_000);
     } else if security > 0.0 {
@@ -155,6 +194,12 @@ pub fn aggress_structure(park: &mut Park, attacker: i64, id: i64, now: i64, out:
 pub fn killed(park: &mut Park, ship: &Ship, capsule: bool, out: &mut Out) {
     let now = combat::now_ms();
     let Some(fight) = &ship.fight else { return };
+    // CONCORD's work is done once the criminal's ship is gone.
+    let by_police = fight.last_attacker.and_then(|(_, s)| park.ships.get(&s)).is_some_and(|s| s.npc.as_ref().is_some_and(|b| b.police.is_some()));
+    if by_police {
+        served(ship.pilot.char_id);
+        return;
+    }
     let Some((killer, killer_ship)) = fight.last_attacker.filter(|(c, _)| *c > 0 && *c != ship.pilot.char_id) else { return };
     let killer_pilot = park.ships.get(&killer_ship).map(|s| &s.pilot);
     let killer_corp = killer_pilot.map_or(0, |p| p.corp_id);
@@ -251,25 +296,34 @@ pub async fn aggression_mgr(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
 
 /// CONCORD arrives when due, hunts its criminal, and leaves when done.
 pub fn step(park: &mut Park, now: i64, out: &mut Out) {
-    park.watch.criminals.retain(|_, (until, at)| *until > now || at.is_some());
+    park.watch.criminals.retain(|_, (until, _)| *until > now);
     for v in park.watch.aggression.values_mut() {
         v.retain(|_, t| now - *t < AGGRESSION_MS);
     }
     park.watch.aggression.retain(|_, v| !v.is_empty());
 
-    let due: Vec<i64> = park.watch.criminals.iter().filter(|(_, (_, at))| at.is_some_and(|t| t <= now)).map(|(c, _)| *c).collect();
-    for criminal in due {
-        if let Some(entry) = park.watch.criminals.get_mut(&criminal) {
-            entry.1 = None;
+    if park.wildlife.security >= HIGH_SEC && !park.wildlife.police.is_empty() {
+        // Anyone wanted who is flying here, and whom no squad is after yet:
+        // where they did it does not matter, only that it is high-sec.
+        let hunted: BTreeSet<i64> = park.ships.values().filter_map(|s| s.npc.as_ref()?.police.map(|p| p.criminal)).collect();
+        let due: BTreeSet<i64> = park
+            .ships
+            .values()
+            .filter(|s| s.is_pilot() && s.pilot.group_id != 29 && !s.warping())
+            .map(|s| s.pilot.char_id)
+            .filter(|c| *c > 0 && !hunted.contains(c) && warrant_due(*c, now))
+            .collect();
+        for criminal in due {
+            arrive(park, criminal, now, out);
         }
-        arrive(park, criminal, now, out);
     }
     hunt(park, now, out);
 }
 
 /// The criminal's ship in this system, if it is here and not a capsule.
 fn quarry(park: &Park, criminal: i64) -> Option<i64> {
-    park.players().find(|s| s.pilot.char_id == criminal && s.pilot.group_id != 29).map(|s| s.id)
+    // A player's or a bot's: CONCORD makes no exceptions.
+    park.ships.values().find(|s| s.is_pilot() && s.pilot.char_id == criminal && s.pilot.group_id != 29).map(|s| s.id)
 }
 
 fn arrive(park: &mut Park, criminal: i64, now: i64, out: &mut Out) {
@@ -306,8 +360,18 @@ fn hunt(park: &mut Park, now: i64, out: &mut Out) {
         .filter_map(|s| s.npc.as_ref().and_then(|b| b.police).map(|p| (s.id, p.criminal)))
         .collect();
     let (tick, system) = (park.tick, park.solar_system_id);
+    let mut lost_sight: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
     for (id, criminal) in cops {
         let target = quarry(park, criminal);
+        // The criminal warped off: CONCORD follows them to where they land.
+        let far = target.is_some_and(|t| {
+            let (Some(cop), Some(them)) = (park.ships.get(&id), park.ships.get(&t)) else { return false };
+            !them.warping() && (them.pos - cop.pos).len() > POLICE_REACH
+        });
+        if far {
+            lost_sight.entry(criminal).or_default().push(id);
+            continue;
+        }
         let field_blocked = target.is_some_and(|t| park.field_blocks_lock(id, t));
         let Some(cop) = park.ships.get_mut(&id) else { continue };
         let (Some(brain), Some(fight)) = (cop.npc.as_mut(), cop.fight.as_mut()) else { continue };
@@ -354,6 +418,14 @@ fn hunt(park: &mut Park, now: i64, out: &mut Out) {
                 }
             }
         }
+    }
+    for (criminal, squad) in lost_sight {
+        for id in squad {
+            if crate::fight::detach(park, id, now, out).is_some() {
+                out.destiny(system, entry(tick, "RemoveBalls", vec![Value::List(vec![Value::Int(id)])]));
+            }
+        }
+        arrive(park, criminal, now, out);
     }
 }
 

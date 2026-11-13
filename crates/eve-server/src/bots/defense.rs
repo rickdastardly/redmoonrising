@@ -98,7 +98,7 @@ pub async fn run(
     for (system, tower, attacker, alliance, corp, at, field, player) in alarms {
         // A bot side's tower; or a player corporation's that bots belong to.
         let owners = match alliance.map(|a| a as i32) {
-            Some(a) if p.alliances.contains_key(&a) => Owners::Alliance(a),
+            Some(a) if p.alliances.contains_key(&a) || p.player_sov.contains_key(&a) => Owners::Alliance(a),
             _ if p.corps.contains_key(&(corp as i32)) || ids.iter().any(|id| id.corp == corp as i32) => Owners::Corporation(corp as i32),
             _ => continue,
         };

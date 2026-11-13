@@ -14,6 +14,16 @@
 //!   stands its delay (scaled by the bots' clock) before the system changes
 //!   hands. An alliance short of systems at home anchors in unclaimed ones.
 //!
+//! - Player alliances: an alliance that has taken bot corporations in has
+//!   those bots claim space for it the same way (`player_claimants`): a home
+//!   region of its own (where its towers already stand, or free null-sec),
+//!   towers anchored and fuelled by its bot corporations, defended by all its
+//!   bots (`defense`), and wars and sieges with its bot neighbours.
+//! - Growth: alliances holding more space draw more corporations
+//!   (recruiting in `politics`, applications in `relations`, and free bot
+//!   corporations joining here), and an alliance with enough settled
+//!   systems founds an outpost in its space.
+//!
 //! Bot towers are real: players can see them, shoot them and reinforce them.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -42,7 +52,7 @@ const STRONTIUM: i64 = 3_000;
 const PURPOSE_ONLINE: i32 = 1;
 const PURPOSE_REINFORCE: i32 = 4;
 /// Each war's chance, per politics tick, of a siege.
-const SIEGE_CHANCE: f64 = 0.03;
+const SIEGE_CHANCE: f64 = 0.08;
 /// How long before a siege it is announced, in seconds of the bots' clock.
 pub const SIEGE_NOTICE: u32 = 15 * 60;
 /// An alliance's chance, per tick, to anchor in an unclaimed home system.
@@ -55,6 +65,14 @@ pub const TOWER_COST: f64 = 150_000_000.0;
 const UPKEEP_PER_TICK: f64 = 35_000.0;
 /// Treasury at which an alliance fields twice the ships its pilots alone would.
 const RICH: f64 = 5_000_000_000.0;
+/// Settled systems (sovereignty on the map) an alliance holds before it
+/// founds an outpost, and its chance each tick to found one where it has none.
+const OUTPOST_AFTER: usize = 4;
+const OUTPOST_CHANCE: f64 = 0.02;
+const OUTPOST_COST: f64 = 1_000_000_000.0;
+/// A free bot corporation's chance, each tick, to join a bot alliance; the
+/// alliances holding more space are likelier.
+const JOIN_CHANCE: f64 = 0.05;
 
 /// What happened, for the news.
 pub type News = (i64, String);
@@ -148,6 +166,115 @@ async fn anchor(db: &mut Client, owner: i32, tower_type: i32, place: &Place, cla
     Ok(true)
 }
 
+/// Claims up to `want` systems of `region` outward from its first station
+/// system, skipping `claimed` ones. Returns how many it claimed.
+#[allow(clippy::too_many_arguments)]
+async fn settle(
+    db: &mut Client,
+    atlas: &Atlas,
+    rng: &mut Rng,
+    region: i32,
+    executor: i32,
+    tower_type: i32,
+    want: usize,
+    claimed: &mut HashSet<i32>,
+    since: i64,
+) -> Result<usize, tokio_postgres::Error> {
+    let in_region: Vec<i32> = atlas.systems.iter().filter(|(_, s)| s.region == region && s.security <= 0.0).map(|(id, _)| *id).collect();
+    let mut sorted = in_region.clone();
+    sorted.sort_unstable();
+    let home = sorted.iter().copied().find(|s| atlas.systems.get(s).is_some_and(|x| !x.stations.is_empty()) && !claimed.contains(s))
+        .or_else(|| sorted.iter().copied().find(|s| !claimed.contains(s)));
+    let Some(home) = home else { return Ok(0) };
+    let mut order: Vec<i32> = Vec::new();
+    let mut seen = HashSet::from([home]);
+    let mut queue = VecDeque::from([home]);
+    while let Some(s) = queue.pop_front() {
+        order.push(s);
+        for n in atlas.systems.get(&s).map(|x| x.neighbours.clone()).unwrap_or_default() {
+            if atlas.systems.get(&n).is_some_and(|x| x.region == region && x.security <= 0.0) && seen.insert(n) {
+                queue.push_back(n);
+            }
+        }
+    }
+    let mut held = 0;
+    for system in order {
+        if held >= want {
+            break;
+        }
+        if claimed.contains(&system) {
+            continue;
+        }
+        let Some(place) = spot(db, system, rng).await? else { continue };
+        if !anchor(db, executor, tower_type, &place, since).await? {
+            continue;
+        }
+        claimed.insert(system);
+        held += 1;
+    }
+    Ok(held)
+}
+
+/// Player alliances with bot corporations in them, as claimants: (alliance,
+/// home region, the bot corporation that anchors for it, its race, its bot
+/// pilots). The home is where its towers stand, else a free null-sec region
+/// no NPC faction or other alliance calls home, kept in `p.player_sov`.
+async fn player_claimants(db: &Client, p: &mut Politics) -> Result<Vec<(i32, i32, i32, i64, u32)>, tokio_postgres::Error> {
+    let mut by_alliance: HashMap<i32, Vec<(i32, u32)>> = HashMap::new();
+    for (id, c) in &p.corps {
+        if let Some(a) = c.alliance.filter(|a| !p.alliances.contains_key(a)) {
+            if c.members > 0 {
+                by_alliance.entry(a).or_default().push((*id, c.members));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let mut ids: Vec<i32> = by_alliance.keys().copied().collect();
+    ids.sort_unstable();
+    p.player_sov.retain(|a, _| by_alliance.contains_key(a));
+    for alliance in ids {
+        let corps = &by_alliance[&alliance];
+        let pilots: u32 = corps.iter().map(|(_, n)| n).sum();
+        let &(executor, _) = corps.iter().max_by_key(|(id, n)| (*n, -*id)).expect("an alliance with bot corporations");
+        let race = db
+            .query_opt(r#"SELECT COALESCE("raceID", 4) FROM "corporation" WHERE "corporationID" = $1"#, &[&executor])
+            .await?
+            .and_then(|r| int(&r, 0))
+            .unwrap_or(4);
+        let region = match p.player_sov.get(&alliance) {
+            Some(r) => *r,
+            None => {
+                // Where its towers already stand, if anywhere in null-sec.
+                let sql = r#"SELECT s."regionID", count(*) FROM "posStructures" p JOIN entity e ON e."itemID" = p."itemID"
+                               JOIN "corporation" co ON co."corporationID" = e."ownerID"
+                               JOIN "mapSolarSystems" s ON s."solarSystemID" = e."locationID"
+                               JOIN "mapRegions" r ON r."regionID" = s."regionID"
+                              WHERE co."allianceID" = $1 AND s."security" <= 0 AND r."factionID" IS NULL
+                              GROUP BY 1 ORDER BY 2 DESC LIMIT 1"#;
+                let existing = db.query_opt(sql, &[&alliance]).await?.and_then(|r| int(&r, 0)).map(|v| v as i32);
+                let taken: HashSet<i32> = p.alliances.values().filter_map(|a| a.region).chain(p.player_sov.values().copied()).collect();
+                let free = match existing {
+                    Some(r) => Some(r),
+                    None => {
+                        let sql = r#"SELECT r."regionID" FROM "mapRegions" r
+                                      WHERE r."factionID" IS NULL
+                                        AND EXISTS (SELECT 1 FROM "mapSolarSystems" s WHERE s."regionID" = r."regionID" AND s."security" <= 0)
+                                      ORDER BY r."regionID""#;
+                        let all: Vec<i32> = db.query(sql, &[]).await?.iter().filter_map(|r| int(r, 0).map(|v| v as i32)).filter(|r| !taken.contains(r)).collect();
+                        all.get(alliance.unsigned_abs() as usize % all.len().max(1)).copied()
+                    }
+                };
+                let Some(r) = free else { continue };
+                info!("bots: player alliance {alliance}'s bot corporations make {r} their home");
+                p.player_sov.insert(alliance, r);
+                r
+            }
+        };
+        out.push((alliance, region, executor, race, pilots));
+    }
+    Ok(out)
+}
+
 /// Settles null-sec: towers for every null-sec bot alliance with none yet.
 pub async fn establish(db: &mut Client, atlas: &Atlas, p: &Politics, rng: &mut Rng, claim_delay_secs: i64) -> Result<Vec<News>, tokio_postgres::Error> {
     let have: HashSet<i64> = db
@@ -176,39 +303,11 @@ pub async fn establish(db: &mut Client, atlas: &Atlas, p: &Politics, rng: &mut R
         if have.contains(&(alliance as i64)) {
             continue;
         }
-        let in_region: Vec<i32> = atlas.systems.iter().filter(|(_, s)| s.region == region && s.security <= 0.0).map(|(id, _)| *id).collect();
-        let want = ((pilots / PILOTS_PER_SYSTEM) as usize).max(MIN_SYSTEMS).min((in_region.len() as f64 * MAX_SHARE) as usize).max(1);
+        let size = atlas.systems.values().filter(|s| s.region == region && s.security <= 0.0).count();
+        let want = ((pilots / PILOTS_PER_SYSTEM) as usize).max(MIN_SYSTEMS).min((size as f64 * MAX_SHARE) as usize).max(1);
         let tower_type = TOWERS.iter().find(|(r, _)| *r == race).map_or(TOWERS[2].1, |(_, t)| *t);
-        // Outward from home: the region's station systems first, then by gates.
-        let home = in_region.iter().copied().find(|s| atlas.systems.get(s).is_some_and(|x| !x.stations.is_empty())).or_else(|| in_region.first().copied());
-        let Some(home) = home else { continue };
-        let mut order: Vec<i32> = Vec::new();
-        let mut seen = HashSet::from([home]);
-        let mut queue = VecDeque::from([home]);
-        while let Some(s) = queue.pop_front() {
-            order.push(s);
-            for n in atlas.systems.get(&s).map(|x| x.neighbours.clone()).unwrap_or_default() {
-                if atlas.systems.get(&n).is_some_and(|x| x.region == region && x.security <= 0.0) && seen.insert(n) {
-                    queue.push_back(n);
-                }
-            }
-        }
-        let mut held = 0;
-        for system in order {
-            if held >= want {
-                break;
-            }
-            if claimed.contains(&system) {
-                continue;
-            }
-            let Some(place) = spot(db, system, rng).await? else { continue };
-            if !anchor(db, executor, tower_type, &place, settled).await? {
-                continue;
-            }
-            claimed.insert(system);
-            held += 1;
-            towers += 1;
-        }
+        let held = settle(db, atlas, rng, region, executor, tower_type, want, &mut claimed, settled).await?;
+        towers += held;
         let name = alliance_name(db, alliance).await;
         news.push((now, format!("{name} claims {held} systems of {}", region_name(db, region).await)));
     }
@@ -249,8 +348,10 @@ pub async fn refuel(db: &Client) -> Result<u64, tokio_postgres::Error> {
 #[allow(clippy::too_many_arguments)]
 pub async fn upkeep(
     db: &mut Client,
+    world: &crate::world::World,
     atlas: &Atlas,
     p: &mut Politics,
+    ids: &mut [super::presence::Identity],
     watched: &HashSet<i32>,
     sieges: &mut Vec<Siege>,
     rng: &mut Rng,
@@ -273,7 +374,10 @@ pub async fn upkeep(
     let delay = claim_delay_secs as f64;
     let claim_since = now - ((delay - delay / speed.max(1.0)) as i64) * SECOND_FT;
     let mut news = Vec::new();
-    let claimants = claimants(db, p).await?;
+    let mut claimants = claimants(db, p).await?;
+    let players = player_claimants(db, p).await?;
+    let player_ids: HashSet<i32> = players.iter().map(|c| c.0).collect();
+    claimants.extend(players);
     let info: HashMap<i32, (i32, i32, i64, u32)> = claimants.iter().map(|(a, r, e, race, n)| (*a, (*r, *e, *race, *n))).collect();
     // Which alliances have claiming towers where: what sieges aim at, rather
     // than the map's sovereignty, which follows the towers only later.
@@ -287,11 +391,113 @@ pub async fn upkeep(
     }
     let has = |towers: &HashMap<i32, HashSet<i32>>, system: &i32, alliance: i32| towers.get(system).is_some_and(|t| t.contains(&alliance));
 
-    // Sieges: one at a time in each war, announced ahead.
+    // Space held, by alliance: what draws recruits.
+    let mut held: HashMap<i32, u32> = HashMap::new();
+    for owners in towers.values() {
+        for a in owners {
+            *held.entry(*a).or_default() += 1;
+        }
+    }
+    p.held = held;
+
+    // A player alliance's bots with no space yet claim a first block of
+    // its home region.
+    for (alliance, region, executor, race, _) in claimants.iter().filter(|c| player_ids.contains(&c.0)) {
+        if p.held.get(alliance).copied().unwrap_or(0) > 0 {
+            continue;
+        }
+        let mut claimed: HashSet<i32> = towers.iter().filter(|(_, t)| !t.is_empty()).map(|(s, _)| *s).collect();
+        claimed.extend(watched.iter().copied());
+        let tower_type = TOWERS.iter().find(|(r, _)| r == race).map_or(TOWERS[2].1, |(_, t)| *t);
+        let before = claimed.clone();
+        let got = settle(db, atlas, rng, *region, *executor, tower_type, MIN_SYSTEMS, &mut claimed, claim_since).await?;
+        if got > 0 {
+            refuel(db).await?;
+            p.held.insert(*alliance, got as u32);
+            for system in claimed.difference(&before) {
+                towers.entry(*system).or_default().insert(*alliance);
+            }
+            news.push((now, format!("{}'s corporations anchor control towers in {got} systems of {} to claim it for {}",
+                alliance_name(db, *alliance).await, region_name(db, *region).await, alliance_name(db, *alliance).await)));
+        }
+    }
+
+    // Outposts: an alliance holding enough settled space founds one where it
+    // has none.
+    for (alliance, _, executor, race, _) in &claimants {
+        if rng.unit() >= OUTPOST_CHANCE * super::sov_warfare().expand_rate() {
+            continue;
+        }
+        let sql = r#"SELECT s."solarSystemID",
+                            EXISTS (SELECT 1 FROM "staStations" st WHERE st."solarSystemID" = s."solarSystemID"),
+                            (SELECT count(*) FROM "mapSolarSystemJumps" j JOIN "mapSolarSystems" n ON n."solarSystemID" = j."toSolarSystemID"
+                              WHERE j."fromSolarSystemID" = s."solarSystemID" AND n."allianceID" = $1)
+                       FROM "mapSolarSystems" s WHERE s."allianceID" = $1"#;
+        let rows = db.query(sql, &[alliance]).await?;
+        if rows.len() < OUTPOST_AFTER {
+            continue;
+        }
+        fn has_station(r: &tokio_postgres::Row) -> bool {
+            r.try_get::<_, bool>(1).unwrap_or(true)
+        }
+        // One outpost for every OUTPOST_AFTER systems held, in the best-connected place without a station.
+        let stations = rows.iter().filter(|r| has_station(r)).count();
+        if stations * OUTPOST_AFTER >= rows.len() {
+            continue;
+        }
+        let Some(best) = rows.iter().filter(|r| !has_station(r)).max_by_key(|r| (int(r, 2).unwrap_or(0), -int(r, 0).unwrap_or(0))) else { continue };
+        let system = int(best, 0).unwrap_or(0);
+        let paid = db
+            .execute(r#"UPDATE "corporation" SET "balance" = "balance" - $2 WHERE "corporationID" = $1 AND "balance" >= $2"#, &[executor, &OUTPOST_COST])
+            .await?;
+        if paid == 0 {
+            continue;
+        }
+        match crate::svc::outpost::found_for_bots(db, world, system, *executor as i64, *race).await? {
+            Some((_, name)) => news.push((now, format!("{} founded an outpost: {name}", alliance_name(db, *alliance).await))),
+            None => {
+                db.execute(r#"UPDATE "corporation" SET "balance" = "balance" + $2 WHERE "corporationID" = $1"#, &[executor, &OUTPOST_COST]).await?;
+            }
+        }
+    }
+
+    // Free bot corporations join the bot alliances holding the most space.
+    if rng.unit() < JOIN_CHANCE {
+        let free: Vec<i32> = {
+            let mut v: Vec<i32> = p.corps.iter().filter(|(_, c)| c.alliance.is_none() && c.members > 0 && c.kind == super::politics::KIND_COMBAT_CORP).map(|(id, _)| *id).collect();
+            v.sort_unstable();
+            v
+        };
+        let mut holders: Vec<(i32, u32)> = p.held.iter().filter(|(a, n)| p.alliances.get(a).is_some_and(|x| x.kind == KIND_NULL_ALLIANCE) && **n > 0).map(|(a, n)| (*a, *n)).collect();
+        holders.sort_unstable();
+        let total: u32 = holders.iter().map(|(_, n)| n).sum();
+        if let (false, true) = (free.is_empty(), total > 0) {
+            let corp = free[rng.below(free.len())];
+            let mut roll = rng.below(total as usize) as u32;
+            let to = holders.iter().find(|(_, n)| {
+                if roll < *n {
+                    return true;
+                }
+                roll -= n;
+                false
+            }).map(|(a, _)| *a);
+            if let Some(to) = to {
+                super::events::move_corp(db, p, ids, corp, to).await?;
+                news.push((now, format!("A corporation joins {}, drawn by its {} systems", alliance_name(db, to).await, p.held.get(&to).copied().unwrap_or(0))));
+            }
+        }
+    }
+
+    // Sieges: one at a time in each war, announced ahead; how many in all
+    // and how often as the dashboard's sovereignty warfare setting says.
+    let warfare = super::sov_warfare();
     let wars: Vec<(i32, i32, i32)> = p.wars.iter().map(|w| (w.a, w.b, w.id)).collect();
     for (a, b, war) in wars {
+        if sieges.len() >= warfare.max_sieges() {
+            break;
+        }
         let (Some(&(_, attacker_exec, attacker_race, attackers)), Some(&(_, _, _, defenders))) = (info.get(&a), info.get(&b)) else { continue };
-        if sieges.iter().any(|s| s.war == war) || rng.unit() >= SIEGE_CHANCE || !p.in_prime(a) {
+        if sieges.iter().any(|s| s.war == war) || rng.unit() >= SIEGE_CHANCE * warfare.siege_rate() || !p.in_prime(a) {
             continue;
         }
         // Rich alliances field more ships than their numbers alone would.
@@ -335,7 +541,7 @@ pub async fn upkeep(
 
     // Expansion into empty home systems.
     for (alliance, region, executor, race, pilots) in &claimants {
-        if rng.unit() >= EXPAND_CHANCE {
+        if rng.unit() >= EXPAND_CHANCE * warfare.expand_rate() {
             continue;
         }
         let size = atlas.systems.values().filter(|s| s.region == *region && s.security <= 0.0).count();

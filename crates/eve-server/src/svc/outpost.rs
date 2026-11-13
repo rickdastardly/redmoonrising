@@ -197,6 +197,22 @@ async fn create(client: &mut tokio_postgres::Client, system: i64, s: &Structure)
         }
     }
 
+    let outpost = match raise(&mut txn, system, corp, &corp_name, station_type, pos).await? {
+        Ok(o) => o,
+        Err(m) => return Ok(Err(m)),
+    };
+    for item in leftover {
+        txn.move_to(item, outpost.id, FLAG_HANGAR).await?;
+    }
+    txn.tx().execute(r#"DELETE FROM "posStructures" WHERE "itemID" = $1"#, &[&(s.id as i32)]).await?;
+    txn.destroy(s.id).await?;
+    let events = txn.commit().await?;
+    Ok(Ok((outpost, events)))
+}
+
+/// Raises an outpost of `station_type` at `pos` in `system` for `corp`: its
+/// station, map entry, static location, item and assembly lines.
+async fn raise(txn: &mut ItemTxn<'_>, system: i64, corp: i64, corp_name: &str, station_type: i64, pos: Vec3) -> Result<Result<Outpost, String>, tokio_postgres::Error> {
     let Some(sys) = txn.tx().query_opt(
         r#"SELECT COALESCE("solarSystemName", ''), "constellationID", "regionID", COALESCE("security", 0)::float8
              FROM "mapSolarSystems" WHERE "solarSystemID" = $1"#,
@@ -234,7 +250,8 @@ async fn create(client: &mut tokio_postgres::Client, system: i64, s: &Structure)
     let id: i32 = txn.tx().query_one(
         r#"SELECT GREATEST($1,
                   COALESCE((SELECT max("stationID") FROM "staStations" WHERE "stationID" BETWEEN $1 AND $2), 0) + 1,
-                  COALESCE((SELECT max("itemID") FROM "mapDenormalize" WHERE "itemID" BETWEEN $1 AND $2), 0) + 1)"#,
+                  COALESCE((SELECT max("itemID") FROM "mapDenormalize" WHERE "itemID" BETWEEN $1 AND $2), 0) + 1,
+                  COALESCE((SELECT max("locationID") FROM "eveStaticLocations" WHERE "locationID" BETWEEN $1 AND $2), 0) + 1)"#,
         &[&OUTPOST_ID_MIN, &OUTPOST_ID_MAX],
     ).await?.get(0);
     let mut name = if corp_name.is_empty() { format!("{system_name} - {type_name}") } else { format!("{system_name} - {corp_name} Outpost") };
@@ -258,6 +275,24 @@ async fn create(client: &mut tokio_postgres::Client, system: i64, s: &Structure)
         &[&id, &(station_type as i32), &(GROUP_STATION as i32), &(system as i32), &constellation, &region,
           &pos.x, &pos.y, &pos.z, &radius, &name, &security],
     ).await?;
+    // The station is an item too, as NPC stations are: its hangar's container.
+    txn.tx().execute(
+        r#"INSERT INTO "entity" ("itemID", "itemName", "typeID", "ownerID", "locationID", flag, contraband, singleton, quantity, x, y, z)
+           VALUES ($1, $2, $3, $4, $5, 0, 0, 1, 1, $6, $7, $8)
+           ON CONFLICT ("itemID") DO NOTHING"#,
+        &[&id, &name, &(station_type as i32), &(corp as i32), &(system as i32), &pos.x, &pos.y, &pos.z],
+    ).await?;
+    // The client knows stations by their static locations: the outpost's own.
+    txn.tx().execute(
+        r#"UPDATE "eveStaticLocations" SET "locationName" = $2, x = $3, y = $4, z = $5 WHERE "locationID" = $1"#,
+        &[&id, &name, &pos.x, &pos.y, &pos.z],
+    ).await?;
+    txn.tx().execute(
+        r#"INSERT INTO "eveStaticLocations" ("locationID", "locationName", x, y, z)
+           SELECT $1::int, $2::text, $3::float8, $4::float8, $5::float8
+            WHERE NOT EXISTS (SELECT 1 FROM "eveStaticLocations" WHERE "locationID" = $1::int)"#,
+        &[&id, &name, &pos.x, &pos.y, &pos.z],
+    ).await?;
     for &(line_type, count) in assembly_lines(station_type) {
         txn.tx().execute(
             r#"INSERT INTO "ramAssemblyLines" ("assemblyLineID", "assemblyLineTypeID", "containerID", "nextFreeTime",
@@ -278,22 +313,70 @@ async fn create(client: &mut tokio_postgres::Client, system: i64, s: &Structure)
         ).await?;
     }
     // Whatever else was in the hold waits in the new station's hangar.
-    for item in leftover {
-        txn.move_to(item, i64::from(id), FLAG_HANGAR).await?;
+    Ok(Ok(Outpost { id: i64::from(id), type_id: station_type, name, pos, radius, corp, undock }))
+}
+
+/// Outpost types by race (Caldari, Minmatar, Amarr, Gallente).
+const OUTPOSTS: [(i64, i64); 4] = [(1, 21642), (2, 21646), (4, 21644), (8, 21645)];
+const GROUP_PLANET: i32 = 7;
+
+/// A bot alliance raises an outpost for `corp` in `system` (its race's
+/// kind, beside a planet), as a platform would build one. Its ID and name;
+/// None if the system already has an outpost or nowhere to put one.
+pub async fn found_for_bots(client: &mut tokio_postgres::Client, world: &World, system: i64, corp: i64, race: i64) -> Result<Option<(i64, String)>, tokio_postgres::Error> {
+    let station_type = OUTPOSTS.iter().find(|(r, _)| *r == race).map_or(21644, |(_, t)| *t);
+    let mut txn = ItemTxn::begin(client).await?;
+    txn.tx().query_one("SELECT pg_advisory_xact_lock($1, $2)", &[&307i32, &0i32]).await?;
+    let taken = txn.tx().query_opt(
+        r#"SELECT 1 FROM "staStations" WHERE "solarSystemID" = $1 AND "stationID" BETWEEN $2 AND $3 LIMIT 1"#,
+        &[&(system as i32), &OUTPOST_ID_MIN, &OUTPOST_ID_MAX],
+    ).await?;
+    if taken.is_some() {
+        return Ok(None);
     }
-    txn.tx().execute(r#"DELETE FROM "posStructures" WHERE "itemID" = $1"#, &[&(s.id as i32)]).await?;
-    txn.destroy(s.id).await?;
-    let events = txn.commit().await?;
-    Ok(Ok((Outpost { id: i64::from(id), type_id: station_type, name, pos, radius, corp, undock }, events)))
+    let Some(planet) = txn.tx().query_opt(
+        r#"SELECT "x", "y", "z", COALESCE("radius", 5000000) FROM "mapDenormalize"
+            WHERE "solarSystemID" = $1 AND "groupID" = $2 ORDER BY "itemID" LIMIT 1"#,
+        &[&(system as i32), &GROUP_PLANET],
+    ).await? else {
+        return Ok(None);
+    };
+    let reach = float(&planet, 3).unwrap_or(5_000_000.0) + 150_000.0;
+    let dir = Vec3::new(1.0, 0.2, 0.5).unit();
+    let pos = Vec3::new(float(&planet, 0).unwrap_or(0.0), float(&planet, 1).unwrap_or(0.0), float(&planet, 2).unwrap_or(0.0)) + dir * reach;
+    let corp_name = txn.tx()
+        .query_opt(r#"SELECT COALESCE("corporationName", '') FROM "corporation" WHERE "corporationID" = $1"#, &[&(corp as i32)])
+        .await?
+        .and_then(|r| text(&r, 0))
+        .unwrap_or_default();
+    let outpost = match raise(&mut txn, system, corp, &corp_name, station_type, pos).await? {
+        Ok(o) => o,
+        Err(m) => {
+            info!("bots: no outpost in {system}: {m}");
+            return Ok(None);
+        }
+    };
+    txn.commit().await?;
+    let found = (outpost.id, outpost.name.clone());
+    info!("outpost {} ({}) founded by bots in {system} for corporation {corp}", found.1, found.0);
+    show_new(world, system, None, outpost);
+    Ok(Some(found))
 }
 
 /// The platform goes and the outpost appears, for everyone in the system.
 fn show(world: &World, system: i64, platform: i64, o: Outpost) {
+    show_new(world, system, Some(platform), o);
+}
+
+/// An outpost appears (from its platform, if it had one) for everyone in the system.
+fn show_new(world: &World, system: i64, platform: Option<i64>, o: Outpost) {
     let mut world = world.lock();
     let Some(park) = world.parks.get_mut(&system) else { return };
-    park.structures.remove(&platform);
-    for seen in park.visible_objects.values_mut() {
-        seen.remove(&platform);
+    if let Some(platform) = platform {
+        park.structures.remove(&platform);
+        for seen in park.visible_objects.values_mut() {
+            seen.remove(&platform);
+        }
     }
     park.celestials.push(Celestial {
         id: o.id,
@@ -305,7 +388,7 @@ fn show(world: &World, system: i64, platform: i64, o: Outpost) {
         undock: o.undock,
         jump: None,
     });
-    let mut entries: Vec<Value> = space::remove_ball_entries(park.tick, platform);
+    let mut entries: Vec<Value> = platform.map(|p| space::remove_ball_entries(park.tick, p)).unwrap_or_default();
     entries.extend(space::celestial_add_entry(park, o.id, o.corp));
     space::broadcast(&world, system, None, entries);
 }
@@ -349,7 +432,60 @@ pub async fn spawn_materials(ctx: &Ctx<'_>, platform: Option<i64>) -> Result<Str
 /// Each outpost docks into its race's hangar, as that race's NPC stations do
 /// (Caldari 241, Minmatar 242, Amarr 1075, Gallente 2067); the data gives all
 /// four the one shared hangar.
+/// The static data's own positions for its places in the outpost ID range
+/// (locationID, x, y, z).
+const ORIGINAL_POSITIONS: &str = "(61000001, -553052037120, 73071943680, 102584770560), (61000002, 2645580718080, -34165678080, -5771872542720), (61000003, 863843328000, 18544926720, 512362536960), (61000004, -4841876152320, -932665958400, -5842790522880), (61000005, 571594383360, -16523059200, 981875220480), (61000006, -2736985251840, 383628288000, -6037808701440), (61000007, -950028165120, -103419371520, 568085176320), (61000008, -1645208248320, 213354946560, -1200596213760), (61000009, 170776043520, -27318067200, 53984747520), (61000010, -324399882240, 12049981440, 584501944320), (61000011, -69260451840, 6106767360, -89242951680), (61000012, 32670474240, 566599680, 388248821760), (61000013, -262934814720, 5047050240, 39242342400), (61000014, 462903582720, 71146659840, 97839636480), (61000015, 574267760640, -19491594240, 397844275200), (61000016, 10114867200, 905011200, -66563481600), (61000017, -3915819786240, 265022791680, 619365212160), (61000018, -1719708426240, -23281213440, -1817100656640), (61000019, -47798231040, 1021747200, 465177600000), (61000020, -4781606952960, -453164359680, 5108659937280), (61000021, -305709342720, -16689684480, -1008518799360), (61000022, 407936409600, 3337297920, 135142072320), (61000023, -41039831040, -3629506560, -137668239360), (61000024, 394080460800, -8727797760, 1307712675840), (61000025, -536758394880, -7605166080, -477225492480), (61000026, 113886289920, 10016808960, -129645404160), (61000027, 1737443205120, 136211128320, 1515162378240), (61000028, -123909857280, -22810828800, -404207493120), (61000029, -124699238400, -21333565440, -161818091520), (61000030, 355011256320, -63994306560, 326110863360), (61000031, 26526228480, -2966937600, 94479605760), (61000032, -1673405276160, -134289039360, -2587709153280), (61000033, -826095083520, 143065866240, 4679996006400), (61000034, -229690368000, 5815296000, 1767506780160), (61000035, 229027799040, 40059248640, -179874078720), (61000036, -5337376972800, 135897538560, 1086049689600), (61000037, 791041597440, -1703731200, 69282570240), (61000038, 4026323312640, 626239856640, 3224493219840), (61000039, -256215736320, -4672020480, -167808737280), (61000040, -2288445726720, -431963627520, 1261072097280), (61000041, -79091589120, -11142144000, -962085888000)";
+
 pub async fn ensure_hangars(db: &tokio_postgres::Client) -> Result<(), tokio_postgres::Error> {
+    // Every station is a static location the client is sent at login. The
+    // static data also has named places in the outpost ID range (61000000
+    // on), and outposts used to be given their IDs; such an outpost showed
+    // the place's name. It keeps the place's position, as it always had (the
+    // client builds the station's surroundings from it), and takes its own
+    // name. A station missing its static location gets one from itself.
+    let positions = db
+        .execute(
+            &format!(
+                r#"UPDATE "eveStaticLocations" l SET x = v.x, y = v.y, z = v.z
+                     FROM (VALUES {ORIGINAL_POSITIONS}) AS v(id, x, y, z)
+                    WHERE l."locationID" = v.id AND (l.x <> v.x OR l.y <> v.y OR l.z <> v.z)"#
+            ),
+            &[],
+        )
+        .await?;
+    let renamed = db
+        .execute(
+            r#"UPDATE "eveStaticLocations" l SET "locationName" = COALESCE(s."stationName", '')
+                 FROM "staStations" s
+                WHERE s."stationID" = l."locationID" AND s."stationID" >= 61000000
+                  AND l."locationName" IS DISTINCT FROM COALESCE(s."stationName", '')"#,
+            &[],
+        )
+        .await?;
+    let restored = db
+        .execute(
+            r#"INSERT INTO "eveStaticLocations" ("locationID", "locationName", x, y, z)
+               SELECT s."stationID", COALESCE(s."stationName", ''), COALESCE(s.x, 0), COALESCE(s.y, 0), COALESCE(s.z, 0)
+                 FROM "staStations" s
+                WHERE NOT EXISTS (SELECT 1 FROM "eveStaticLocations" l WHERE l."locationID" = s."stationID")"#,
+            &[],
+        )
+        .await?;
+    // Every station is also an item, which its hangar names as its
+    // container; the client reads the hangar's type from it to move items in.
+    let items = db
+        .execute(
+            r#"INSERT INTO "entity" ("itemID", "itemName", "typeID", "ownerID", "locationID", flag, contraband, singleton, quantity, x, y, z)
+               SELECT s."stationID", COALESCE(s."stationName", ''), s."stationTypeID", s."corporationID", s."solarSystemID",
+                      0, 0, 1, 1, COALESCE(s.x, 0), COALESCE(s.y, 0), COALESCE(s.z, 0)
+                 FROM "staStations" s
+                WHERE NOT EXISTS (SELECT 1 FROM "entity" e WHERE e."itemID" = s."stationID")"#,
+            &[],
+        )
+        .await?;
+    if positions + renamed + restored + items > 0 {
+        tracing::info!("stations: {restored} static location(s) restored, {renamed} outpost(s) renamed, {positions} position(s) put back, {items} station item(s) added");
+    }
     // Station Management settings.
     db.batch_execute(r#"
         CREATE TABLE IF NOT EXISTS "rmrStationAccessRules" (
@@ -366,9 +502,12 @@ pub async fn ensure_hangars(db: &tokio_postgres::Client) -> Result<(), tokio_pos
         CREATE TABLE IF NOT EXISTS "rmrStationDescriptions" ("stationID" integer PRIMARY KEY, description text NOT NULL);
         CREATE TABLE IF NOT EXISTS "rmrOfficePublic" ("officeID" integer PRIMARY KEY, "publiclyAvailable" boolean NOT NULL);
     "#).await?;
+    // Outposts come with the CONCORD hangar (graphic 2067), a placeholder in
+    // this client: see-through floor, ships that will not load. Each race's
+    // outpost gets its race's station hangar instead (Gallente: 244).
     db.execute(
         r#"UPDATE "staStationTypes" st
-              SET "hangarGraphicID" = CASE t."raceID" WHEN 1 THEN 241 WHEN 2 THEN 242 WHEN 4 THEN 1075 ELSE 2067 END
+              SET "hangarGraphicID" = CASE t."raceID" WHEN 1 THEN 241 WHEN 2 THEN 242 WHEN 4 THEN 1075 ELSE 244 END
              FROM "invTypes" t
             WHERE t."typeID" = st."stationTypeID" AND st."stationTypeID" IN (21642, 21644, 21645, 21646)"#,
         &[],
@@ -541,6 +680,7 @@ async fn update_settings(ctx: &Ctx<'_>, station: i64, args: &[Value]) -> Result<
         &[&st, &name, &docking, &office_cost, &take, &hangar],
     ).await { return Err(failed()); }
     ctx.execute(r#"UPDATE "mapDenormalize" SET "itemName" = $2 WHERE "itemID" = $1"#, &[&st, &name]).await;
+    ctx.execute(r#"UPDATE "eveStaticLocations" SET "locationName" = $2 WHERE "locationID" = $1"#, &[&st, &name]).await;
     ctx.execute(r#"UPDATE entity SET "itemName" = $2 WHERE "itemID" = $1"#, &[&st, &name]).await;
     if !ctx.execute(
         r#"INSERT INTO "rmrStationDescriptions" ("stationID", description) VALUES ($1, $2)

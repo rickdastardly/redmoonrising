@@ -362,6 +362,9 @@ impl<'c> Loadout<'c> {
                           m.operation,m."groupID",m."skillTypeID",m."offWhileActive"
                      FROM "dgmTypeModifiers" m
                     WHERE m."typeID" = ANY($1)
+                      -- Tech II missiles' drawback slowed the ship's capacitor
+                      -- once per loaded launcher; this server leaves it out.
+                      AND m."effectName" IS DISTINCT FROM 'ammoInfluenceCapRecharge'
                       AND (m."effectName" IS DISTINCT FROM 'modifyMaxVelocityOfShipPassive' OR NOT EXISTS (
                           SELECT 1 FROM "dgmTypeModifiers" legacy
                            WHERE legacy."typeID" = m."typeID" AND legacy."effectName" = 'maxVelocityBonus'
@@ -638,6 +641,17 @@ impl<'c> Loadout<'c> {
             }
         }
         value
+    }
+
+    /// Attribute `a` on piece `i` before and after its modifiers, with each
+    /// modifier's source type, operation and value: for diagnosing a fitting.
+    pub fn explain(&self, i: usize, a: i32) -> (f64, f64, Vec<(i64, i16, f64)>) {
+        let mods = self.incoming.get(&(i, a)).map_or_else(Vec::new, |ms| {
+            ms.iter()
+                .map(|m| (self.pieces[m.source].type_id, m.operation, m.fixed.unwrap_or_else(|| self.value(m.source, m.modifying))))
+                .collect()
+        });
+        (self.base(i, a), self.value(i, a), mods)
     }
 
     /// Every attribute piece `i` has, computed.

@@ -229,7 +229,7 @@ static SHOWN: AtomicUsize = AtomicUsize::new(0);
 static SETTINGS_VERSION: AtomicUsize = AtomicUsize::new(0);
 
 /// The most bots shown in one system, and the range of online activity.
-pub const SHOWN_RANGE: (usize, usize) = (10, 1_000);
+pub const SHOWN_RANGE: (usize, usize) = (10, 2_500);
 pub const ACTIVITY_RANGE: (f64, f64) = (0.1, 4.0);
 
 fn changed() {
@@ -434,6 +434,79 @@ pub fn set_bot_market(r: Rate) {
     changed();
 }
 
+/// How hard bot alliances fight over null-sec: how often they besiege,
+/// expand and found outposts, how many sieges run at once, and how many
+/// allies join a battle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SovWarfare {
+    Low = 0,
+    Moderate = 1,
+    War = 2,
+}
+
+impl SovWarfare {
+    pub fn parse(word: &str) -> Option<SovWarfare> {
+        match word.trim().to_ascii_lowercase().as_str() {
+            "low" | "quiet" | "calm" => Some(SovWarfare::Low),
+            "moderate" | "normal" | "default" => Some(SovWarfare::Moderate),
+            "war" | "high" | "total" => Some(SovWarfare::War),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        ["low", "moderate", "war"][self as usize]
+    }
+
+    /// How likely a war starts a siege, relative to moderate.
+    pub fn siege_rate(self) -> f64 {
+        [0.25, 1.0, 2.5][self as usize]
+    }
+
+    /// How likely alliances claim new systems and found outposts.
+    pub fn expand_rate(self) -> f64 {
+        [0.4, 1.0, 2.0][self as usize]
+    }
+
+    /// The most sieges announced or under way at once, across New Eden.
+    pub fn max_sieges(self) -> usize {
+        [2, 6, 24][self as usize]
+    }
+
+    /// The most allied alliances that join each side of a battle.
+    pub fn max_allies(self) -> usize {
+        [1, 3, 5][self as usize]
+    }
+}
+
+static SOV_WARFARE: AtomicU8 = AtomicU8::new(SovWarfare::Moderate as u8);
+/// The most ships one side brings to a battle.
+static BATTLE_SIZE: AtomicUsize = AtomicUsize::new(2_000);
+pub const BATTLE_SIZE_RANGE: (usize, usize) = (10, 3_000);
+
+pub fn sov_warfare() -> SovWarfare {
+    match SOV_WARFARE.load(Ordering::Relaxed) {
+        0 => SovWarfare::Low,
+        2 => SovWarfare::War,
+        _ => SovWarfare::Moderate,
+    }
+}
+
+pub fn set_sov_warfare(s: SovWarfare) {
+    SOV_WARFARE.store(s as u8, Ordering::Relaxed);
+    changed();
+}
+
+pub fn battle_size() -> usize {
+    BATTLE_SIZE.load(Ordering::Relaxed)
+}
+
+pub fn set_battle_size(n: usize) {
+    BATTLE_SIZE.store(n.clamp(BATTLE_SIZE_RANGE.0, BATTLE_SIZE_RANGE.1), Ordering::Relaxed);
+    changed();
+}
+
 /// The settings above as the config file sets them at start.
 #[derive(Debug, Clone, Copy)]
 pub struct Settings {
@@ -449,6 +522,8 @@ pub struct Settings {
     pub clear_belts: bool,
     pub wingmen: Wingmen,
     pub market: Rate,
+    pub sov_warfare: SovWarfare,
+    pub battle_size: usize,
 }
 
 impl Default for Settings {
@@ -456,6 +531,7 @@ impl Default for Settings {
         Settings {
             chatter: Chatter::Normal, trash_talk: true, recruiting: Rate::Normal, alliance_applying: Rate::Normal, door: Door::Selective, activity: 1.0,
             roaming: Rate::Normal, hunt_players: true, mining_fleets: true, clear_belts: true, wingmen: Wingmen::Paid, market: Rate::Normal,
+            sov_warfare: SovWarfare::Moderate, battle_size: 2_000,
         }
     }
 }
@@ -467,6 +543,8 @@ pub fn apply_settings(s: &Settings, shown: usize) {
     set_clear_belts(s.clear_belts);
     set_wingmen(s.wingmen);
     set_bot_market(s.market);
+    set_sov_warfare(s.sov_warfare);
+    set_battle_size(s.battle_size);
     set_chatter(s.chatter);
     set_trash_talk(s.trash_talk);
     set_recruiting(s.recruiting);
@@ -1006,7 +1084,21 @@ impl Sim {
         if let Err(e) = politics::tick(&mut self.politics, &self.db, &self.bots, &mut self.ids, &mut self.rng, now, self.speed).await {
             error!("bots: politics: {}", crate::logging::chain(&e));
         }
-        match sov::upkeep(&mut self.db, &self.atlas, &mut self.politics, self.presence.watched(), &mut self.sieges, &mut self.rng, now, self.server.sov_claim_delay_secs, self.speed).await {
+        match sov::upkeep(
+            &mut self.db,
+            &self.server.world,
+            &self.atlas,
+            &mut self.politics,
+            &mut self.ids,
+            self.presence.watched(),
+            &mut self.sieges,
+            &mut self.rng,
+            now,
+            self.server.sov_claim_delay_secs,
+            self.speed,
+        )
+        .await
+        {
             Ok(news) => self.politics.tell(news),
             Err(e) => error!("bots: sovereignty: {}", crate::logging::chain(&e)),
         }
@@ -1469,9 +1561,14 @@ fn publish_counts(server: &Server, bots: &[Bot], politics: &politics::Politics, 
                 security: s.names.security,
                 starts: s.starts_at,
                 fleets: s.fight.as_ref().map(|f| {
-                    let (a, d) = f.standing(bots, s.system);
-                    (a, d)
+                    let (a, d) = f.standing();
+                    (a as usize, d as usize)
                 }),
+                stakes: s.fight.as_ref().map(|f| f.stakes.label().to_string()),
+                brought: s.fight.as_ref().map_or((0, 0), |f| (f.attack.brought, f.defend.brought)),
+                lost: s.fight.as_ref().map_or((0, 0), |f| (f.attack.lost, f.defend.lost)),
+                allies: s.fight.as_ref().map_or_else(Default::default, |f| (f.attack.ally_names.clone(), f.defend.ally_names.clone())),
+                seen: s.fight.as_ref().is_some_and(|f| f.seen),
             })
             .collect(),
         running,

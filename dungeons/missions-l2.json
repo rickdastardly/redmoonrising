@@ -1,0 +1,6797 @@
+[
+ {
+  "id": "m2-blockade-an",
+  "name": "The Blockade",
+  "kind": "mission",
+  "faction": "angel",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Blockade",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Angel Stasis Tower"
+        ],
+        "fixed": true
+       },
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Gistii Ambusher",
+         "Gistii Impaler"
+        ]
+       },
+       {
+        "count": 5,
+        "class": "destroyer",
+        "names": [
+         "Gistior Defacer",
+         "Gistior Shatterer"
+        ],
+        "boss": true
+       }
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 3,
+        "class": "cruiser",
+        "names": [
+         "Gistum Predator"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Gistum Depredator"
+        ],
+        "boss": true
+       },
+       {
+        "count": 6,
+        "class": "destroyer",
+        "names": [
+         "Gistior Shatterer",
+         "Gistior Defacer"
+        ]
+       },
+       {
+        "count": 6,
+        "class": "frigate",
+        "names": [
+         "Gistii Ambusher",
+         "Gistii Nomad"
+        ]
+       }
+      ],
+      "on": [
+       "Gistior Defacer",
+       "Gistior Shatterer"
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Gistum Depredator"
+        ],
+        "boss": true
+       },
+       {
+        "count": 6,
+        "class": "destroyer",
+        "names": [
+         "Gistior Defacer",
+         "Gistior Haunter"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Arch Gistii Ruffian"
+        ]
+       }
+      ],
+      "on": [
+       "Gistum Depredator"
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Gistum Depredator"
+        ],
+        "boss": true
+       },
+       {
+        "count": 2,
+        "class": "destroyer",
+        "names": [
+         "Gistior Shatterer"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Arch Gistii Ambusher"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Gistii Impaler"
+        ]
+       }
+      ],
+      "on": [
+       "Gistum Depredator"
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Gistum  Phalanx"
+        ],
+        "boss": true
+       },
+       {
+        "count": 3,
+        "class": "destroyer",
+        "names": [
+         "Gistior Seizer"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Gistii Raider"
+        ]
+       }
+      ],
+      "on": [
+       "Gistum Depredator"
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Clear all five waves; the Gistum Phalanx ends it"
+ },
+ {
+  "id": "m2-blockade-br",
+  "name": "The Blockade",
+  "kind": "mission",
+  "faction": "blood",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Blockade",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Bloodraider Stasis Tower"
+        ],
+        "fixed": true
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Corpior Visionary"
+        ],
+        "boss": true
+       },
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Corpii Diviner"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "destroyer",
+        "names": [
+         "Corpior Converter"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Corpii Collector"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Corpii Raider"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "destroyer",
+        "names": [
+         "Corpior Converter"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corpum Arch Reaver"
+        ],
+        "boss": true
+       }
+      ],
+      "on": [
+       "Corpior Visionary"
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 2,
+        "class": "destroyer",
+        "names": [
+         "Corpior Templar"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Elder Corpii Seeker"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "destroyer",
+        "names": [
+         "Corpior Converter"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corpum Arch Engraver"
+        ],
+        "boss": true
+       }
+      ],
+      "on": [
+       "Corpum Arch Reaver"
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 2,
+        "class": "destroyer",
+        "names": [
+         "Corpior Visionary"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Corpii Reaver"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Elder Corpii Raider"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corpum Arch Reaver"
+        ],
+        "boss": true
+       }
+      ],
+      "on": [
+       "Corpum Arch Engraver"
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Corpii Reaver"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "destroyer",
+        "names": [
+         "Corpior Friar"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corpum Shadow Sage"
+        ],
+        "boss": true
+       }
+      ],
+      "on": [
+       "Corpum Arch Reaver"
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Clear five waves; the Corpum Shadow Sage ends it"
+ },
+ {
+  "id": "m2-blockade-gu",
+  "name": "The Blockade",
+  "kind": "mission",
+  "faction": "guristas",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Blockade",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Guristas Stasis Tower"
+        ],
+        "fixed": true
+       },
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Pithi Demolisher"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "destroyer",
+        "names": [
+         "Pithior Anarchist"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Pithior Nihilist"
+        ],
+        "boss": true
+       }
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Pithi Saboteur"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Pithi Demolisher"
+        ]
+       },
+       {
+        "count": 6,
+        "class": "destroyer",
+        "names": [
+         "Pithior Nihilist"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "cruiser",
+        "names": [
+         "Pithum Ascriber"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Pithum Silencer"
+        ],
+        "boss": true
+       }
+      ],
+      "on": [
+       "Pithior Nihilist"
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Dire Pithi Despoiler"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "destroyer",
+        "names": [
+         "Pithior Renegade"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "destroyer",
+        "names": [
+         "Pithior Nihilist"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Pithum Silencer"
+        ],
+        "boss": true
+       }
+      ],
+      "on": [
+       "Pithum Silencer"
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Pithi Wrecker"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Dire Pithi Demolisher"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "destroyer",
+        "names": [
+         "Pithior Nihilist"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Pithum Ascriber"
+        ],
+        "boss": true
+       }
+      ],
+      "on": [
+       "Pithum Silencer"
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Pithi Destructor"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "destroyer",
+        "names": [
+         "Pithior Terrorist"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Pithum Eraser"
+        ],
+        "boss": true
+       }
+      ],
+      "on": [
+       "Pithum Ascriber"
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Clear five waves"
+ },
+ {
+  "id": "m2-blockade-sa",
+  "name": "The Blockade",
+  "kind": "mission",
+  "faction": "sansha",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Blockade",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Sansha Stasis Tower"
+        ],
+        "fixed": true,
+        "boss": true
+       },
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Centii Plague",
+         "Centii Savage"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "destroyer",
+        "names": [
+         "Centior Cannibal"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Centii Plague"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Centii Savage"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "destroyer",
+        "names": [
+         "Centior Cannibal"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "cruiser",
+        "names": [
+         "Centum Ravager"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Centum Ravisher"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Centii Loyal Slavehunter"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "destroyer",
+        "names": [
+         "Centior Cannibal"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "destroyer",
+        "names": [
+         "Centior Devourer"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Centum Ravisher"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Centii Butcher"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Centii Loyal Plague"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "destroyer",
+        "names": [
+         "Centior Misshape"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Centum Ravisher"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Centii Enslaver"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "destroyer",
+        "names": [
+         "Centior Horror"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Centum Hellhound",
+         "Centum Fiend"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Clear five waves"
+ },
+ {
+  "id": "m2-blockade-se",
+  "name": "The Blockade",
+  "kind": "mission",
+  "faction": "serpentis",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Blockade",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Serpentis Stasis Tower"
+        ],
+        "fixed": true
+       },
+       {
+        "count": 3,
+        "class": "destroyer"
+       },
+       {
+        "count": 5,
+        "class": "destroyer",
+        "names": [
+         "Corelior Trooper",
+         "Corelior Soldier"
+        ],
+        "boss": true
+       }
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Coreli Watchman",
+         "Coreli Patroller",
+         "Coreli Safeguard",
+         "Coreli Protector"
+        ]
+       },
+       {
+        "count": 6,
+        "class": "destroyer",
+        "names": [
+         "Corelior Soldier"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "cruiser",
+        "names": [
+         "Corelum Chief Scout",
+         "Corelum Chief Spy"
+        ],
+        "boss": true
+       }
+      ],
+      "on": [
+       "Corelior Trooper",
+       "Corelior Soldier"
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Coreli Guardian Patroller"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "destroyer",
+        "names": [
+         "Corelior Infantry",
+         "Corelior Sentinel"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "destroyer",
+        "names": [
+         "Corelior Soldier"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corelum Chief Scout",
+         "Corelum Chief Spy"
+        ],
+        "boss": true
+       }
+      ],
+      "on": [
+       "Corelum Chief Scout",
+       "Corelum Chief Spy"
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Coreli Defender",
+         "Coreli Safeguard"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Coreli Guardian Guard"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "destroyer",
+        "names": [
+         "Corelior Trooper"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corelum Chief Scout",
+         "Corelum Chief Spy"
+        ],
+        "boss": true
+       }
+      ],
+      "on": [
+       "Corelum Chief Scout",
+       "Corelum Chief Spy"
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Coreli Guard"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "destroyer",
+        "names": [
+         "Corelior Artillery"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corelum Chief Infantry"
+        ],
+        "boss": true
+       }
+      ],
+      "on": [
+       "Corelum Chief Scout",
+       "Corelum Chief Spy"
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the trigger ships, then the Corelum Chief Infantry"
+ },
+ {
+  "id": "m2-recon-an",
+  "name": "Recon (1 of 3)",
+  "kind": "mission",
+  "faction": "angel",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Outpost",
+    "gateLocked": false,
+    "gateDistance": 25000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Gistior Haunter",
+         "Gistior Seizer"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "cruiser",
+        "names": [
+         "Gistum  Centurion",
+         "Gistum  Phalanx"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Gistior Haunter",
+         "Gistior Seizer"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "cruiser",
+        "names": [
+         "Gistum  Centurion",
+         "Gistum  Phalanx"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Gistior Haunter",
+         "Gistior Seizer"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "cruiser",
+        "names": [
+         "Gistum  Centurion",
+         "Gistum  Phalanx"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Recon Point",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Arch Gistii Ambusher",
+         "Arch Gistii Hunter",
+         "Arch Gistii Raider"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "cruiser",
+        "names": [
+         "Gistum  Centurion",
+         "Gistum  Phalanx"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "destroyer",
+        "names": [
+         "Gistior Seizer",
+         "Gistior Shatterer",
+         "Gistior Trasher"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "cruiser",
+        "names": [
+         "Gistum  Centurion",
+         "Gistum  Phalanx"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Reach the second pocket"
+ },
+ {
+  "id": "m2-recon-br",
+  "name": "Recon (1 of 3)",
+  "kind": "mission",
+  "faction": "blood",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Outpost",
+    "gateLocked": false,
+    "gateDistance": 25000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Corpior Converter",
+         "Corpior Templar",
+         "Corpior Devoter"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Elder Corpum Sage",
+         "Elder Corpum Dark Priest"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Elder Corpii Engraver"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Corpior Templar"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Elder Corpum Priest"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Corpior Devoter"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corpum Shadow Sage",
+         "Elder Corpum Dark Priest"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Corpior Friar"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corpum Dark Priest"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Recon Point",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Elder Corpii Reaver"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "cruiser",
+        "names": [
+         "Elder Corpum Dark Priest",
+         "Elder Corpum Shadow Sage"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "destroyer",
+        "names": [
+         "Corpior Visionary",
+         "Corpior Cleric"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "cruiser",
+        "names": [
+         "Elder Corpum Dark Priest"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Reach the second pocket"
+ },
+ {
+  "id": "m2-recon-gu",
+  "name": "Recon (1 of 3)",
+  "kind": "mission",
+  "faction": "guristas",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Outpost",
+    "gateLocked": false,
+    "gateDistance": 25000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Pithior Anarchist"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Dire Pithum Nullifier"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Pithior Guerilla"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Dire Pithum Eraser",
+         "Dire Pithum Annihilator"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Pithior Guerilla"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Pithum Abolisher",
+         "Dire Pithum Abolisher"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Pithior Supremacist"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Pithum Abolisher",
+         "Dire Pithum Abolisher"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Recon Point",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Dire Pithi Plunderer"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "cruiser",
+        "names": [
+         "Dire Pithum Eraser"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 4,
+        "class": "destroyer",
+        "names": [
+         "Pithior Nihilist"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "cruiser",
+        "names": [
+         "Dire Pithum Abolisher"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Reach the second pocket"
+ },
+ {
+  "id": "m2-recon-sa",
+  "name": "Recon (1 of 3)",
+  "kind": "mission",
+  "faction": "sansha",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Outpost",
+    "gateLocked": false,
+    "gateDistance": 25000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Centior Abomination",
+         "Centior Horror"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "destroyer",
+        "names": [
+         "Centior Abomination",
+         "Centior Horror"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 3,
+        "class": "destroyer",
+        "names": [
+         "Centior Abomination",
+         "Centior Horror"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Centum Loyal Execrator"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 4,
+        "class": "destroyer",
+        "names": [
+         "Centior Abomination",
+         "Centior Horror"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Centum Loyal Slaughterer"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Recon Point",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Centii Loyal Savage"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Centii Loyal Slavehunter"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "cruiser",
+        "names": [
+         "Centum Loyal Fiend",
+         "Centum Loyal Hellhound"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Reach the second pocket"
+ },
+ {
+  "id": "m2-recon-se",
+  "name": "Recon (1 of 3)",
+  "kind": "mission",
+  "faction": "serpentis",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Outpost",
+    "gateLocked": false,
+    "gateDistance": 22000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Corelior Infantry"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corelum Guardian Chief SafeGuard"
+        ],
+        "boss": true
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Corelior Sentinel"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corelum Guardian Chief SafeGuard",
+         "Corelum Guardian Chief Sentinel"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Corelior Sentinel"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corelum Chief Sentinel",
+         "Corelum Guardian Chief Infantry"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Corelior Artillery"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corelum Chief Sentinel"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Recon Point",
+    "gateLocked": true,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Coreli Guardian Defender"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "cruiser",
+        "names": [
+         "Corelum Guardian Chief Sentinel"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 4,
+        "class": "destroyer",
+        "names": [
+         "Corelior Sentinel"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "cruiser",
+        "names": [
+         "Corelum Guardian Chief Sentinel"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Reach the second pocket"
+ },
+ {
+  "id": "m2-seek-destroy-an",
+  "name": "Seek and Destroy",
+  "kind": "mission",
+  "faction": "angel",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Encounter",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Gistii Raider",
+         "Gistii Ambusher"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Gistior Defacer"
+        ]
+       },
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Gistii Hijacker",
+         "Gistii Rogue"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Gistum Predator"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill all"
+ },
+ {
+  "id": "m2-seek-destroy-br",
+  "name": "Seek and Destroy",
+  "kind": "mission",
+  "faction": "blood",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Encounter",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Corpii Diviner",
+         "Corpii Raider"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corpum Arch Reaver",
+         "Corpum Arch Engraver"
+        ],
+        "boss": true
+       }
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Corpii Reaver",
+         "Corpii Engraver"
+        ]
+       }
+      ],
+      "on": [
+       "Corpum Arch Reaver",
+       "Corpum Arch Engraver"
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the first group"
+ },
+ {
+  "id": "m2-seek-destroy-gu",
+  "name": "Seek and Destroy",
+  "kind": "mission",
+  "faction": "guristas",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Encounter",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Pithi Wrecker"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Pithum Ascriber"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill all"
+ },
+ {
+  "id": "m2-seek-destroy-sa",
+  "name": "Seek and Destroy",
+  "kind": "mission",
+  "faction": "sansha",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Encounter",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Centii Butcher",
+         "Centii Manslayer"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Centii Ravener",
+         "Centii Scavenger"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Centum Ravager",
+         "Centum Ravisher"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the second group"
+ },
+ {
+  "id": "m2-seek-destroy-se",
+  "name": "Seek and Destroy",
+  "kind": "mission",
+  "faction": "serpentis",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Encounter",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Coreli Guard",
+         "Coreli Safeguard"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Coreli Guard",
+         "Coreli Safeguard"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Coreli Defender"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the second group"
+ },
+ {
+  "id": "m2-hidden-stash-an",
+  "name": "The Hidden Stash",
+  "kind": "mission",
+  "faction": "angel",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Warehouse",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "destroyer",
+        "names": [
+         "Gistior Defacer",
+         "Gistior Haunter"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Gistum Breaker",
+         "Gistum Defeater"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the warehouse and take the stash"
+ },
+ {
+  "id": "m2-hidden-stash-br",
+  "name": "The Hidden Stash",
+  "kind": "mission",
+  "faction": "blood",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Warehouse",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Corpii Seeker",
+         "Corpii Collector"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corpum Arch Engraver"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the warehouse and take the stash"
+ },
+ {
+  "id": "m2-hidden-stash-gu",
+  "name": "The Hidden Stash",
+  "kind": "mission",
+  "faction": "guristas",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Warehouse",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Pithi Despoiler"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Pithi Saboteur"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Pithum Killer"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the warehouse and take the stash"
+ },
+ {
+  "id": "m2-hidden-stash-sa",
+  "name": "The Hidden Stash",
+  "kind": "mission",
+  "faction": "sansha",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Warehouse",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 7,
+        "class": "frigate",
+        "names": [
+         "Centii Manslayer",
+         "Centii Butcher",
+         "Centii Slavehunter",
+         "Centii Savage"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the warehouse and take the stash"
+ },
+ {
+  "id": "m2-hidden-stash-se",
+  "name": "The Hidden Stash",
+  "kind": "mission",
+  "faction": "serpentis",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Warehouse",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Corelior Soldier"
+        ],
+        "boss": true
+       },
+       {
+        "count": 4,
+        "class": "destroyer",
+        "names": [
+         "Corelior Infantry"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the warehouse and take the stash"
+ },
+ {
+  "id": "m2-score-br",
+  "name": "The Score",
+  "kind": "mission",
+  "faction": "blood",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Encounter",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Corpii Collector",
+         "Corpii Seeker"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Corpior Converter"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Corpii Seeker",
+         "Corpii Follower"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Corpii Herald",
+         "Corpii Upholder"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Corpior Templar"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corpum Arch Reaver"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the third group"
+ },
+ {
+  "id": "m2-score-kk",
+  "name": "The Score",
+  "kind": "mission",
+  "faction": "khanid",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Encounter",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Khanid Rookie",
+         "Khanid Elite Fighter"
+        ]
+       },
+       {
+        "count": 7,
+        "class": "frigate",
+        "names": [
+         "Khanid Rookie",
+         "Khanid Scout"
+        ]
+       },
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Khanid Fighter",
+         "Khanid Elite Fighter"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Khanid Officer"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill all"
+ },
+ {
+  "id": "m2-score-mi",
+  "name": "The Score",
+  "kind": "mission",
+  "faction": "minmatar",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Encounter",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Republic Gleeda"
+        ]
+       },
+       {
+        "count": 9,
+        "class": "frigate",
+        "names": [
+         "Republic Kvarm",
+         "Republic Otur",
+         "Republic Skani",
+         "Republic Solon",
+         "Republic Takan"
+        ]
+       },
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Republic Kvarm",
+         "Republic Radur",
+         "Republic Skani"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill all"
+ },
+ {
+  "id": "m2-score-sa",
+  "name": "The Score",
+  "kind": "mission",
+  "faction": "sansha",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Encounter",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 12,
+        "class": "frigate",
+        "names": [
+         "Centii Servant",
+         "Centii Minion",
+         "Centii Savage",
+         "Centii Slavehunter"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Centum Ravager"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill all"
+ },
+ {
+  "id": "m2-score-se",
+  "name": "The Score",
+  "kind": "mission",
+  "faction": "serpentis",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Encounter",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Coreli Patroller",
+         "Coreli Initiate",
+         "Coreli Watchman",
+         "Coreli Scout"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Coreli Guardian Patroller"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Coreli Initiate",
+         "Coreli Scout"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Corelior Infantry",
+         "Corelior Soldier"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Coreli Agent",
+         "Coreli Spy"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "destroyer",
+        "names": [
+         "Corelior Trooper"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corelum Chief Spy"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the third group"
+ },
+ {
+  "id": "m2-smuggler-interception-an",
+  "name": "Smuggler Interception",
+  "kind": "mission",
+  "faction": "angel",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Interception",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Gistii Hijacker"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Gistii Rogue"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Gistii Nomad"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "cruiser",
+        "names": [
+         "Angel Cartel Personnel Transport"
+        ],
+        "boss": true
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Gistii Hijacker"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Gistii Rogue"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Gistior Defacer"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Gistum Predator"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the second group"
+ },
+ {
+  "id": "m2-smuggler-interception-sa",
+  "name": "Smuggler Interception",
+  "kind": "mission",
+  "faction": "sansha",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Interception",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Centii Butcher",
+         "Centii Manslayer",
+         "Centii Minion",
+         "Centii Servant"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Centii Slavehunter",
+         "Centii Minion",
+         "Centii Servant"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Centior Abomination"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Centum Ravager"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the second group"
+ },
+ {
+  "id": "m2-unauthorized-military-an",
+  "name": "Unauthorized Military Presence",
+  "kind": "mission",
+  "faction": "angel",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Encounter",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Gistii Ambusher",
+         "Gistii Raider"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Gistior Defiler",
+         "Gistior Haunter"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "destroyer",
+        "names": [
+         "Gistior Defacer",
+         "Gistior Haunter"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Gistii Ambusher",
+         "Gistii Nomad",
+         "Gistii Raider",
+         "Gistii Ruffian"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "cruiser",
+        "names": [
+         "Angel Cartel Personnel Transport"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the groups and recover the militia from the transport"
+ },
+ {
+  "id": "m2-unauthorized-military-br",
+  "name": "Unauthorized Military Presence",
+  "kind": "mission",
+  "faction": "blood",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Encounter",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Corpii Herald",
+         "Corpii Upholder",
+         "Corpii Seeker"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Corpii Diviner",
+         "Corpii Seeker",
+         "Corpii Collector",
+         "Corpii Raider"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Blood Raider Personnel Transport"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the third group and recover the militants from the transport"
+ },
+ {
+  "id": "m2-damsel",
+  "name": "The Damsel in Distress",
+  "kind": "mission",
+  "faction": "mercenaries",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Pleasure Hub",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 8,
+        "class": "frigate",
+        "names": [
+         "Kruul's Henchman"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Kruul"
+        ],
+        "boss": true
+       }
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 10,
+        "class": "frigate",
+        "names": [
+         "Mercenary Elite Fighter"
+        ]
+       }
+      ],
+      "on": [
+       "Kruul"
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the Pleasure Hub and rescue the Damsel"
+ },
+ {
+  "id": "m2-angel-spies",
+  "name": "The Angel Cartel Spies",
+  "kind": "mission",
+  "faction": "angel",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Encounter",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 8,
+        "class": "frigate",
+        "names": [
+         "Gistii Impaler",
+         "Gistii Rogue",
+         "Gistii Hijacker",
+         "Gistii Raider",
+         "Gistii Hunter"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill all"
+ },
+ {
+  "id": "m2-gurista-spies",
+  "name": "The Guristas Spies",
+  "kind": "mission",
+  "faction": "guristas",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Encounter",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Pithi Despoiler"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Pithior Guerilla"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Pithi Demolisher",
+         "Pithi Destructor"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "destroyer",
+        "names": [
+         "Pithior Renegade",
+         "Pithior Anarchist"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill all"
+ },
+ {
+  "id": "m2-sansha-spies",
+  "name": "The Sansha Spies",
+  "kind": "mission",
+  "faction": "sansha",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Encounter",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 7,
+        "class": "frigate",
+        "names": [
+         "Centii Servant"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "destroyer",
+        "boss": true,
+        "label": "Sansha Spy"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the spies"
+ },
+ {
+  "id": "m2-serpentis-spies",
+  "name": "The Serpentis Spies",
+  "kind": "mission",
+  "faction": "serpentis",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Encounter",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Coreli Agent"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Coreli Initiate"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Coreli Safeguard"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Serpentis Spy"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the Serpentis Spies"
+ },
+ {
+  "id": "m2-blood-spies",
+  "name": "The Blood Raider Spies",
+  "kind": "mission",
+  "faction": "blood",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Encounter",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Corpii Raider"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Corpii Diviner",
+         "Corpii Reaver"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "destroyer",
+        "names": [
+         "Corpior Devoter"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Corpii Diviner",
+         "Corpii Raider"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "destroyer",
+        "boss": true,
+        "label": "Blood Raider Spy"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the second group"
+ },
+ {
+  "id": "m2-avenge-comrade-br",
+  "name": "Avenge a Fallen Comrade",
+  "kind": "mission",
+  "faction": "blood",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Habitat",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Corpii Diviner",
+         "Corpii Raider"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 3,
+        "class": "destroyer",
+        "names": [
+         "Corpior Visionary"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corpum Arch Templar"
+        ],
+        "boss": true
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 6,
+        "class": "frigate",
+        "names": [
+         "Corpii Follower"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Corpii Diviner",
+         "Corpii Engraver"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the Habitat"
+ },
+ {
+  "id": "m2-avenge-comrade-gu",
+  "name": "Avenge a Fallen Comrade",
+  "kind": "mission",
+  "faction": "guristas",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Habitat",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Pithi Arrogator",
+         "Pithi Imputor"
+        ]
+       },
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Pithi Infiltrator",
+         "Pithi Invader"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Pithior Nihilist"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Pithi Infiltrator",
+         "Pithi Invader"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Pithum Silencer"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Pithi Despoiler",
+         "Pithi Saboteur"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the Habitat"
+ },
+ {
+  "id": "m2-avenge-comrade-se",
+  "name": "Avenge a Fallen Comrade",
+  "kind": "mission",
+  "faction": "serpentis",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Habitat",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Coreli Guard"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Coreli Guard",
+         "Coreli Safeguard"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Coreli Guard",
+         "Coreli Safeguard"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corelum Chief Guard"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Coreli Guard",
+         "Coreli Safeguard",
+         "Coreli Defender"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the Habitat"
+ },
+ {
+  "id": "m2-avenge-comrade-cc",
+  "name": "Avenge a Fallen Comrade",
+  "kind": "mission",
+  "faction": "concord",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Ambush",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate"
+       },
+       {
+        "count": 2,
+        "class": "frigate"
+       },
+       {
+        "count": 4,
+        "class": "frigate"
+       },
+       {
+        "count": 4,
+        "class": "cruiser"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill all"
+ },
+ {
+  "id": "m2-break-will-an",
+  "name": "Break Their Will",
+  "kind": "mission",
+  "faction": "angel",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Repair Station",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Gistii Rogue"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Gistii Hijacker"
+        ],
+        "boss": true
+       },
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Angel Point Defense Battery"
+        ],
+        "fixed": true
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 6,
+        "class": "frigate",
+        "names": [
+         "Mercenary Rookie"
+        ]
+       },
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Mercenary Fighter"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the Repair Station"
+ },
+ {
+  "id": "m2-cargo-delivery-an",
+  "name": "Cargo Delivery",
+  "kind": "mission",
+  "faction": "angel",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Warehouse",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Arch Gistii Ambusher",
+         "Arch Gistii Raider"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Gistii Ambusher",
+         "Gistii Impaler",
+         "Gistii Raider"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "destroyer",
+        "names": [
+         "Gistior Defiler",
+         "Gistior Haunter",
+         "Gistior Seizer"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "cruiser",
+        "names": [
+         "Gistum Depredator",
+         "Gistum Predator"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "boss": true,
+        "label": "Irmur Filara"
+       },
+       {
+        "count": 6,
+        "class": "frigate",
+        "names": [
+         "Gistii Ambusher",
+         "Gistii Hunter",
+         "Gistii Impaler",
+         "Gistii Raider"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "destroyer",
+        "names": [
+         "Gistior Seizer",
+         "Gistior Shatterer",
+         "Gistior Trasher"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Retrieve the cargo from the warehouse"
+ },
+ {
+  "id": "m2-cargo-delivery-br",
+  "name": "Cargo Delivery",
+  "kind": "mission",
+  "faction": "blood",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Warehouse",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Corpii Engraver"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Corpii Diviner"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "destroyer",
+        "names": [
+         "Corpior Templar"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 7,
+        "class": "destroyer",
+        "names": [
+         "Corpior Converter",
+         "Corpior Friar",
+         "Corpior Templar"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "cruiser",
+        "names": [
+         "Corpum Arch Engraver"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "boss": true,
+        "label": "Zorenyen Zitil"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Retrieve the cargo from the hidden warehouse"
+ },
+ {
+  "id": "m2-drug-bust-se",
+  "name": "Drug Bust",
+  "kind": "mission",
+  "faction": "serpentis",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Drug Lab",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Corelior Soldier",
+         "Corelior Trooper"
+        ],
+        "boss": true
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corelum Chief Patroller",
+         "Corelum Chief Watchman"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Coreli Spy"
+        ],
+        "boss": true
+       }
+      ],
+      "on": [
+       "Corelior Soldier",
+       "Corelior Trooper"
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Coreli Initiate"
+        ]
+       }
+      ],
+      "on": [
+       "Coreli Spy"
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the industrial and recover the prisoners"
+ },
+ {
+  "id": "m2-pirate-intrusion-gu",
+  "name": "Pirate Intrusion",
+  "kind": "mission",
+  "faction": "guristas",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Outer Camp",
+    "gateLocked": false,
+    "gateDistance": 26000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Pithi Despoiler",
+         "Pithi Saboteur"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Pithi Demolisher",
+         "Pithi Destructor"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Pithior Anarchist"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Pithi Wrecker"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Pithi Demolisher"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Pithi Saboteur"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Pithior Renegade"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Pithum Killer"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Inner Camp",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Pithum Silencer"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Pithi Plunderer"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Pithi Demolisher"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Pithi Demolisher"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Pithi Infiltrator"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Pithi Wrecker"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Pithi Plunderer"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Pithum Annihilator",
+         "Pithum Nullifier"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Pithior Renegade"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Pithi Wrecker"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill all"
+ },
+ {
+  "id": "m2-pirate-intrusion-se",
+  "name": "Pirate Intrusion",
+  "kind": "mission",
+  "faction": "serpentis",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Outer Camp",
+    "gateLocked": false,
+    "gateDistance": 25000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Corelior Infantry",
+         "Corelior Sentinel"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Coreli Watchman"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Coreli Patroller",
+         "Coreli Watchman"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Corelior Infantry"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Coreli Agent",
+         "Coreli Spy"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Corelior Soldier",
+         "Corelior Trooper"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corelum Chief Watchman"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Coreli Defender",
+         "Coreli Guard",
+         "Coreli Protector",
+         "Coreli Safeguard"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Inner Camp",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Corelior Infantry",
+         "Corelior Sentinel"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Coreli Guardian Guard",
+         "Coreli Defender",
+         "Coreli Protector"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 2,
+        "class": "destroyer",
+        "names": [
+         "Corelior Infantry",
+         "Corelior Soldier"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Corelum Chief Patroller",
+         "Corelum Chief Watchman"
+        ],
+        "boss": true
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Coreli Agent",
+         "Coreli Spy"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill all"
+ },
+ {
+  "id": "m2-police-intrusion-ca",
+  "name": "Police Intrusion",
+  "kind": "mission",
+  "faction": "caldari",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Outer Patrol",
+    "gateLocked": false,
+    "gateDistance": 25000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 6,
+        "class": "frigate",
+        "names": [
+         "State Bo-Hi",
+         "State Showato"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "State Ashigaru"
+        ]
+       },
+       {
+        "count": 6,
+        "class": "frigate",
+        "names": [
+         "State Daito",
+         "State Shuriken"
+        ]
+       },
+       {
+        "count": 8,
+        "class": "frigate",
+        "names": [
+         "State Katana",
+         "State Nagasa",
+         "State Shinai",
+         "State Wakizashi"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Inner Patrol",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "State Bushi"
+        ]
+       },
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "State Katana",
+         "State Nagasa",
+         "State Shinai",
+         "State Wakizashi"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 8,
+        "class": "frigate",
+        "names": [
+         "State Katana",
+         "State Nagasa",
+         "State Shinai",
+         "State Wakizashi"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "State Shuriken"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "State Chugen"
+        ],
+        "boss": true
+       },
+       {
+        "count": 2,
+        "class": "destroyer",
+        "names": [
+         "State Kai Gunto",
+         "State Yumi"
+        ]
+       },
+       {
+        "count": 6,
+        "class": "frigate",
+        "names": [
+         "State Katana",
+         "State Nagasa",
+         "State Wakizashi"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill all"
+ },
+ {
+  "id": "m2-police-intrusion-mi",
+  "name": "Police Intrusion",
+  "kind": "mission",
+  "faction": "minmatar",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Outer Patrol",
+    "gateLocked": false,
+    "gateDistance": 30000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Republic Radur"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Republic Skani"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Republic Takan"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Republic Otur"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Republic Tribal Baldur",
+         "Republic Tribal Takan"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser"
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Republic Otur"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Republic Takan"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Republic Baldur"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Republic Kvarm"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Inner Patrol",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Republic Gleeda"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Republic Otur"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Republic Tribal Gleeda"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Republic Solon"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Republic Baldur"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Republic Gleeda"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Republic Otur"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Republic Tribal Gleeda"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Republic Baldur"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Republic Faxi"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Republic Gleeda"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Republic Kvarm"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Republic Otur"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Republic Jarpur"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill all"
+ },
+ {
+  "id": "m2-silence-informant",
+  "name": "Silence the Informant",
+  "kind": "mission",
+  "faction": "mercenaries",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Drone Field",
+    "gateLocked": false,
+    "gateDistance": 20000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Decimator Drone",
+         "Render Drone",
+         "Sunder Drone"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Decimator Drone",
+         "Render Drone",
+         "Sunder Drone"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Mercenary Picket",
+    "gateLocked": false,
+    "gateDistance": 20000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Mercenary Elite Fighter"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Mercenary Elite Fighter"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Mercenary Elite Fighter"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Hideout",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Tower Sentry Drone I"
+        ],
+        "fixed": true
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "boss": true,
+        "label": "The Informant"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the informant"
+ },
+ {
+  "id": "m2-stop-the-thief",
+  "name": "Stop the Thief",
+  "kind": "mission",
+  "faction": "mercenaries",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Hideout",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "The Thief"
+        ],
+        "boss": true
+       },
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Mercenary Fighter"
+        ]
+       },
+       {
+        "count": 6,
+        "class": "frigate",
+        "names": [
+         "Mercenary Elite Fighter"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the Thief and recover the reports"
+ },
+ {
+  "id": "m2-rogue-drone-harassment",
+  "name": "Rogue Drone Harassment",
+  "kind": "mission",
+  "faction": "drones",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Outer Hive",
+    "gateLocked": false,
+    "gateDistance": 20000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 6,
+        "class": "frigate",
+        "names": [
+         "Raider Drone",
+         "Splinter Drone",
+         "Infester Drone"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Splinter Drone",
+         "Render Drone"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Inner Hive",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Wrecker Drone"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill all"
+ },
+ {
+  "id": "m2-gone-berserk",
+  "name": "Gone Berserk",
+  "kind": "mission",
+  "faction": "eom",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Encounter",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 6,
+        "class": "frigate",
+        "names": [
+         "EoM Succubus"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "EoM Demon"
+        ],
+        "boss": true
+       }
+      ],
+      "on": [
+       "EoM Succubus"
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "EoM Demon"
+        ]
+       }
+      ],
+      "on": [
+       "EoM Demon"
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "EoM Demon",
+         "EoM Succubus"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "EoM Priest"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the EoM terrorists"
+ },
+ {
+  "id": "m2-mordus-headhunters",
+  "name": "The Mordus Headhunters",
+  "kind": "mission",
+  "faction": "mordu",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Camp",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Mordus Sabre"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Mordus Gladius"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 6,
+        "class": "frigate",
+        "names": [
+         "Mordus Sabre"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Mordus Cheetah"
+        ],
+        "boss": true
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Mordus Gladius"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Mordus Sabre"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Mordus Katana"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the second group"
+ },
+ {
+  "id": "m2-pirate-campers-gu",
+  "name": "Eliminate the Pirate Campers",
+  "kind": "mission",
+  "faction": "guristas",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Camp",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Pithi Saboteur",
+         "Pithi Despoiler"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Dire Pithi Despoiler",
+         "Dire Pithi Demolisher"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill all"
+ },
+ {
+  "id": "m2-stargate-campers-dd",
+  "name": "Eliminate the Stargate Campers",
+  "kind": "mission",
+  "faction": "concord",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Camp",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate"
+       },
+       {
+        "count": 3,
+        "class": "frigate"
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "boss": true,
+        "label": "DED Special Ops Panther"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill all"
+ },
+ {
+  "id": "m2-uprising-1-mo",
+  "name": "The Uprising: The Disappearance (1 of 4)",
+  "kind": "mission",
+  "faction": "mordu",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Outpost",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Mordus Gladius",
+         "Mordus Katana",
+         "Mordus Sabre"
+        ]
+       },
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Mordus Gladius"
+        ]
+       },
+       {
+        "count": 5,
+        "class": "cruiser",
+        "names": [
+         "Mordus Bobcat"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill all"
+ },
+ {
+  "id": "m2-uprising-2-mo",
+  "name": "The Uprising: Strike Them Where It Hurts (2 of 4)",
+  "kind": "mission",
+  "faction": "mordu",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Depot",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Mordus Cheetah",
+         "Mordus Katana"
+        ],
+        "boss": true
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Mordus Gladius",
+         "Mordus Sabre"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Mordus Katana",
+         "Mordus Sabre"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Mordus Rapier"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Mordus Bounty Hunter"
+        ]
+       },
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Mordus Katana"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill all"
+ },
+ {
+  "id": "m2-uprising-3-mo",
+  "name": "The Uprising: The Assault (3 of 4)",
+  "kind": "mission",
+  "faction": "mordu",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Forward Base",
+    "gateLocked": false,
+    "gateDistance": 20000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "cruiser",
+        "names": [
+         "Mordus Bobcat"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Mordus Gladius",
+         "Mordus Katana",
+         "Mordus Rapier"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Mordus Gladius"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Checkpoint",
+    "gateLocked": false,
+    "gateDistance": 20000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Mordus Bounty Hunter"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Militia Camp",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Militia Leader"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Reach the militia"
+ },
+ {
+  "id": "m2-uprising-4-mo",
+  "name": "The Uprising: Last Stand (4 of 4)",
+  "kind": "mission",
+  "faction": "mordu",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Last Stand",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Militia Leader"
+        ],
+        "boss": true
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Mordus Katana"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill all"
+ },
+ {
+  "id": "m2-drone-infestation",
+  "name": "Drone Infestation",
+  "kind": "mission",
+  "faction": "drones",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Silo",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Infester Drone",
+         "Belphegor Drone"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Sunder Drone",
+         "Decimator Drone"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Render Drone",
+         "Splinter Drone"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 4,
+        "class": "destroyer",
+        "names": [
+         "Shatter Drone",
+         "Destructor Drone"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the Drone Silo"
+ },
+ {
+  "id": "m2-alluring-emanations",
+  "name": "Alluring Emanations",
+  "kind": "mission",
+  "faction": "drones",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Hive",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Infester Drone"
+        ],
+        "boss": true
+       }
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 20,
+        "class": "frigate",
+        "names": [
+         "Splinter Drone",
+         "Render Drone",
+         "Decimator Drone"
+        ]
+       }
+      ],
+      "on": [
+       "Infester Drone"
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the rogue drone at the warp-in"
+ },
+ {
+  "id": "m2-terrorism-ca",
+  "name": "Terrorism!",
+  "kind": "mission",
+  "faction": "caldari",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Bunker",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "State Shuriken"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 3,
+        "class": "destroyer",
+        "names": [
+         "State Yumi",
+         "State Kai Gunto"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the Caldari bunker"
+ },
+ {
+  "id": "m2-vigilance-ga",
+  "name": "Vigilance",
+  "kind": "mission",
+  "faction": "gallente",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Patrol",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Gallente Transport Ship"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the suspicious industrial"
+ },
+ {
+  "id": "m2-intercept-saboteurs-am",
+  "name": "Intercept the Saboteurs",
+  "kind": "mission",
+  "faction": "amarr",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Approach",
+    "gateLocked": false,
+    "gateDistance": 20000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": []
+     }
+    ]
+   },
+   {
+    "name": "Saboteurs",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 8,
+        "class": "frigate",
+        "names": [
+         "Imperial Matendi",
+         "Imperial Paladin",
+         "Imperial Forian",
+         "Imperial Felix"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 10,
+        "class": "frigate",
+        "names": [
+         "Imperial Matendi",
+         "Imperial Paladin",
+         "Imperial Forian",
+         "Imperial Felix"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Divine Imperial Nabih"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 9,
+        "class": "frigate",
+        "names": [
+         "Imperial Paladin",
+         "Imperial Felix",
+         "Imperial Caius"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Divine Imperial Nabih"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the saboteurs"
+ },
+ {
+  "id": "m2-ammatar-scouts-spotted",
+  "name": "Ammatar Scouts Spotted",
+  "kind": "mission",
+  "faction": "ammatar",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Scout Position",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Ammatar Navy Scout"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Eliminate the Ammatar scouts"
+ },
+ {
+  "id": "m2-break-the-slave-trade-am",
+  "name": "Break the Slave Trade",
+  "kind": "mission",
+  "faction": "amarr",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Slave Route",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Imperial Mathura"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Imperial Muzakir"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Imperial Felix",
+         "Imperial Paladin"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "boss": true,
+        "label": "Imperial Industrial Ship"
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "cruiser",
+        "names": [
+         "Imperial Tamir"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Imperial Matendi"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Imperial Forian"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Imperial Bahir"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Imperial Sixtus"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Imperial Paladin"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the slaver industrial and recover its cargo"
+ },
+ {
+  "id": "m2-clearing-a-path-ga",
+  "name": "Clearing a Path",
+  "kind": "mission",
+  "faction": "gallente",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Patrol Route",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 6,
+        "class": "frigate",
+        "names": [
+         "Federation Praktor Belos"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Federation Praktor Harpago"
+        ]
+       },
+       {
+        "count": 6,
+        "class": "destroyer",
+        "names": [
+         "Federation Praktor Phalarica"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "destroyer",
+        "names": [
+         "Federation Praktor Machina"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "cruiser",
+        "names": [
+         "Federation Praktor Ouragos"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "cruiser",
+        "names": [
+         "Federation Praktor Optioon"
+        ]
+       },
+       {
+        "count": 8,
+        "class": "cruiser",
+        "names": [
+         "Federation Praktor Ouragos",
+         "Federation Praktor Optioon"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Clear the Federation Praktor patrol"
+ },
+ {
+  "id": "m2-communications-cold-war-ga",
+  "name": "Communications Cold War",
+  "kind": "mission",
+  "faction": "gallente",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Outer Relay",
+    "gateLocked": false,
+    "gateDistance": 27000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Gallente Stasis Tower"
+        ],
+        "fixed": true
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Tower Sentry Gallente I"
+        ],
+        "fixed": true
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Gallente Light Missile Battery"
+        ],
+        "fixed": true
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Communications Tower",
+    "gateLocked": true,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Gallente Stasis Tower"
+        ],
+        "fixed": true
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Tower Sentry Gallente I"
+        ],
+        "fixed": true
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Gallente Light Missile Battery"
+        ],
+        "fixed": true
+       },
+       {
+        "count": 2,
+        "class": "cruiser",
+        "names": [
+         "Federation Loras"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Federation Hoplon",
+         "Federation Kontos"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the Federation communications tower's guards"
+ },
+ {
+  "id": "m2-deadly-arrival-gami",
+  "name": "Deadly Arrival",
+  "kind": "mission",
+  "faction": "minmatar",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Ruins",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Gallente Stasis Tower"
+        ],
+        "fixed": true
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Federation Insidiator"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Republic Austri"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "destroyer",
+        "names": [
+         "Republic Faxi"
+        ]
+       },
+       {
+        "count": 5,
+        "class": "destroyer",
+        "names": [
+         "Republic Bormin"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Republic Tribal Faxi"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Reach the ruins and warp out"
+ },
+ {
+  "id": "m2-deadly-arrival-caam",
+  "name": "Deadly Arrival",
+  "kind": "mission",
+  "faction": "amarr",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Wreck",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Caldari Stasis Tower"
+        ],
+        "fixed": true
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "State Katana"
+        ],
+        "boss": true
+       },
+       {
+        "count": 5,
+        "class": "destroyer",
+        "names": [
+         "Imperial Deacon",
+         "Imperial Exarp",
+         "Imperial Caius",
+         "Imperial Crusader"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "State Wakizashi"
+        ],
+        "boss": true
+       },
+       {
+        "count": 5,
+        "class": "destroyer",
+        "names": [
+         "Imperial Deacon",
+         "Imperial Exarp",
+         "Imperial Caius",
+         "Imperial Crusader"
+        ]
+       }
+      ],
+      "on": [
+       "State Katana"
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Reach the wreck and warp out"
+ },
+ {
+  "id": "m2-delving-into-the-past-am",
+  "name": "Delving Into the Past",
+  "kind": "mission",
+  "faction": "amarr",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Excavation Site",
+    "gateLocked": false,
+    "gateDistance": 35000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "cruiser",
+        "names": [
+         "Imperial Templar Mathura",
+         "Imperial Templar Agatho"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Ruins",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Imperial Bahir",
+         "Imperial Sixtus"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "cruiser",
+        "names": [
+         "Imperial Templar Mathura",
+         "Imperial Templar Agatho"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Recover the old star map from the Imperial guards"
+ },
+ {
+  "id": "m2-pirate-campers-tt",
+  "name": "Eliminate the Pirate Campers",
+  "kind": "mission",
+  "faction": "thukker",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Camp",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Thukker Mercenary Elite Fighter"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Thukker Mercenary Fighter"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Eliminate the Thukker campers"
+ },
+ {
+  "id": "m2-elopement-ga",
+  "name": "Elopement",
+  "kind": "mission",
+  "faction": "gallente",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Rendezvous",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Federation Praktor Balra",
+         "Federation Insidiator"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Federation Arcus",
+         "Federation Pelekus"
+        ],
+        "boss": true
+       }
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Federation Praktor Harpago",
+         "Federation Pelekus",
+         "Federation Belos"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Federation Pelekus"
+        ],
+        "boss": true
+       }
+      ],
+      "on": [
+       "Federation Arcus",
+       "Federation Pelekus"
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Federation Loras"
+        ]
+       }
+      ],
+      "on": [
+       "Federation Pelekus"
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Intercept the eloping couple's Federation escort"
+ },
+ {
+  "id": "m2-freedom-must-not-prevail",
+  "name": "Freedom Must Not Prevail",
+  "kind": "mission",
+  "faction": "minmatar",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Freedom Camp",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 7,
+        "class": "frigate",
+        "names": [
+         "Minmatar Freedom Fighter"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the freedom fighters"
+ },
+ {
+  "id": "m2-human-cattle",
+  "name": "Human Cattle",
+  "kind": "mission",
+  "faction": "amarr",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Transfer Point",
+    "gateLocked": false,
+    "gateDistance": 20000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 6,
+        "class": "destroyer",
+        "names": [
+         "State Yumi"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "destroyer",
+        "names": [
+         "State Kai Gunto"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "State Shukuro Ashigaru"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Imperial Templar Paladin"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Imperial Agatho"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Imperial Templar Forian"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Imperial Haran"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Imperial Felix"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Imperial Sixtus"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Imperial Disciple"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Sentry Post",
+    "gateLocked": false,
+    "gateDistance": 20000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": []
+     }
+    ]
+   },
+   {
+    "name": "Slave Camp",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 8,
+        "class": "frigate",
+        "names": [
+         "Amarr Navy Gamma I Support Frigate"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Amarr Navy Gamma II Support Frigate"
+        ]
+       },
+       {
+        "count": 12,
+        "class": "frigate",
+        "names": [
+         "Amarr Navy Delta I Support Frigate"
+        ]
+       },
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Amarr Navy Delta II Support Frigate"
+        ]
+       },
+       {
+        "count": 8,
+        "class": "battleship",
+        "names": [
+         "Amarr Navy Apocalypse"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "battleship",
+        "names": [
+         "Amarr Navy Armageddon"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "cruiser",
+        "names": [
+         "Amarr Navy Maller"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "cruiser",
+        "names": [
+         "Amarr Navy Jakar"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Break up the slave transfer"
+ },
+ {
+  "id": "m2-imperial-scouts-spotted-am",
+  "name": "Imperial Scouts Spotted",
+  "kind": "mission",
+  "faction": "amarr",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Scout Position",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 6,
+        "class": "frigate",
+        "names": [
+         "Amarr Navy Scout"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Eliminate the Imperial scouts"
+ },
+ {
+  "id": "m2-intercept-saboteurs-mi",
+  "name": "Intercept the Saboteurs",
+  "kind": "mission",
+  "faction": "minmatar",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Warp-In",
+    "gateLocked": false,
+    "gateDistance": 20000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Minmatar Transport Ship"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Republic Baldur",
+         "Republic Takan"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Saboteur Camp",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 7,
+        "class": "frigate",
+        "names": [
+         "Republic Gleeda",
+         "Republic Baldur",
+         "Republic Otur"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Republic Takan"
+        ]
+       },
+       {
+        "count": 8,
+        "class": "frigate",
+        "names": [
+         "Republic Baldur",
+         "Republic Takan",
+         "Republic Gleeda",
+         "Republic Otur"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Minmatar Transport Ship"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Chief Republic Isak",
+         "Chief Republic Iflin"
+        ]
+       },
+       {
+        "count": 10,
+        "class": "frigate",
+        "names": [
+         "Republic Takan",
+         "Republic Baldur",
+         "Republic Otur"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "destroyer",
+        "names": [
+         "Republic Austri",
+         "Republic Bormin"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Minmatar Transport Ship"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the saboteurs and their transports"
+ },
+ {
+  "id": "m2-illegal-activity-ga",
+  "name": "Illegal Activity",
+  "kind": "mission",
+  "faction": "gallente",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Mining Site",
+    "gateLocked": false,
+    "gateDistance": 20000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Gallente Navy Soldier"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Gallente Navy Soldier"
+        ]
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Gallente Navy Atron"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Gallente Navy Officer"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "cleared",
+      "ships": [
+       {
+        "count": 6,
+        "class": "frigate",
+        "names": [
+         "Gallente Navy Soldier"
+        ]
+       },
+       {
+        "count": 6,
+        "class": "frigate",
+        "names": [
+         "Gallente Navy Atron"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Convoy",
+    "gateLocked": false,
+    "gateDistance": 20000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "boss": true,
+        "label": "R.S. Officer"
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Gallente Navy Soldier"
+        ]
+       },
+       {
+        "count": 9,
+        "class": "frigate",
+        "names": [
+         "Gallente Navy Maulus",
+         "Gallente Navy Atron"
+        ]
+       },
+       {
+        "count": 5,
+        "class": "frigate",
+        "names": [
+         "Convoy Escort"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Hideout",
+    "gateLocked": true,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Gallente Navy Soldier"
+        ]
+       },
+       {
+        "count": 9,
+        "class": "frigate",
+        "names": [
+         "Gallente Navy Maulus",
+         "Gallente Navy Atron"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Break up the illegal Federation mining operation and its convoy"
+ },
+ {
+  "id": "m2-no-honor",
+  "name": "No Honor",
+  "kind": "mission",
+  "faction": "mercenaries",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Fence Point",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Mercenary Elite Fighter"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Mercenary Commander"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Gallente Transport Ship"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the Federation industrial and collect the stolen goods"
+ },
+ {
+  "id": "m2-pirate-business-mi",
+  "name": "Pirate Business",
+  "kind": "mission",
+  "faction": "minmatar",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Convoy Route",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "cruiser",
+        "names": [
+         "Minmatar Personnel Transport",
+         "Minmatar Transport Ship"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Republic Rodul"
+        ]
+       },
+       {
+        "count": 10,
+        "class": "frigate",
+        "names": [
+         "Republic Takan",
+         "Republic Otur",
+         "Republic Gleeda",
+         "Republic Baldur"
+        ]
+       },
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Republic Baldur",
+         "Republic Kvarm"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the convoy and return with the cargo"
+ },
+ {
+  "id": "m2-preliminary-strike",
+  "name": "Preliminary Strike",
+  "kind": "mission",
+  "faction": "mercenaries",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "UDI Camp",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate"
+       },
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "UDI Mercenary"
+        ]
+       },
+       {
+        "count": 10,
+        "class": "frigate"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the UDI mercenaries"
+ },
+ {
+  "id": "m2-sevens-brothel",
+  "name": "The Seven's Brothel",
+  "kind": "mission",
+  "faction": "mercenaries",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Brothel",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Seven Death Dealer"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Seven Death Dealer"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Seven Grunt"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Sarrah"
+        ],
+        "boss": true
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "Rogue Mercenary Thorn"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Destroy the brothel's keepers"
+ },
+ {
+  "id": "m2-trimming-the-fat",
+  "name": "Trimming the Fat",
+  "kind": "mission",
+  "faction": "caldari",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Executive's Retreat",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "State Nagasa",
+         "State Shinai"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "State Kai Gunto",
+         "State Yumi"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "cruiser",
+        "names": [
+         "State Bushi"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the executive"
+ },
+ {
+  "id": "m2-save-a-mans-career",
+  "name": "Save a Man's Career",
+  "kind": "mission",
+  "faction": "drones",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Drone Hive",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Arachula Drone",
+         "Asmodeus Drone",
+         "Beelzebub Drone",
+         "Mammon Drone",
+         "Malphas Drone"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Splinter Drone",
+         "Render Drone"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Sangrel Minn"
+        ],
+        "boss": true
+       }
+      ]
+     },
+     {
+      "trigger": "killed",
+      "ships": [
+       {
+        "count": 2,
+        "class": "destroyer",
+        "names": [
+         "Shatter Drone"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Barracuda Drone",
+         "Hunter Drone"
+        ]
+       }
+      ],
+      "on": [
+       "Sangrel Minn"
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill Sangrel Minn and recover the reports"
+ },
+ {
+  "id": "m2-minmatar-plot-1",
+  "name": "Minmatar Plot (1 of 3)",
+  "kind": "mission",
+  "faction": "amarr",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Slave Pen",
+    "gateLocked": false,
+    "gateDistance": 20000.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Imperial Disciple"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "frigate",
+        "names": [
+         "Imperial Haran"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "Hand-over Point",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Republic Bormin"
+        ],
+        "boss": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Recover the slaves"
+ },
+ {
+  "id": "m2-minmatar-plot-2",
+  "name": "Minmatar Plot (2 of 3)",
+  "kind": "mission",
+  "faction": "gallente",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Courier Route",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 4,
+        "class": "frigate",
+        "names": [
+         "Federation Kontos"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Federation Hoplon"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Recover the data chip"
+ },
+ {
+  "id": "m2-minmatar-plot-3",
+  "name": "Minmatar Plot (3 of 3)",
+  "kind": "mission",
+  "faction": "minmatar",
+  "rating": 2,
+  "rooms": [
+   {
+    "name": "Rebel Hideout",
+    "gateLocked": false,
+    "gateDistance": 0.0,
+    "waves": [
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 3,
+        "class": "frigate",
+        "names": [
+         "Federation Clavis"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "names": [
+         "Republic Bormin"
+        ]
+       }
+      ]
+     },
+     {
+      "trigger": "arrive",
+      "ships": [
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Republic Tribal Gleeda"
+        ]
+       },
+       {
+        "count": 2,
+        "class": "frigate",
+        "names": [
+         "Republic Kvarm"
+        ]
+       },
+       {
+        "count": 1,
+        "class": "destroyer",
+        "boss": true,
+        "label": "Minmatar Contact"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "objective": "Kill the rebels and their contact"
+ }
+]

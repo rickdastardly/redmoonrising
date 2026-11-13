@@ -23,6 +23,95 @@ async function postAdmin(path, data) {
         throw new Error(result.error ?? `HTTP ${response.status}`);
     return result;
 }
+const FACTION_NAMES = {
+    angel: "Angel Cartel", blood: "Blood Raiders", guristas: "Guristas", sansha: "Sansha's Nation", serpentis: "Serpentis",
+};
+async function refreshDungeons() {
+    const reply = document.getElementById("dungeon-reply");
+    try {
+        const [dungeons, pilots] = await Promise.all([
+            get("/api/dungeons"),
+            get("/api/players"),
+        ]);
+        const select = document.getElementById("dungeon-pilot");
+        const keep = select.value;
+        const options = pilots.map((p) => { const o = document.createElement("option"); o.value = String(p.id); o.textContent = p.name; return o; });
+        if (!options.length) {
+            const o = document.createElement("option");
+            o.value = "";
+            o.textContent = "No pilots online";
+            options.push(o);
+        }
+        select.replaceChildren(...options);
+        if (keep && pilots.some((p) => String(p.id) === keep))
+            select.value = keep;
+        const faction = document.getElementById("dungeon-faction").value;
+        const shown = dungeons.filter((d) => !faction || d.faction === faction);
+        list("dungeons", [
+            { title: "DED", num: true, key: (d) => d.rating, cell: (d) => [d.kind === "mission" ? span(`L${d.rating}`, "") : span(`${d.rating}/10`, d.rating >= 7 ? "hostile" : "")] },
+            { title: "Complex", key: (d) => d.name.toLowerCase(), cell: (d) => [d.name] },
+            { title: "Faction", key: (d) => d.faction, cell: (d) => [FACTION_NAMES[d.faction] ?? d.faction] },
+            { title: "Rooms", num: true, key: (d) => d.rooms, cell: (d) => [String(d.rooms)] },
+            { title: "Ships", num: true, key: (d) => d.ships, cell: (d) => [numbers.format(d.ships)] },
+            { title: "Test", key: (d) => d.id, cell: (d) => {
+                    const b = document.createElement("button");
+                    b.type = "button";
+                    b.textContent = "Spawn for pilot";
+                    b.addEventListener("click", () => void spawnDungeon(d, b));
+                    return [b];
+                } },
+        ], shown, "No complexes loaded. Put dungeon files in the dungeons folder and press Reload files.");
+        if (!reply.classList.contains("busy") && !reply.textContent) {
+            reply.textContent = `${dungeons.length} complexes loaded; ${pilots.length} pilot${pilots.length === 1 ? "" : "s"} online.`;
+        }
+    }
+    catch (e) {
+        reply.textContent = `Could not load the complexes: ${String(e)}`;
+        reply.className = "note hostile";
+    }
+}
+async function spawnDungeon(d, button) {
+    const reply = document.getElementById("dungeon-reply");
+    const pilot = Number(document.getElementById("dungeon-pilot").value);
+    if (!pilot) {
+        reply.textContent = "Pick an online pilot first.";
+        reply.className = "note hostile";
+        return;
+    }
+    button.disabled = true;
+    reply.textContent = `Giving ${d.name} to the pilot…`;
+    reply.className = "note busy";
+    try {
+        const system = document.getElementById("dungeon-system").value.trim();
+        const result = await postAdmin("/api/dungeon-spawn", { dungeon: d.id, characterID: pilot, system });
+        reply.textContent = result.ok ?? "Done.";
+        reply.className = "note dropped";
+    }
+    catch (e) {
+        reply.textContent = e instanceof Error && e.message.includes("dashboard")
+            ? "Spawning complexes is available only on the server machine."
+            : `Could not open it: ${e instanceof Error ? e.message : String(e)}`;
+        reply.className = "note hostile";
+    }
+    finally {
+        button.disabled = false;
+    }
+}
+document.getElementById("dungeon-faction")?.addEventListener("change", () => void refreshDungeons());
+document.getElementById("dungeons-refresh")?.addEventListener("click", () => void refreshDungeons());
+document.getElementById("dungeons-reload")?.addEventListener("click", async () => {
+    const reply = document.getElementById("dungeon-reply");
+    try {
+        const result = await postAdmin("/api/dungeons-reload", {});
+        reply.textContent = result.ok ?? "Reloaded.";
+        reply.className = "note dropped";
+        await refreshDungeons();
+    }
+    catch (e) {
+        reply.textContent = `Could not reload: ${e instanceof Error ? e.message : String(e)}`;
+        reply.className = "note hostile";
+    }
+});
 const STAFF_ROLES = ["Player", "ISD", "ISD BH", "BH", "GM", "CCP"];
 async function refreshUsers() {
     const reply = document.getElementById("users-reply");
@@ -305,8 +394,13 @@ async function refreshDowntime() {
 }
 const AGGRESSION_NOTES = {
     calm: "Now: all bots are calm. They attack no player unless shot first.",
-    some: "Now: some bots are aggressive. Pirates outside high-sec, sides a player has angered and their hunters attack players.",
-    all: "Now: all bots are aggressive. Every bot attacks any player it does not count as a friend.",
+    some: "Now: some bots are aggressive outside high-sec. Pirates, sides a player has angered and their hunters attack players in low and null-sec. In high-sec, bots only shoot back.",
+    all: "Now: all bots are aggressive outside high-sec. Every bot attacks any player it does not count as a friend in low and null-sec. In high-sec, bots only shoot back.",
+};
+const SOV_NOTES = {
+    low: "Now: low. Sieges are rare, at most 2 at once, with one ally a side; alliances expand slowly.",
+    moderate: "Now: moderate. Regular sieges, at most 6 at once, with up to 3 allies a side.",
+    war: "Now: war. Sieges all over null-sec, up to 24 at once, with up to 5 allies a side; alliances expand fast. The heaviest on the server.",
 };
 let botCountEdited = false;
 let botActivityEdited = false;
@@ -338,6 +432,15 @@ function renderBots(settings) {
     const shown = document.getElementById("bots-shown");
     if (document.activeElement !== shown && settings.shownPerSystem > 0)
         shown.value = String(settings.shownPerSystem);
+    if (settings.sovWarfare)
+        setText("bots-sov-note", SOV_NOTES[settings.sovWarfare]);
+    const battle = document.getElementById("bots-battle");
+    if (settings.battleSizeRange) {
+        battle.min = String(settings.battleSizeRange[0]);
+        battle.max = String(settings.battleSizeRange[1]);
+    }
+    if (document.activeElement !== battle && settings.battleSize)
+        battle.value = String(settings.battleSize);
     let aggression = AGGRESSION_NOTES[settings.aggression];
     if (settings.aggressionOverridden)
         aggression += " RMR_BOTS_AGGRESSION sets the mode again at the next start.";
@@ -1472,18 +1575,30 @@ async function refresh() {
             { title: "Alliance", key: (c) => c.alliance ?? "", cell: (c) => [c.alliance ? allianceLink(c.allianceID, c.alliance) : ""] },
             { title: "Members", num: true, key: (c) => c.members, cell: (c) => count(c.members) },
         ], corporations, "No corporations have been founded.", 2, true);
+        const withAllies = (main, allies) => allies && allies.length ? [main, span(` with ${allies.join(", ")}`, "dim")] : [main];
+        const fleet = (s, side) => {
+            if (!s.fighting || !s.brought)
+                return ["—"];
+            const left = side === 0 ? s.attackers ?? 0 : s.defenders ?? 0;
+            const lost = s.lost?.[side] ?? 0;
+            return [`${numbers.format(left)} of ${numbers.format(s.brought[side])}`, span(lost ? ` (${numbers.format(lost)} lost)` : "", "hostile")];
+        };
         list("sieges", [
             { title: "System", key: (s) => s.system, cell: (s) => [security(s.security), ` ${s.system}`, span(` ${s.region}`, "dim")] },
-            { title: "Attacker", key: (s) => s.attacker, cell: (s) => [s.attacker] },
-            { title: "Defender", key: (s) => s.defender, cell: (s) => [s.defender] },
+            { title: "Fight", key: (s) => (s.brought?.[0] ?? 0) + (s.brought?.[1] ?? 0), num: true,
+                cell: (s) => s.fighting ? [span((s.stakes ?? "battle").toUpperCase(), "hostile")] : [span("Massing", "dim")] },
+            { title: "Attacker", key: (s) => s.attacker, cell: (s) => withAllies(s.attacker, s.attackerAllies) },
+            { title: "Their fleet", key: (s) => s.attackers ?? 0, num: true, cell: (s) => fleet(s, 0) },
+            { title: "Defender", key: (s) => s.defender, cell: (s) => withAllies(s.defender, s.defenderAllies) },
+            { title: "Their fleet", key: (s) => s.defenders ?? 0, num: true, cell: (s) => fleet(s, 1) },
             {
-                title: "When",
+                title: "Status",
                 key: (s) => s.starts,
                 cell: (s) => s.fighting
-                    ? [span(`BATTLE ${s.attackers ?? 0} vs ${s.defenders ?? 0}`, "hostile")]
-                    : [eveTime(s.starts)],
+                    ? [span(s.seen ? "FIGHTING · ship to ship in view" : "FIGHTING · beyond sight", "hostile")]
+                    : ["Starts ", eveTime(s.starts)],
             },
-        ], sieges, "No sieges are planned.", 3, false);
+        ], sieges, "No sieges are planned.", 6, false);
         list("news", [
             { title: "Time", key: (n) => n.time, cell: (n) => [eveTime(n.time)] },
             { title: "Report", key: (n) => n.text, cell: (n) => [n.text] },
@@ -1886,6 +2001,15 @@ document.getElementById("bots-shown-form").addEventListener("submit", (e) => {
         return;
     }
     void changeBots({ shownPerSystem: Number(input.value) });
+});
+document.getElementById("bots-battle-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const input = document.getElementById("bots-battle");
+    if (!input.checkValidity()) {
+        input.reportValidity();
+        return;
+    }
+    void changeBots({ battleSize: Number(input.value) });
 });
 document.getElementById("bots-refresh").addEventListener("click", () => void refreshBotSettings());
 document.getElementById("killboard-search-form").addEventListener("submit", (e) => { e.preventDefault(); void searchKillboardPilots(); });
@@ -2729,6 +2853,229 @@ function tick() {
 for (const button of document.querySelectorAll(".window .min")) {
     button.addEventListener("click", () => button.closest(".window")?.classList.toggle("minimized"));
 }
+/** Who each faction is, what it hits with and what it is weakest to. */
+const GUIDE_FACTIONS = {
+    angel: { name: "Angel Cartel", deals: "Explosive and Kinetic", shoot: "Explosive, then Kinetic", offeredBy: "Agents in space the Angel Cartel raids" },
+    blood: { name: "Blood Raiders", deals: "EM and Thermal", shoot: "EM, then Thermal", offeredBy: "Agents in space the Blood Raiders raid" },
+    guristas: { name: "Guristas", deals: "Kinetic and Thermal", shoot: "Kinetic, then Thermal", offeredBy: "Agents in space the Guristas raid" },
+    sansha: { name: "Sansha's Nation", deals: "EM and Thermal", shoot: "EM, then Thermal", offeredBy: "Agents in space Sansha's Nation raids" },
+    serpentis: { name: "Serpentis", deals: "Thermal and Kinetic", shoot: "Thermal, then Kinetic", offeredBy: "Agents in space the Serpentis raid" },
+    drones: { name: "Rogue drones", deals: "Explosive and Kinetic", shoot: "EM, then Thermal", offeredBy: "Any security agent" },
+    mercenaries: { name: "Mercenaries", deals: "Kinetic and Thermal", shoot: "Kinetic and Thermal", offeredBy: "Any security agent" },
+    mordu: { name: "Mordu's Legion", deals: "Kinetic and Thermal", shoot: "Kinetic and Thermal", offeredBy: "Any security agent" },
+    eom: { name: "Equilibrium of Mankind", deals: "Kinetic and Thermal", shoot: "Kinetic and Thermal", offeredBy: "Any security agent" },
+    amarr: { name: "Amarr Empire", deals: "EM and Thermal", shoot: "EM and Thermal", offeredBy: "Minmatar Republic agents" },
+    ammatar: { name: "Ammatar Mandate", deals: "EM and Thermal", shoot: "EM and Thermal", offeredBy: "Minmatar Republic agents" },
+    khanid: { name: "Khanid Kingdom", deals: "Mixed", shoot: "EM and Thermal", offeredBy: "Minmatar Republic agents" },
+    thukker: { name: "Thukker Tribe", deals: "Explosive and Kinetic", shoot: "Explosive and Kinetic", offeredBy: "Minmatar Republic agents" },
+    caldari: { name: "Caldari State", deals: "Kinetic and Thermal", shoot: "Kinetic and Thermal", offeredBy: "Gallente Federation agents" },
+    gallente: { name: "Gallente Federation", deals: "Kinetic and Thermal", shoot: "Kinetic and Thermal", offeredBy: "Caldari State agents" },
+    minmatar: { name: "Minmatar Republic", deals: "Explosive and Kinetic", shoot: "Explosive and Kinetic", offeredBy: "Amarr Empire agents" },
+    concord: { name: "CONCORD", deals: "Varies", shoot: "Varies", offeredBy: "Not offered by agents (its ships are not in this client)" },
+};
+let guides = null;
+let guidesLoading = null;
+function guideFaction(g) { return GUIDE_FACTIONS[g.faction]?.name ?? g.faction; }
+function guideLevel(g) { return g.kind === "ded" ? `DED ${g.rating}/10` : `Level ${g.rating}`; }
+function guideShipCount(g, fixed) {
+    return g.rooms.reduce((n, r) => n + r.waves.reduce((m, w) => m + w.ships.filter((s) => s.fixed === fixed).reduce((k, s) => k + s.count, 0), 0), 0);
+}
+function orList(names) {
+    if (names.length <= 1)
+        return names[0] ?? "";
+    return `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
+}
+function shipName(g, s) {
+    if (s.label)
+        return s.label;
+    if (s.names.length)
+        return orList(s.names);
+    const who = GUIDE_FACTIONS[g.faction]?.name ?? "";
+    return `${who} ${s.fixed ? "sentry" : s.class}`.trim();
+}
+function bossNames(g) {
+    const out = [];
+    for (const r of g.rooms)
+        for (const w of r.waves)
+            for (const s of w.ships) {
+                if (s.boss) {
+                    const n = shipName(g, s);
+                    if (!out.includes(n))
+                        out.push(n);
+                }
+            }
+    return out;
+}
+function guideHaystack(g) {
+    const ships = g.rooms.flatMap((r) => r.waves.flatMap((w) => w.ships.flatMap((s) => [...s.names, s.label ?? ""])));
+    return [g.name, g.objective, guideFaction(g), guideLevel(g), ...g.rooms.map((r) => r.name), ...ships].join(" ").toLowerCase();
+}
+function el(tag, text, className) {
+    const e = document.createElement(tag);
+    if (text !== undefined)
+        e.textContent = text;
+    if (className)
+        e.className = className;
+    return e;
+}
+function waveHeading(g, room, wave, index) {
+    if (wave.trigger === "killed" && wave.on.length)
+        return `When ${orList(wave.on)} dies:`;
+    if (wave.trigger === "cleared")
+        return "Once everything above is dead:";
+    if (index === 0)
+        return room.waves.length > 1 ? "Waiting when you arrive:" : "Waiting when you arrive (the only group):";
+    return "Also here, joining as you close in:";
+}
+function renderGuideBody(g, body) {
+    const f = GUIDE_FACTIONS[g.faction];
+    const facts = el("dl", undefined, "guide-facts");
+    const fact = (k, v) => { facts.append(el("dt", k), el("dd", v)); };
+    if (g.objective)
+        fact("Objective", g.objective);
+    fact(g.kind === "ded" ? "DED rating" : "Agent level", g.kind === "ded" ? `${g.rating}/10` : `Level ${g.rating}`);
+    fact("Enemy", f?.name ?? g.faction);
+    if (f) {
+        fact("They deal", f.deals);
+        fact("Shoot with", f.shoot);
+    }
+    if (g.kind !== "ded" && f)
+        fact("Offered by", f.offeredBy);
+    fact("Pockets", `${g.rooms.length}`);
+    const ships = guideShipCount(g, false), guns = guideShipCount(g, true);
+    fact("Hostiles", `${ships} ship${ships === 1 ? "" : "s"}${guns ? ` and ${guns} sentr${guns === 1 ? "y" : "ies"}` : ""}`);
+    const bosses = bossNames(g);
+    if (bosses.length)
+        fact(g.kind === "ded" ? "Overseers" : "Key targets", bosses.join("; "));
+    if (g.rooms.some((r) => r.realGate || r.structures.length))
+        fact("Layout", "CCP's original layout: gates and structures stand where they did.");
+    body.append(facts);
+    g.rooms.forEach((room, k) => {
+        const last = k === g.rooms.length - 1;
+        body.append(el("h4", `Pocket ${k + 1} of ${g.rooms.length}: ${room.name}`));
+        body.append(el("p", k === 0 ? (g.kind === "ded" ? "Warp to the complex: you land here." : "Warp to the mission beacon: you land here.")
+            : `You arrive here through the acceleration gate from ${g.rooms[k - 1].name}.`, "guide-gate"));
+        if (!room.waves.some((w) => w.ships.length))
+            body.append(el("p", "Nothing hostile here."));
+        room.waves.forEach((wave, i) => {
+            if (!wave.ships.length)
+                return;
+            body.append(el("p", waveHeading(g, room, wave, i), "guide-wave"));
+            const ul = el("ul");
+            for (const s of wave.ships) {
+                const li = el("li", `${s.count} × ${shipName(g, s)}${s.fixed ? " (sentry or tower)" : s.class ? ` (${s.class})` : ""}`);
+                if (s.boss)
+                    li.append(el("span", g.kind === "ded" ? "OVERSEER" : "TRIGGER / TARGET", "guide-boss"));
+                ul.append(li);
+            }
+            body.append(ul);
+        });
+        if (room.structures.length) {
+            const shown = room.structures.slice(0, 10).map(([n, c]) => `${c} × ${n}`).join(", ");
+            const more = room.structures.length > 10 ? `, and ${room.structures.length - 10} more kinds` : "";
+            body.append(el("p", `Structures: ${shown}${more}.`, "guide-gate"));
+        }
+        if (!last) {
+            const km = Math.round(room.gateDistance / 1000);
+            body.append(el("p", `Gate on to ${g.rooms[k + 1].name}: ${km} km from where you land${room.realGate ? " (its real position)" : ""}. `
+                + (room.gateLocked ? "It stays locked until this pocket's defenders are all dead." : "It is open: you can move on whenever you like."), "guide-gate"));
+        }
+        else {
+            body.append(el("p", g.kind === "ded"
+                ? "Final pocket. Kill the overseer for the complex's reward: its effects, with a chance of deadspace and faction modules."
+                : "Final pocket. The mission is complete once this pocket is clear: return to your agent.", "guide-gate"));
+        }
+    });
+}
+function renderGuides() {
+    const host = document.getElementById("guides-list");
+    if (!guides)
+        return;
+    const search = document.getElementById("guide-search").value.trim().toLowerCase();
+    const kind = document.getElementById("guide-kind").value;
+    const level = document.getElementById("guide-level").value;
+    const faction = document.getElementById("guide-faction").value;
+    const words = search.split(/\s+/).filter(Boolean);
+    const shown = guides.filter((g) => {
+        if (kind && g.kind !== kind)
+            return false;
+        if (level && level !== `${g.kind === "ded" ? "d" : "m"}${g.rating}`)
+            return false;
+        if (faction && g.faction !== faction)
+            return false;
+        if (words.length) {
+            const hay = guideHaystack(g);
+            if (!words.every((w) => hay.includes(w)))
+                return false;
+        }
+        return true;
+    });
+    setText("guide-count", `Showing ${numbers.format(shown.length)} of ${numbers.format(guides.length)} guides`);
+    const cards = shown.map((g) => {
+        const card = el("details", undefined, "guide");
+        const summary = el("summary");
+        summary.append(el("span", g.name, "guide-name"), el("span", guideLevel(g), `guide-tag${g.kind === "ded" ? " ded" : ""}${(g.kind === "ded" && g.rating >= 7) || (g.kind !== "ded" && g.rating >= 4) ? " hard" : ""}`), el("span", guideFaction(g), "guide-meta"), el("span", `${g.rooms.length} pocket${g.rooms.length === 1 ? "" : "s"} · ${guideShipCount(g, false)} ships`, "guide-meta"));
+        card.append(summary);
+        const body = el("div", undefined, "guide-body");
+        card.append(body);
+        card.addEventListener("toggle", () => { if (card.open && !body.childElementCount)
+            renderGuideBody(g, body); });
+        return card;
+    });
+    if (!cards.length)
+        cards.push(el("p", "No guides match. Try fewer words or another filter.", "note"));
+    host.replaceChildren(...cards);
+}
+async function refreshGuides() {
+    if (guides) {
+        renderGuides();
+        return;
+    }
+    if (!guidesLoading) {
+        guidesLoading = (async () => {
+            setText("guide-count", "Loading guides…");
+            try {
+                const all = await get("/api/guides");
+                all.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "mission" ? -1 : 1) || a.rating - b.rating || a.name.localeCompare(b.name));
+                guides = all;
+                const select = document.getElementById("guide-faction");
+                const factions = [...new Set(all.map((g) => g.faction))].sort((a, b) => (GUIDE_FACTIONS[a]?.name ?? a).localeCompare(GUIDE_FACTIONS[b]?.name ?? b));
+                for (const f of factions) {
+                    const o = document.createElement("option");
+                    o.value = f;
+                    o.textContent = GUIDE_FACTIONS[f]?.name ?? f;
+                    select.append(o);
+                }
+            }
+            catch (e) {
+                setText("guide-count", `Could not load the guides: ${String(e)}`);
+            }
+            finally {
+                guidesLoading = null;
+            }
+        })();
+    }
+    await guidesLoading;
+    renderGuides();
+}
+let guideSearchTimer = 0;
+document.getElementById("guide-search")?.addEventListener("input", () => {
+    window.clearTimeout(guideSearchTimer);
+    guideSearchTimer = window.setTimeout(renderGuides, 150);
+});
+for (const id of ["guide-kind", "guide-level", "guide-faction"]) {
+    document.getElementById(id)?.addEventListener("change", renderGuides);
+}
+// Picking a mission level means missions; a DED rating means complexes.
+document.getElementById("guide-level")?.addEventListener("change", (event) => {
+    const v = event.target.value;
+    const kind = document.getElementById("guide-kind");
+    if (v.startsWith("m") && kind.value === "ded")
+        kind.value = "mission";
+    if (v.startsWith("d") && kind.value === "mission")
+        kind.value = "ded";
+    renderGuides();
+});
 const pages = {
     home: { title: "Command overview", description: "Live activity across New Eden.", windows: ["w-status", "w-health", "w-wars", "w-pilots", "w-news"] },
     status: { title: "Server status", description: "Connections, simulation, uptime and how hard the machine is working.", windows: ["w-status", "w-health"] },
@@ -2737,7 +3084,7 @@ const pages = {
     systems: { title: "Busiest systems", description: "Where pilots are flying now.", windows: ["w-systems"] },
     alliances: { title: "Alliances", description: "Coalitions and their territory.", windows: ["w-alliances"] },
     corporations: { title: "Corporations", description: "Corporation roster and members.", windows: ["w-corporations"] },
-    sieges: { title: "Sieges", description: "Campaigns and system assaults.", windows: ["w-sieges"] },
+    sieges: { title: "Sieges and battles", description: "Sovereignty wars: sieges massing and battles being fought, from skirmishes to thousands of ships. Fly to one to watch it ship against ship.", windows: ["w-sieges", "w-news"] },
     news: { title: "Galactic news", description: "Published articles and recent events from across the cluster.", windows: ["w-articles", "w-news"] },
     killboard: { title: "Killboard", description: "Killmails, top killers and recent destruction.", windows: ["w-killboard"] },
     sovereignty: { title: "Sovereignty map", description: "Who holds which systems, updated as sovereignty changes hands.", windows: ["w-sovmap"] },
@@ -2747,8 +3094,10 @@ const pages = {
     seeding: { title: "Market seeding", description: "Pick a station, such as a newly built outpost, and stock its market.", windows: ["w-seeding"] },
     relations: { title: "Standings", description: "Bot relationships and grudges.", windows: ["w-relations"] },
     follow: { title: "Follow a pilot", description: "Track a pilot's current activity.", windows: ["w-follow"] },
+    guides: { title: "Mission & DED guides", description: "Walkthroughs for every agent mission and DED complex: filter by type, level or faction, or search.", windows: ["w-guides"] },
     control: { title: "Events, raids and gangs", description: "Pirate raids and roaming gangs out now, and political events. Start one with the buttons below.", windows: ["w-control"] },
     users: { title: "User accounts", description: "Account roles and in-game staff colours.", windows: ["w-users"] },
+    dungeons: { title: "Deadspace complexes", description: "DED 1/10 to 10/10 complexes: open one for a pilot to test it.", windows: ["w-dungeons"] },
     gm: { title: "GM commands", description: "Slash commands for staff, typed into any chat channel in game.", windows: ["w-gm"] },
 };
 // The GM command list: filter as you type.
@@ -2773,7 +3122,7 @@ function route() {
     setText("page-title", page.title);
     setText("page-description", page.description);
     setText("page-kicker", killID > 0 || pilotID > 0 || groupID > 0 || hash === "killboard" ? "KILLBOARD / NEW EDEN"
-        : hash === "sovereignty" ? "SOVEREIGNTY / NEW EDEN" : "CLUSTER ADMINISTRATION / NEW EDEN");
+        : hash === "sovereignty" ? "SOVEREIGNTY / NEW EDEN" : hash === "guides" ? "GUIDES / NEW EDEN" : "CLUSTER ADMINISTRATION / NEW EDEN");
     document.title = `${page.title} · Red Moon Rising`;
     const activePage = killID > 0 || pilotID > 0 || groupID > 0 ? "killboard" : (hash in pages ? hash : "home");
     document.body.dataset.page = activePage;
@@ -2800,6 +3149,10 @@ function route() {
         void refreshUsers();
     if (hash === "seeding")
         void refreshSeeding();
+    if (hash === "dungeons")
+        void refreshDungeons();
+    if (hash === "guides")
+        void refreshGuides();
     if (hash === "status" || hash === "home")
         void refreshHealth();
     if (hash === "bots")

@@ -190,6 +190,8 @@ struct BotsSection {
     clear_belts: bool,
     wingmen: String,
     bot_market: String,
+    sov_warfare: String,
+    battle_size: usize,
 }
 
 impl Default for ServerSection {
@@ -217,7 +219,8 @@ impl Default for BotsSection {
         BotsSection { count: 0, speed: 1.0, shown_per_system: 120, pirates_attack_players: true, dashboard_controls: false, aggression: "some".into(),
             chat: "normal".into(), trash_talk: true, join_player_corps: "normal".into(), join_player_alliances: "normal".into(),
             accept_applications: "selective".into(), online_activity: 1.0, roaming_gangs: "normal".into(), hunt_players: true,
-            mining_fleets: true, clear_belts: true, wingmen: "paid".into(), bot_market: "normal".into() }
+            mining_fleets: true, clear_belts: true, wingmen: "paid".into(), bot_market: "normal".into(),
+            sov_warfare: "moderate".into(), battle_size: 2_000 }
     }
 }
 
@@ -250,6 +253,9 @@ impl Config {
                 .ok_or_else(|| bad("wingmen", "off, free, cheap or paid", &file.bots.wingmen))?,
             market: crate::bots::Rate::parse(&file.bots.bot_market)
                 .ok_or_else(|| bad("botMarket", "off, low, normal or high", &file.bots.bot_market))?,
+            sov_warfare: crate::bots::SovWarfare::parse(&file.bots.sov_warfare)
+                .ok_or_else(|| bad("sovWarfare", "low, moderate or war", &file.bots.sov_warfare))?,
+            battle_size: file.bots.battle_size.clamp(crate::bots::BATTLE_SIZE_RANGE.0, crate::bots::BATTLE_SIZE_RANGE.1),
         };
         let mut c = Config {
             bind: file.server.bind,

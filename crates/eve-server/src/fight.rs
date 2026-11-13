@@ -165,7 +165,7 @@ fn cycle(park: &mut Park, ship_id: i64, module_id: i64, now: i64, out: &mut Out)
     match &m.action {
         Action::Turret { damage, gun } => shoot(park, ship_id, &m, *damage, gun, now, out),
         Action::Missile { damage, flight_ms, range, cloud, aoe_velocity } => {
-            launch(park, ship_id, &m, *damage, *flight_ms, *range, *cloud, *aoe_velocity, now)
+            launch(park, ship_id, &m, *damage, *flight_ms, *range, *cloud, *aoe_velocity, now, out)
         }
         Action::Doomsday => doomsday(park, ship_id, &m, now, out),
         Action::ShieldBoost(amount) => heal(park, ship_id, now, out, |v| v.shield.add(now, *amount)),
@@ -511,6 +511,7 @@ fn launch(
     cloud: f64,
     aoe_velocity: f64,
     now: i64,
+    out: &mut Out,
 ) {
     let Some(t) = m.target else { return };
     let Some(shooter) = park.ships.get(&ship_id) else { return };
@@ -518,8 +519,17 @@ fn launch(
     let speed = if flight_ms > 0 { range / flight_ms as f64 } else { 1.0 };
     let reaches = distance <= range;
     let impact_ms = now + (distance.max(0.0) / speed.max(1e-3)).min(flight_ms.max(0) as f64) as i64;
+    let by = attacker(shooter, m);
+    // A player's launcher fires its loaded charge; an NPC's "launcher" is
+    // its missile type. Only a real module has a launcher to start from.
+    let (missile_type, module) = match m.ammo {
+        Some(a) => (a.type_id, Some(m.module_id)),
+        None => (m.type_id, None),
+    };
+    let owner = if by.char_id != 0 { by.char_id } else { shooter.pilot.corp_id };
+    let ball = missile_ball(park, ship_id, t, missile_type, module, owner, speed * 1000.0, out);
     park.missiles.push(Missile {
-        attacker: attacker(shooter, m),
+        attacker: by,
         target: t,
         impact_ms,
         damage,
@@ -527,7 +537,93 @@ fn launch(
         aoe_velocity,
         reaches,
         weapon: m.name.clone(),
+        ball,
     });
+}
+
+/// Puts a missile in flight on the screens of the pilots who can see both its
+/// launcher and its target: a free ball of the missile's type following the
+/// target at its flight speed, which the client draws leaving the launcher
+/// and blows up when it is removed with a TerminalExplosion.
+/// None when nobody is looking (bots fighting bots far from any pilot).
+#[allow(clippy::too_many_arguments)]
+pub fn missile_ball(
+    park: &mut Park,
+    source: i64,
+    target: i64,
+    type_id: i64,
+    module: Option<i64>,
+    owner: i64,
+    speed: f64,
+    out: &mut Out,
+) -> Option<(i64, Vec<i64>)> {
+    let place = |id: i64| park.ships.get(&id).map(|s| s.pos).or_else(|| park.structures.get(&id).map(|s| s.pos));
+    let (from, to) = (place(source)?, place(target)?);
+    let sees = |client: &i64, id: i64| {
+        park.visible_ships.get(client).is_some_and(|seen| seen.contains(&id))
+            || park.visible_objects.get(client).is_some_and(|seen| seen.contains(&id))
+    };
+    let viewers: Vec<i64> = park
+        .visible_ships
+        .keys()
+        .filter(|client| sees(client, source) && sees(client, target))
+        .copied()
+        .collect();
+    if viewers.is_empty() || type_id <= 0 {
+        return None;
+    }
+    let id = npc::next_id();
+    let heading = to - from;
+    let velocity = if heading.len() > 1e-6 { heading.unit() * speed } else { heading };
+    let ball = crate::destiny::Ball {
+        id,
+        mode: crate::destiny::mode::STOP,
+        radius: 1.0,
+        pos: from.tuple(),
+        flags: crate::destiny::flags::IS_FREE,
+        mass: 1_000.0,
+        corp_id: -1,
+        alliance_id: -1,
+        harmonic: crate::destiny::NO_HARMONIC,
+        max_velocity: speed.max(1.0),
+        velocity: velocity.tuple(),
+        agility: 0.001,
+        speed_fraction: 1.0,
+        name: String::new(),
+    };
+    let slim = crate::svc::space::slim(vec![
+        ("itemID", Value::Int(id)),
+        ("typeID", Value::Int(type_id)),
+        ("ownerID", Value::Int(owner)),
+        ("sourceShipID", Value::Int(source)),
+        ("launchModules", Value::List(module.into_iter().map(Value::Int).collect())),
+    ]);
+    let blob = crate::destiny::encode(crate::destiny::stamp(park.tick), &[ball]);
+    let chunk = Value::Tuple(vec![Value::Bytes(blob), Value::List(vec![slim]), Value::Dict(Vec::new())]);
+    let entries = [
+        entry(park.tick, "AddBalls", vec![chunk]),
+        entry(park.tick, "FollowBall", vec![Value::Int(id), Value::Int(target), Value::Double(0.0)]),
+        entry(park.tick, "SetSpeedFraction", vec![Value::Int(id), Value::Double(1.0)]),
+    ];
+    let system = park.solar_system_id;
+    for client in &viewers {
+        for e in &entries {
+            out.destiny_to(system, *client, e.clone());
+        }
+    }
+    Some((id, viewers))
+}
+
+/// Takes a missile's ball off its viewers' screens, exploding if it hit.
+pub fn end_missile_ball(park: &Park, ball: &Option<(i64, Vec<i64>)>, exploded: bool, out: &mut Out) {
+    let Some((id, viewers)) = ball else { return };
+    let system = park.solar_system_id;
+    for client in viewers {
+        if exploded {
+            out.destiny_to(system, *client, entry(park.tick, "TerminalExplosion", vec![Value::Int(*id)]));
+        }
+        out.destiny_to(system, *client, entry(park.tick, "RemoveBalls", vec![Value::List(vec![Value::Int(*id)])]));
+    }
 }
 
 fn missiles(park: &mut Park, now: i64, out: &mut Out) {
@@ -535,6 +631,7 @@ fn missiles(park: &mut Park, now: i64, out: &mut Out) {
         std::mem::take(&mut park.missiles).into_iter().partition(|m| m.impact_ms <= now);
     park.missiles = flying;
     for m in landed {
+        end_missile_ball(park, &m.ball, m.reaches && target_profile(park, m.target).is_some(), out);
         if !m.reaches {
             continue;
         }
@@ -772,7 +869,9 @@ fn deaths(park: &mut Park, now: i64, out: &mut Out) {
                         security: (brain.security_bonus, brain.security_max_gain),
                     });
                 }
-                let stash = crate::loot::roll(bounty, brain.loot_count, &mut park.rng);
+                let mut stash = crate::loot::roll(bounty, brain.loot_count, &mut park.rng);
+                // An overseer of a deadspace complex drops its DED loot too.
+                stash.extend(crate::dungeons::boss_loot(park, brain.belt, ship.id));
                 if !stash.is_empty() {
                     out.jobs.push(Job::Loot { system, pos: ship.pos, owner_id: char_id, stash });
                 }
@@ -891,7 +990,11 @@ fn forget(park: &mut Park, id: i64, now: i64, out: &mut Out) {
     for (ship_id, module_id) in stops {
         stop(park, ship_id, module_id, now, out, None);
     }
-    park.missiles.retain(|m| m.target != id);
+    let (gone, flying): (Vec<Missile>, Vec<Missile>) = std::mem::take(&mut park.missiles).into_iter().partition(|m| m.target == id);
+    park.missiles = flying;
+    for m in gone {
+        end_missile_ball(park, &m.ball, false, out);
+    }
 }
 
 // ---- telling -------------------------------------------------------------------------------

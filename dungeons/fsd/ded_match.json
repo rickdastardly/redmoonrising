@@ -1,0 +1,628 @@
+{
+ "ded-serpentis-1": {
+  "dungeonID": 116,
+  "rooms": [
+   0,
+   1,
+   2
+  ],
+  "how": "strict",
+  "exact": false,
+  "gates": [
+   [
+    20.0
+   ],
+   [
+    40.0
+   ],
+   []
+  ]
+ },
+ "ded-serpentis-3": {
+  "dungeonID": 2244,
+  "rooms": [
+   0,
+   1,
+   2,
+   3,
+   4
+  ],
+  "how": "strict",
+  "exact": true,
+  "gates": [
+   [
+    20.9,
+    21.4
+   ],
+   [
+    20.0
+   ],
+   [
+    20.0
+   ],
+   [
+    20.0
+   ],
+   []
+  ]
+ },
+ "ded-serpentis-4": {
+  "dungeonID": 2253,
+  "rooms": [
+   0,
+   1
+  ],
+  "how": "objects",
+  "exact": true,
+  "gates": [
+   [],
+   []
+  ]
+ },
+ "ded-serpentis-5": {
+  "dungeonID": 5289,
+  "rooms": [
+   0,
+   2,
+   3
+  ],
+  "how": "strict",
+  "exact": true,
+  "gates": [
+   [
+    54.2
+   ],
+   [
+    53.3
+   ],
+   []
+  ]
+ },
+ "ded-serpentis-6": {
+  "dungeonID": 2455,
+  "rooms": [
+   1,
+   2,
+   3
+  ],
+  "how": "strict",
+  "exact": true,
+  "gates": [
+   [
+    29.5
+   ],
+   [
+    64.9
+   ],
+   []
+  ]
+ },
+ "ded-serpentis-8": {
+  "dungeonID": 5251,
+  "rooms": [
+   0,
+   1,
+   2,
+   3
+  ],
+  "how": "strict",
+  "exact": true,
+  "gates": [
+   [
+    36.3
+   ],
+   [
+    11.3
+   ],
+   [
+    10.2
+   ],
+   []
+  ]
+ },
+ "ded-serpentis-10": {
+  "dungeonID": 2259,
+  "rooms": [
+   0,
+   1,
+   2,
+   3,
+   4
+  ],
+  "how": "strict",
+  "exact": true,
+  "gates": [
+   [
+    20.0
+   ],
+   [
+    30.4,
+    20.0,
+    20.0
+   ],
+   [
+    18.8
+   ],
+   [
+    15.0
+   ],
+   []
+  ]
+ },
+ "ded-angel-2": {
+  "dungeonID": 150,
+  "rooms": [
+   0,
+   1,
+   2
+  ],
+  "how": "strict",
+  "exact": false,
+  "gates": [
+   [
+    17.0
+   ],
+   [
+    19.3
+   ],
+   []
+  ]
+ },
+ "ded-angel-3": {
+  "dungeonID": 5278,
+  "rooms": [
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "how": "strict",
+  "exact": true,
+  "gates": [
+   [
+    47.3
+   ],
+   [
+    45.0
+   ],
+   [
+    47.0
+   ],
+   [
+    39.2
+   ],
+   []
+  ]
+ },
+ "ded-angel-4": {
+  "dungeonID": 5275,
+  "rooms": [
+   1,
+   2
+  ],
+  "how": "strict",
+  "exact": true,
+  "gates": [
+   [
+    53.0
+   ],
+   []
+  ]
+ },
+ "ded-angel-5": {
+  "dungeonID": 2264,
+  "rooms": [
+   0,
+   1,
+   2
+  ],
+  "how": "strict",
+  "exact": true,
+  "gates": [
+   [
+    23.2
+   ],
+   [
+    17.3
+   ],
+   []
+  ]
+ },
+ "ded-angel-7": {
+  "dungeonID": 2246,
+  "rooms": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "how": "objects",
+  "exact": true,
+  "gates": [
+   [
+    18.3
+   ],
+   [
+    20.8,
+    26.3,
+    19.9
+   ],
+   [
+    33.1
+   ],
+   [
+    25.3
+   ],
+   [
+    20.8
+   ],
+   [],
+   []
+  ]
+ },
+ "ded-angel-10": {
+  "dungeonID": 2256,
+  "rooms": [
+   0,
+   1,
+   2,
+   3,
+   4
+  ],
+  "how": "objects",
+  "exact": true,
+  "gates": [
+   [
+    25.4
+   ],
+   [
+    17.5
+   ],
+   [],
+   [
+    21.8
+   ],
+   []
+  ]
+ },
+ "ded-blood-3": {
+  "dungeonID": 5279,
+  "rooms": [
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "how": "strict",
+  "exact": true,
+  "gates": [
+   [
+    40.3
+   ],
+   [
+    45.0
+   ],
+   [
+    48.5
+   ],
+   [
+    43.8
+   ],
+   []
+  ]
+ },
+ "ded-blood-4": {
+  "dungeonID": 2254,
+  "rooms": [
+   0,
+   1
+  ],
+  "how": "objects",
+  "exact": true,
+  "gates": [
+   [
+    0.0
+   ],
+   []
+  ]
+ },
+ "ded-blood-6": {
+  "dungeonID": 2245,
+  "rooms": [
+   0,
+   1,
+   2,
+   3,
+   4
+  ],
+  "how": "strict",
+  "exact": true,
+  "gates": [
+   [
+    8.7
+   ],
+   [
+    16.3
+   ],
+   [
+    10.0,
+    10.0
+   ],
+   [
+    50.2
+   ],
+   []
+  ]
+ },
+ "ded-guristas-1": {
+  "dungeonID": 149,
+  "rooms": [
+   0,
+   1,
+   2
+  ],
+  "how": "strict",
+  "exact": false,
+  "gates": [
+   [
+    16.9
+   ],
+   [
+    11.3
+   ],
+   []
+  ]
+ },
+ "ded-guristas-2": {
+  "dungeonID": 43,
+  "rooms": [
+   0,
+   1,
+   2,
+   3
+  ],
+  "how": "strict",
+  "exact": false,
+  "gates": [
+   [
+    21.2
+   ],
+   [
+    23.6
+   ],
+   [
+    25.0
+   ],
+   []
+  ]
+ },
+ "ded-guristas-4": {
+  "dungeonID": 2249,
+  "rooms": [
+   0,
+   1
+  ],
+  "how": "strict",
+  "exact": true,
+  "gates": [
+   [
+    21.7
+   ],
+   []
+  ]
+ },
+ "ded-guristas-6": {
+  "dungeonID": 2265,
+  "rooms": [
+   0,
+   1,
+   2,
+   3
+  ],
+  "how": "strict",
+  "exact": true,
+  "gates": [
+   [
+    15.1
+   ],
+   [
+    40.0
+   ],
+   [
+    24.3
+   ],
+   []
+  ]
+ },
+ "ded-guristas-8": {
+  "dungeonID": 2262,
+  "rooms": [
+   0,
+   1,
+   2
+  ],
+  "how": "strict",
+  "exact": true,
+  "gates": [
+   [
+    27.6
+   ],
+   [
+    9.9
+   ],
+   []
+  ]
+ },
+ "ded-guristas-10": {
+  "dungeonID": 2403,
+  "rooms": [
+   1,
+   14,
+   27,
+   32,
+   35
+  ],
+  "how": "objects",
+  "exact": true,
+  "gates": [
+   [
+    9.7,
+    9.2,
+    13.0,
+    8.1,
+    13.6,
+    21.1,
+    12.3,
+    11.9,
+    19.1,
+    17.7,
+    26.1,
+    15.7
+   ],
+   [
+    17.2,
+    9.3,
+    19.8,
+    12.9,
+    13.9,
+    6.0,
+    9.8,
+    20.6,
+    12.7,
+    18.3,
+    8.4,
+    7.7
+   ],
+   [
+    13.3,
+    6.7,
+    8.8,
+    9.3
+   ],
+   [
+    0.0,
+    16.2
+   ],
+   []
+  ]
+ },
+ "ded-sansha-1": {
+  "dungeonID": 2250,
+  "rooms": [
+   0,
+   1,
+   2
+  ],
+  "how": "strict",
+  "exact": true,
+  "gates": [
+   [
+    15.0
+   ],
+   [
+    20.0
+   ],
+   []
+  ]
+ },
+ "ded-sansha-3": {
+  "dungeonID": 2251,
+  "rooms": [
+   0,
+   1
+  ],
+  "how": "strict",
+  "exact": true,
+  "gates": [
+   [
+    24.5
+   ],
+   []
+  ]
+ },
+ "ded-sansha-4": {
+  "dungeonID": 5276,
+  "rooms": [
+   1,
+   2
+  ],
+  "how": "strict",
+  "exact": true,
+  "gates": [
+   [
+    53.0
+   ],
+   []
+  ]
+ },
+ "ded-sansha-5": {
+  "dungeonID": 5288,
+  "rooms": [
+   0,
+   2,
+   3
+  ],
+  "how": "objects",
+  "exact": true,
+  "gates": [
+   [
+    52.4
+   ],
+   [],
+   []
+  ]
+ },
+ "ded-sansha-8": {
+  "dungeonID": 5250,
+  "rooms": [
+   0,
+   1,
+   2,
+   4
+  ],
+  "how": "strict",
+  "exact": true,
+  "gates": [
+   [
+    36.3
+   ],
+   [
+    11.3
+   ],
+   [
+    10.2
+   ],
+   []
+  ]
+ },
+ "ded-sansha-10": {
+  "dungeonID": 2258,
+  "rooms": [
+   0,
+   1,
+   2,
+   3,
+   4
+  ],
+  "how": "objects",
+  "exact": true,
+  "gates": [
+   [
+    16.1
+   ],
+   [],
+   [
+    23.6
+   ],
+   [
+    20.6
+   ],
+   []
+  ]
+ }
+}

@@ -1542,7 +1542,7 @@ pub enum Access {
 /// may). None for anything that is not a structure.
 pub async fn may(ctx: &Ctx<'_>, id: i64, access: Access) -> Option<bool> {
     let Seen { s, distance, .. } = seen(ctx, id)?;
-    if distance > crate::loot::TRANSFER_RANGE * 1.25 {
+    if distance > crate::loot::TRANSFER_RANGE {
         return Some(false);
     }
     // Putting a reaction into a reactor is using it.

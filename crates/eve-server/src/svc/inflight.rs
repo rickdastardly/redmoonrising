@@ -146,6 +146,18 @@ pub async fn profile(
         bounty: r.get(8),
     };
 
+    {
+        let (base, value, mods) = loadout.explain(ship, attr::RECHARGE_RATE);
+        let (cap_base, cap, _) = loadout.explain(ship, attr::CAPACITOR_CAPACITY);
+        let modules: Vec<String> = loadout.pieces.iter()
+            .filter(|p| p.category_id == category::MODULE)
+            .map(|p| format!("{}@{}:{:?}", p.type_id, p.flag, p.state))
+            .collect();
+        debug!(
+            "ship {ship_id} capacitor: {cap:.0} GJ (hull {cap_base:.0}), recharge {:.1}s (hull {:.1}s), by {mods:?}; modules {modules:?}",
+            value / 1000.0, base / 1000.0
+        );
+    }
     let mut shield = Charged::full(v(attr::SHIELD_CAPACITY), v(attr::SHIELD_RECHARGE_RATE), now);
     let mut capacitor = Charged::full(v(attr::CAPACITOR_CAPACITY), v(attr::RECHARGE_RATE), now);
     for (a, value) in stored {
@@ -467,6 +479,13 @@ async fn activate(ctx: &Ctx<'_>, call: &Call) -> Outcome {
             return Outcome::custom("The module could not be read.");
         }
     };
+    // A scan probe launcher fires probes, not missiles (`exploration`).
+    if effect.id == effect::USE_MISSILES {
+        if let Some(charge) = probe_charge(&loadout, item_id) {
+            drop(loadout);
+            return crate::exploration::launch(ctx, charge).await;
+        }
+    }
     let planned = plan(&loadout, item_id, &effect, target, repeat);
     drop(loadout);
     let module = match planned {
@@ -558,6 +577,32 @@ fn check_target(park: &crate::ballpark::Park, ship_id: i64, m: &Active) -> Resul
         _ => {}
     }
     Ok(())
+}
+
+/// Scanner Probe: what a launcher with these loaded fires.
+const GROUP_SCANNER_PROBE: i64 = 479;
+const ATTR_SCAN_RANGE: i32 = 765;
+const ATTR_EXPLOSION_DELAY: i32 = 281;
+const ATTR_MIN_SCAN_DEVIATION: i32 = 787;
+const ATTR_MAX_SCAN_DEVIATION: i32 = 788;
+
+/// The scanner probe loaded in a module, if that is what it holds.
+fn probe_charge(loadout: &Loadout<'_>, item_id: i64) -> Option<crate::exploration::ProbeCharge> {
+    let i = loadout.find(item_id)?;
+    let c = loadout.charge_of(i)?;
+    let p = &loadout.pieces[c];
+    if p.group_id != GROUP_SCANNER_PROBE {
+        return None;
+    }
+    Some(crate::exploration::ProbeCharge {
+        module_id: item_id,
+        item_id: p.item_id,
+        type_id: p.type_id,
+        range_au: loadout.value(c, ATTR_SCAN_RANGE),
+        life_ms: loadout.value(c, ATTR_EXPLOSION_DELAY),
+        min_dev: loadout.value(c, ATTR_MIN_SCAN_DEVIATION),
+        max_dev: loadout.value(c, ATTR_MAX_SCAN_DEVIATION),
+    })
 }
 
 /// A module's cycle as far as its attributes say; [`finish`] fills in what

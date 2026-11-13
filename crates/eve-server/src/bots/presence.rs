@@ -90,6 +90,9 @@ pub struct Presence {
     hulls: HashMap<i64, NpcType>,
     /// Systems with a player in space, as of the last sync.
     observed: HashSet<i32>,
+    /// Systems with a battle being fought where players see it: shown even
+    /// where those players are docked.
+    battles: HashSet<i32>,
     /// The most bots shown in one system.
     cap: usize,
     /// Bots in siege fleets, and where each goes. They are shown before
@@ -145,6 +148,7 @@ impl Presence {
             shown: HashMap::new(),
             hulls,
             observed: HashSet::new(),
+            battles: HashSet::new(),
             cap: cap.max(1),
             rally: HashMap::new(),
             undock: HashMap::new(),
@@ -285,6 +289,12 @@ impl Presence {
         &self.observed
     }
 
+    /// The systems where a battle is being fought in view (`battle::run`):
+    /// their bots are shown from the next sync, players docked or not.
+    pub fn set_battles(&mut self, systems: HashSet<i32>) {
+        self.battles = systems;
+    }
+
     /// After a step: what changed that a watcher would see.
     pub fn note(&self, i: u32, before: (i32, i32, Activity), bot: &Bot, changes: &mut Vec<Change>) {
         let (system, station, activity) = before;
@@ -323,7 +333,8 @@ impl Presence {
     ) -> Vec<(u32, u32)> {
         let mut w = world.lock();
         let now = crate::combat::now_ms();
-        let observed: HashSet<i32> = w.parks.iter().filter(|(_, p)| p.players().next().is_some()).map(|(id, _)| *id as i32).collect();
+        let mut observed: HashSet<i32> = w.parks.iter().filter(|(_, p)| p.players().next().is_some()).map(|(id, _)| *id as i32).collect();
+        observed.extend(self.battles.iter().copied().filter(|s| w.parks.contains_key(&(*s as i64))));
 
         // Lost ships leave their pilots in capsules, heading home; lost
         // capsules leave them at home.
@@ -498,6 +509,10 @@ impl Presence {
         for (i, player) in &self.hunts {
             let Some(&(system, ship)) = self.shown.get(i) else { continue };
             let Some(park) = w.parks.get_mut(&(system as i64)) else { continue };
+            // No hunting in high-sec: they wait for the player to leave it.
+            if park.wildlife.security >= HIGH_SEC {
+                continue;
+            }
             let Some((target, at)) = player_ship(park, *player).map(|s| (s.id, s.pos)) else { continue };
             let Some(me) = park.ships.get(&ship) else { continue };
             if me.warping() || me.npc.as_ref().is_none_or(|b| b.engaged()) {
@@ -526,8 +541,11 @@ impl Presence {
         }
 
         // Pilots from different corporations sharing a belt can start a fight
-        // without a formal war. Keep station and gate traffic out of this.
+        // without a formal war, outside high-sec. Keep station and gate traffic out of this.
         for (system, park) in w.parks.iter_mut() {
+            if park.wildlife.security >= HIGH_SEC {
+                continue;
+            }
             let in_belts: Vec<(i64, i64, i64, Vec3)> = self.shown.iter().filter_map(|(index, (at, ship_id))| {
                 if *at as i64 != *system || !matches!(bots[*index as usize].activity, Activity::Mining | Activity::Ratting) {
                     return None;

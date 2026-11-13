@@ -166,7 +166,7 @@ pub fn in_reach(world: &World, solar_system_id: i64, ship_id: i64, can_id: i64) 
     let w = world.lock();
     let Some(park) = w.parks.get(&solar_system_id) else { return false };
     let (Some(can), Some(ship)) = (park.cans.get(&can_id), park.ships.get(&ship_id)) else { return false };
-    (can.pos - ship.pos).len() - can.radius - ship.stats.radius <= TRANSFER_RANGE * 1.25
+    (can.pos - ship.pos).len() - can.radius - ship.stats.radius <= TRANSFER_RANGE
 }
 
 pub fn is_can(world: &World, solar_system_id: i64, item_id: i64) -> bool {

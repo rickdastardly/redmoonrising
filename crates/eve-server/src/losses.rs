@@ -669,7 +669,7 @@ fn or_none(s: &str) -> &str {
 async fn report_text(db: &Client, loss: &Loss) -> String {
     let victim = who(db, loss.char_id).await;
     let (system, security) = db
-        .query_opt(r#"SELECT "solarSystemName", "security" FROM "mapSolarSystems" WHERE "solarSystemID" = $1"#, &[&(loss.system as i32)])
+        .query_opt(r#"SELECT "solarSystemName", GREATEST("security", 0) FROM "mapSolarSystems" WHERE "solarSystemID" = $1"#, &[&(loss.system as i32)])
         .await
         .ok()
         .flatten()
