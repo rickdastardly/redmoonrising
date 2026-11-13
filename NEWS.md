@@ -2,6 +2,13 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Sell window and reprocessing plant fixed
+
+*2026-11-13 18:20 UTC*
+
+- **The sell window opens again.** Some bot buy orders reached a number of jumps the game's market window has no name for, and that stopped the sell window from drawing. Bot buy orders now reach their station, system, constellation or the whole region, the four ranges the game knows, and existing orders were moved to the nearest of those.
+- **Reprocess works in the reprocessing plant.** Pressing Reprocess in the plant window now shows the quote for each item and reprocesses it, like reprocessing an item on its own already did.
+
 ## Faction and officer gear back on the market; unreleased items gone
 
 *2026-11-13 17:24 UTC*

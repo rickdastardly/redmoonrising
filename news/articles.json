@@ -394,5 +394,11 @@
     "publishedMs": 1794582123380,
     "title": "Item and skill attributes show their real values",
     "body": "<ul>\n<li><b>Negative numbers in Show Info are right again.</b> The item data the game reads had small negative values stored as if they could not go below zero, so Gunnery's <i>-2%</i> turret speed bonus showed as <i>254%</i>, and a few large ones (such as -20,000) showed as 18-digit numbers. All 680 affected values, on skills, modules, ships and charges, now show and work as intended.</li>\n<li><b>Skills work the way the game shows them.</b> Where the server's copy of a skill differed from what Show Info says (training rank, prerequisites, bonuses), the server now uses what you see. Training times match the skill's listed rank, and no skill asks for a prerequisite its info sheet does not list.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-13 18:20 UTC",
+    "publishedMs": 1794594032255,
+    "title": "Sell window and reprocessing plant fixed",
+    "body": "<ul>\n<li><b>The sell window opens again.</b> Some bot buy orders reached a number of jumps the game's market window has no name for, and that stopped the sell window from drawing. Bot buy orders now reach their station, system, constellation or the whole region, the four ranges the game knows, and existing orders were moved to the nearest of those.</li>\n<li><b>Reprocess works in the reprocessing plant.</b> Pressing Reprocess in the plant window now shows the quote for each item and reprocesses it, like reprocessing an item on its own already did.</li>\n</ul>"
   }
 ]
