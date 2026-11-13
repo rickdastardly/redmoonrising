@@ -33,6 +33,7 @@ const BOT_LOOT_PER_TONNE: f64 = 15_000.0;
 const REINFORCE_BELOW: f64 = 0.25;
 
 pub fn step(park: &mut Park, now: i64, out: &mut Out) {
+    battle_orders(park, now, out);
     locks(park, now, out);
     cycles(park, now, out);
     crate::guard::step(park, now, out);
@@ -177,6 +178,63 @@ fn cycle(park: &mut Park, ship_id: i64, module_id: i64, now: i64, out: &mut Out)
         }
         Action::Mining { .. } | Action::Passive => {}
         _ => project(park, ship_id, &m, now, out),
+    }
+}
+
+/// The bot battles' orders: titans' doomsdays on the enemy fleet, sieged
+/// dreadnoughts' volleys at a tower, logistics ships' repairs.
+fn battle_orders(park: &mut Park, now: i64, out: &mut Out) {
+    if park.battle_orders.is_empty() {
+        return;
+    }
+    const DOOMSDAY_RANGE: f64 = 250_000.0;
+    const CAPITAL_GROUPS: [i64; 5] = [30, 485, 513, 547, 659];
+    let (tick, system) = (park.tick, park.solar_system_id);
+    let by = |ship: &Ship| Attacker { ship_id: ship.id, char_id: ship.pilot.char_id, client_id: None, ship_type: ship.pilot.type_id, weapon_type: 0 };
+    for order in std::mem::take(&mut park.battle_orders) {
+        match order {
+            crate::ballpark::BattleOrder::Doomsday { titan, hostile } => {
+                let Some(source) = park.ships.get(&titan) else {
+                    tracing::debug!("doomsday order dropped in {system}: titan {titan} is no longer in space");
+                    continue;
+                };
+                let (at, attacker) = (source.pos, by(source));
+                let targets: Vec<i64> = park.ships.values()
+                    .filter(|s| s.id != titan && s.fight.is_some() && !s.in_warp()
+                        && !CAPITAL_GROUPS.contains(&s.pilot.group_id)
+                        && s.pilot.alliance_id.is_some_and(|a| hostile.contains(&a))
+                        && (s.pos - at).len() <= DOOMSDAY_RANGE)
+                    .map(|s| s.id)
+                    .collect();
+                out.destiny(system, crate::svc::space::special_fx(tick, titan, None, "effects.EMPWaveGrid"));
+                info!("titan {titan} fires its doomsday on {} ship(s) in {system}", targets.len());
+                for t in targets {
+                    hit(park, attacker, t, [1.0e9; 4], Shot::Hit { quality: 3, multiplier: 1.0 }, "Doomsday", now, out);
+                }
+            }
+            crate::ballpark::BattleOrder::Bombard { ship, tower, damage } => {
+                let Some(source) = park.ships.get(&ship) else {
+                    tracing::debug!("bombard order dropped in {system}: dreadnought {ship} is no longer in space");
+                    continue;
+                };
+                if source.in_warp() || !park.structures.contains_key(&tower) {
+                    tracing::debug!("bombard order dropped in {system}: dreadnought {ship} is warping, or tower {tower} is gone");
+                    continue;
+                }
+                let attacker = by(source);
+                out.destiny(system, crate::svc::space::special_fx(tick, ship, Some(tower), "effects.Laser"));
+                hit(park, attacker, tower, [0.0, 0.0, damage * 0.5, damage * 0.5], Shot::Hit { quality: 3, multiplier: 1.0 }, "Siege bombardment", now, out);
+            }
+            crate::ballpark::BattleOrder::Repair { from, to, amount, shield } => {
+                if !park.ships.contains_key(&from) || !park.ships.contains_key(&to) {
+                    tracing::debug!("repair order dropped in {system}: logistics {from} or its target {to} is no longer in space");
+                    continue;
+                }
+                let guid = if shield { "effects.ShieldTransfer" } else { "effects.RemoteArmourRepair" };
+                out.destiny(system, crate::svc::space::special_fx(tick, from, Some(to), guid));
+                heal(park, to, now, out, |v| if shield { v.shield.add(now, amount) } else { v.repair_armor(amount) });
+            }
+        }
     }
 }
 

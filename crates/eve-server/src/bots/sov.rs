@@ -95,6 +95,9 @@ pub struct Siege {
     pub starts_at: i64,
     /// The fleets, once it is fought where someone watches.
     pub fight: Option<super::battle::Fight>,
+    /// Asked for by hand (`/bots battle`): fought at these stakes, with
+    /// every kind of capital ship on both sides.
+    pub showcase: Option<super::battle::Stakes>,
 }
 
 #[derive(Debug, Clone)]
@@ -536,6 +539,7 @@ pub async fn upkeep(
             starts: clock + SIEGE_NOTICE,
             starts_at,
             fight: None,
+            showcase: None,
         });
     }
 
@@ -672,6 +676,117 @@ async fn destroy_towers(db: &Client, system: i32, alliance: i32) -> Result<u64, 
     db.execute(r#"DELETE FROM entity WHERE "locationID" = ANY($1)"#, &[&towers]).await?;
     db.execute(r#"DELETE FROM "posStructures" WHERE "itemID" = ANY($1) OR "controlTowerID" = ANY($1)"#, &[&towers]).await?;
     db.execute(r#"DELETE FROM entity WHERE "itemID" = ANY($1)"#, &[&towers]).await
+}
+
+/// A siege fought at once, asked for by hand (`/bots battle`): in `place`
+/// (a system by ID or name), else wherever a bot alliance holds a claiming
+/// tower, those at war first. The defender is that tower's alliance; the
+/// attacker an alliance at war with it, else another bot alliance, which
+/// declares war. Returns what to tell the one who asked.
+#[allow(clippy::too_many_arguments)]
+pub async fn siege_now(
+    db: &Client,
+    atlas: &Atlas,
+    p: &mut Politics,
+    sieges: &mut Vec<Siege>,
+    rng: &mut Rng,
+    clock: u32,
+    place: Option<&str>,
+    stakes: super::battle::Stakes,
+    speed: f64,
+) -> Result<Result<String, String>, tokio_postgres::Error> {
+    let wanted: Option<i32> = match place {
+        None => None,
+        Some(p) => match p.trim().parse::<i32>() {
+            Ok(id) => Some(id),
+            Err(_) => {
+                let sql = r#"SELECT "solarSystemID" FROM "mapSolarSystems" WHERE lower("solarSystemName") = lower($1)"#;
+                match db.query_opt(sql, &[&p.trim()]).await? {
+                    Some(r) => Some(r.get(0)),
+                    None => return Ok(Err(format!("No solar system called {p}."))),
+                }
+            }
+        },
+    };
+    let info: HashMap<i32, (i32, i64, u32)> = claimants(db, p).await?.into_iter().map(|(a, _, e, race, n)| (a, (e, race, n))).collect();
+    let sql = r#"SELECT DISTINCT e."locationID", co."allianceID" FROM "posStructures" ps JOIN entity e ON e."itemID" = ps."itemID"
+                   JOIN "corporation" co ON co."corporationID" = e."ownerID"
+                  WHERE ps."claim" = 1 AND co."allianceID" IS NOT NULL"#;
+    let mut candidates: Vec<(i32, i32)> = Vec::new();
+    for r in db.query(sql, &[]).await? {
+        let (Some(system), Some(alliance)) = (int(&r, 0), int(&r, 1)) else { continue };
+        let (system, alliance) = (system as i32, alliance as i32);
+        if info.contains_key(&alliance) && wanted.is_none_or(|w| w == system) && !sieges.iter().any(|s| s.system == system) {
+            candidates.push((system, alliance));
+        }
+    }
+    candidates.sort_unstable();
+    candidates.dedup();
+    if candidates.is_empty() {
+        return Ok(Err(match wanted {
+            Some(_) => "No bot alliance has a claiming tower there (or a siege is already on there). /bots battle with no system picks a place.".into(),
+            None => "No bot alliance holds space with a claiming tower yet, or every such system is already under siege.".into(),
+        }));
+    }
+    let at_war = |a: i32| p.wars.iter().any(|w| w.a == a || w.b == a);
+    let warring: Vec<(i32, i32)> = candidates.iter().copied().filter(|(_, d)| at_war(*d)).collect();
+    let pool = if warring.is_empty() { &candidates } else { &warring };
+    let (system, defender) = pool[rng.below(pool.len())];
+    let enemies: Vec<(i32, i32)> = p
+        .wars
+        .iter()
+        .filter_map(|w| if w.a == defender { Some((w.b, w.id)) } else if w.b == defender { Some((w.a, w.id)) } else { None })
+        .filter(|(a, _)| info.contains_key(a))
+        .collect();
+    let (attacker, war) = match enemies.get(rng.below(enemies.len().max(1))) {
+        Some(&x) => x,
+        None => {
+            let mut others: Vec<i32> = info.keys().copied().filter(|a| *a != defender).collect();
+            others.sort_unstable();
+            let Some(&a) = others.get(rng.below(others.len().max(1))) else {
+                return Ok(Err("Only one bot alliance holds space: there is nobody to attack it.".into()));
+            };
+            let id = super::politics::war_between(p, db, a, defender, 7, clock, speed).await?;
+            crate::svc::war::refresh(db).await;
+            (a, id)
+        }
+    };
+    let (attacker_exec, attacker_race, attackers) = info[&attacker];
+    let defenders = info[&defender].2;
+    let names = SiegeNames {
+        attacker: alliance_name(db, attacker).await,
+        defender: alliance_name(db, defender).await,
+        system: system_name(db, system).await,
+        region: region_name(db, atlas.systems.get(&system).map_or(0, |x| x.region)).await,
+        security: atlas.systems.get(&system).map_or(0.0, |x| x.security as f64),
+    };
+    let said = format!(
+        "{} by request: {} attack {} in {} ({}), now. Be in space in {} to watch it; the fleets rally round {}'s tower.",
+        stakes.label(),
+        names.attacker,
+        names.defender,
+        names.system,
+        names.region,
+        names.system,
+        names.defender
+    );
+    info!("bots: {said}");
+    sieges.push(Siege {
+        war,
+        attacker,
+        defender,
+        attacker_exec,
+        attacker_race,
+        attackers,
+        defenders,
+        system,
+        names,
+        starts: clock,
+        starts_at: crate::bulkdata::filetime_now(),
+        fight: None,
+        showcase: Some(stakes),
+    });
+    Ok(Ok(said))
 }
 
 pub async fn alliance_name(db: &Client, id: i32) -> String {

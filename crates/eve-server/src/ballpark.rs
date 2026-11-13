@@ -372,6 +372,21 @@ pub struct Park {
     /// What lives in this system's belts.
     pub wildlife: Arc<Wildlife>,
     pub rng: Rng,
+    /// What the bot battles here want done on the next heartbeat, which has
+    /// the output kills and hits need (`fight::battle_orders`).
+    pub battle_orders: Vec<BattleOrder>,
+}
+
+/// A bot battle's order to the space simulation.
+#[derive(Debug, Clone)]
+pub enum BattleOrder {
+    /// A titan fires its doomsday: every subcapital ship of `hostile`
+    /// alliances on its grid.
+    Doomsday { titan: i64, hostile: Vec<i64> },
+    /// A sieged dreadnought's volley at a tower.
+    Bombard { ship: i64, tower: i64, damage: f64 },
+    /// A logistics ship's remote repair: shield (shield transfer) or armor.
+    Repair { from: i64, to: i64, amount: f64, shield: bool },
 }
 
 /// A bot ship or capsule destroyed in space.
@@ -408,6 +423,7 @@ impl Park {
             missiles: Vec::new(),
             wildlife: Arc::new(Wildlife::default()),
             rng: Rng::seeded(solar_system_id as u64 ^ tick as u64),
+            battle_orders: Vec::new(),
         }
     }
 

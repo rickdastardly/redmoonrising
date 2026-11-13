@@ -21,6 +21,7 @@
 
 pub mod behaviour;
 mod battle;
+mod capitals;
 mod control;
 mod defense;
 mod economy;
@@ -232,7 +233,7 @@ static SHOWN: AtomicUsize = AtomicUsize::new(0);
 static SETTINGS_VERSION: AtomicUsize = AtomicUsize::new(0);
 
 /// The most bots shown in one system, and the range of online activity.
-pub const SHOWN_RANGE: (usize, usize) = (10, 2_500);
+pub const SHOWN_RANGE: (usize, usize) = (10, 5_000);
 pub const ACTIVITY_RANGE: (f64, f64) = (0.1, 4.0);
 
 fn changed() {
@@ -603,7 +604,15 @@ pub fn request(words: &[&str]) -> Result<String, String> {
         control::Request::Follow(n) => format!("Following {n}."),
         control::Request::Unfollow(n) => format!("No longer following {n}."),
         control::Request::Meet { bots, .. } => format!("{} bots answering a fight call.", bots.len()),
+        control::Request::Battle { place, stakes } => format!(
+            "Asked for a {} with capital ships in {}. The server log and the dashboard say where it is and how it goes.",
+            stakes.as_deref().unwrap_or("decisive"),
+            place.as_deref().unwrap_or("a bot alliance's space")
+        ),
     };
+    if matches!(r, control::Request::Battle { .. }) && !is_running() {
+        return Err("The bots are paused: /bots on first.".into());
+    }
     control::ask(r);
     Ok(said)
 }
@@ -643,7 +652,7 @@ pub async fn run(server: Arc<Server>, target: usize, speed: f64, shown: usize, s
                 Ok(v) => v,
                 Err(e) => return error!("bots: the economy: {}", crate::logging::chain(&e)),
             };
-            let mut presence = Presence::new(presence::hulls(&db, &ids, yard.all().chain(yard.drone_types()).map(i64::from)).await, shown);
+            let mut presence = Presence::new(presence::hulls(&db, &ids, yard.all().chain(yard.drone_types()).map(i64::from).chain(capitals::HULLS).chain(capitals::FIGHTERS)).await, shown);
             let yard = Arc::new(yard);
             presence.yard = Some(Arc::clone(&yard));
             let relations = match relations::load(&db).await {
@@ -934,6 +943,15 @@ impl Sim {
                 _ = shutdown.changed() => {
                     info!("bots: saving before shutdown");
                     self.sync(RUNNING.load(Ordering::Relaxed)).await;
+                    // Battles do not outlive the server: capital pilots go
+                    // back to their own ships before the bots are saved.
+                    let back = battle::restore_pilots(&mut self.sieges, &mut self.bots);
+                    if !back.is_empty() {
+                        info!("bots: {} capital, logistics and cyno pilot(s) back in their own ships for the restart", back.len());
+                    }
+                    for i in back {
+                        self.touch(i);
+                    }
                     self.flush_all(RUNNING.load(Ordering::Relaxed)).await;
                     return;
                 }
@@ -1347,6 +1365,19 @@ impl Sim {
                 control::Request::Unfollow(char_id) => {
                     if let Some(&i) = self.by_char.get(&char_id) {
                         self.following.unfollow(i);
+                    }
+                }
+                control::Request::Battle { place, stakes } => {
+                    let stakes = stakes.as_deref().and_then(battle::Stakes::parse).unwrap_or(battle::Stakes::Decisive);
+                    let speed = self.speed;
+                    match sov::siege_now(&self.db, &self.atlas, &mut self.politics, &mut self.sieges, &mut self.rng, now, place.as_deref(), stakes, speed).await {
+                        Ok(Ok(said)) => {
+                            let at = crate::bulkdata::filetime_now();
+                            self.politics.tell(vec![(at, said.clone())]);
+                            self.say(said);
+                        }
+                        Ok(Err(why)) => self.say(format!("No battle: {why}")),
+                        Err(e) => error!("bots: a battle by request: {}", crate::logging::chain(&e)),
                     }
                 }
                 control::Request::Meet { system, anchor, point, bots } => {

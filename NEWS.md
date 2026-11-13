@@ -2,6 +2,23 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Start a capital battle from the dashboard
+
+*2026-11-13 18:42 UTC*
+
+- **The Bots page has a Capital battle window.** Type a system (or leave it blank for anywhere a bot alliance holds a tower), pick Decisive, Battle or Skirmish, and press **Start capital battle**. It does the same as `/bots battle` in game, and the window is also on the Events page.
+- The GM commands page lists `/bots battle`, with an example.
+- Like the other bot controls, it needs the dashboard's bot controls switched on.
+
+## Capital battles on request, and a clearer log of them
+
+*2026-11-13 18:37 UTC*
+
+- **Start a capital battle whenever you like.** A GM can type `/bots battle` to start a decisive siege at once in a bot alliance's space, or `/bots battle here` for the system they are in (it needs a bot alliance's claiming tower there), or name a system. Add `skirmish`, `battle` or `decisive` to choose how much each side brings. Both sides bring every kind of capital ship: at least one titan, dreadnoughts, carriers, logistics and a cyno ship.
+- **Watch it from the defenders' tower.** A cyno ship lights a cynosural field, the capitals jump to it, the titan bridges the rest of the fleet in, dreadnoughts go into siege mode and bombard the tower, logistics repair their side, and titans fire their doomsday.
+- **The server log follows every step:** each cyno lit, each wave of capitals jumping in, every titan bridge, each dreadnought entering siege, and every 30 seconds what is on the grid with the tower's shield, armour and structure. Capitals left waiting with nobody to light a cyno say so too.
+- A server restart in the middle of a battle no longer leaves the bots who flew capitals stuck in them: they go back to their own ships first.
+
 ## Sell window and reprocessing plant fixed
 
 *2026-11-13 18:20 UTC*
@@ -9,17 +26,63 @@ Every update, as published on the server dashboard and the character selection s
 - **The sell window opens again.** Some bot buy orders reached a number of jumps the game's market window has no name for, and that stopped the sell window from drawing. Bot buy orders now reach their station, system, constellation or the whole region, the four ranges the game knows, and existing orders were moved to the nearest of those.
 - **Reprocess works in the reprocessing plant.** Pressing Reprocess in the plant window now shows the quote for each item and reprocesses it, like reprocessing an item on its own already did.
 
+## Splitting stacks works; the sell and reprocessing windows report what goes wrong
+
+*2026-11-13 18:13 UTC*
+
+- **Splitting a stack works again:** hold Shift and drag a stack into the window it's already in, then enter how many to split off. You get a new stack of that many beside the old one. Before, the server treated it as a move to where the stack already was and did nothing.
+- **Moving part of a stack** no longer confuses the item's own location with a quantity.
+- **Sell window and Reprocess:** on the server's side these work. The sell window gets its prices and orders without error. When you click Reprocess, nothing even reaches the server. So the fault is inside the game client, which fails without logging anything. The client now reports every error inside the market and reprocessing windows and services, anything they wait on for more than eight seconds, and the steps the windows take, to the server log as *client hook: trace*. Try them once more after restarting, and the cause will be in the log for the next fix.
+
+## Bot carriers launch fighters
+
+*2026-11-13 18:02 UTC*
+
+- **Bot carriers now fight with real fighters** instead of guns. Archons launch Templars, Chimeras launch Dragonflies, Nidhoggurs launch Firbolgs and Thanatoses launch Einherjis.
+- **How many:** ten fighters per carrier, as a Carrier V pilot flew in 2007, and fifteen per mothership.
+- **How they fight:** the carrier picks a target up to 100 km away and holds back about 45 km from it. Its fighters fly out to it, with each fighter's own stats, speed and damage from the game data.
+- **You can fight them:** you can shoot fighters down, and a titan's doomsday wipes them out. They go back to the carrier when the fight is over and leave with it.
+- **Wrecks:** a carrier's wreck and killmail now show the fighters in its bay.
+
+## Capital warfare: cynos, dreadnoughts, carriers, logistics, titans and battle reports
+
+*2026-11-13 17:48 UTC*
+
+- **The bot alliances now bring capitals to their sovereignty battles.** Each side brings dreadnoughts and carriers, plus titans in the biggest fights. How many depends on the fleet's size, what is at stake and how rich the alliance is. Their richest pilots fly the capitals, and any who survive go back to their own ships afterwards.
+- **Cynos:** a force recon (Pilgrim, Falcon, Arazu or Rapier) warps in with the fleet and lights a *Cynosural Field I* you can see on the grid and the overview. The capitals then jump in on it with the jump flash. If the cyno ship doesn't make it, any ship of the side lights one after 45 seconds. The cyno goes out when the fight ends or moves out of sight.
+- **Titan bridges:** once a side's titan is on the grid, the rest of its fleet comes through the titan's jump portal around it, instead of warping in.
+- **Dread bombing:** dreadnoughts go into siege mode. The attackers' dreads bombard the defenders' control tower for about 9,000 damage every 5 seconds, so the bots now bash each other's POSes to take sov.
+- **Logistics:** Guardians, Oneiros, Basilisks and Scimitars repair their side's most damaged ship, with shield transfers or remote armour repair by race.
+- **Titan battles:** titans fire their doomsday 90 seconds into a fight, then every 10 minutes. It hits every enemy subcapital within 250 km. Capitals are immune, as in 2007.
+- **All of this happens in real time, whether anyone is logged in or not.** A battle nobody watches is still fought, second by second:
+
+- Capitals count for many ships and are hard to kill.
+- Logistics cut their side's losses by up to a third.
+- Each titan's doomsday takes out a share of the enemy fleet.
+Every ship lost, capitals included, is a real killmail on the killboard. Fly to the system and the fight comes into view, ship against ship.
+- **Battle reports on the dashboard killboard.** Every sov battle gets a report at the top of the Killboard page, marked LIVE while it is fought. It updates every minute and shows:
+
+- Both sides and their allies, and the fleet each brought.
+- The capitals each side brought and lost.
+- Ships and ISK lost, broken down by ship type from the killmails.
+- How the battle ended.
+
+- **Bigger battles:** the dashboard's *Bot ships shown per system* now goes up to 5,000 (it was 2,500). Set it to 4,000 or more, with battle size at 2,000, for 2,000 against 2,000 fights on one grid. Expect a lot of work for the server and your client at that size.
+- **Note:** this is bot behaviour only. Players' own cyno generators, jump drives and titan bridges aren't in yet.
+
 ## Faction and officer gear back on the market; unreleased items gone
 
 *2026-11-13 17:24 UTC*
 
 - **Faction, officer and deadspace gear is back on the main market**, beside the ordinary versions: Caldari Navy, Shadow Serpentis, Gist, Pith, Dread Guristas, officer modules and the pirate faction ships. They were all in the game in 2007 from DED complexes and LP stores. The last update wrongly moved them to Additional Items.
 - **Only unreleased items are removed**, unlisted and never stocked again (about 380 in all):
-  - Anything named "test", such as *test hardener*, *TEST Smartbomb* and the *Uber Test* towers. Real items with "test" in the name stay: *Test Dummies*, *Serpentis Test Reports* and *'Protest' Large Armor Repairer I*.
-  - The NPC *Boss Rank* placeholders for Serpentis, Sansha and Blood Raider hardeners and membranes.
-  - Developer copies and tools: *Dummy*, *UNUSED* and *OLD* items, the *GM* modules and the *Pimp* fittings.
-  - NPC and placeholder hulls: CONCORD, Polaris and police ships, Jove ships, *Elite* and *Tier3* test hulls, *Atron much HP* and the like. Odd drones such as the *lewt drone* are gone too.
-  - Skills that were never put into play, such as the Jove ship skills, *Omnipotent*, *Smuggling* and *Black Market Trading*.
+
+- Anything named "test", such as *test hardener*, *TEST Smartbomb* and the *Uber Test* towers. Real items with "test" in the name stay: *Test Dummies*, *Serpentis Test Reports* and *'Protest' Large Armor Repairer I*.
+- The NPC *Boss Rank* placeholders for Serpentis, Sansha and Blood Raider hardeners and membranes.
+- Developer copies and tools: *Dummy*, *UNUSED* and *OLD* items, the *GM* modules and the *Pimp* fittings.
+- NPC and placeholder hulls: CONCORD, Polaris and police ships, Jove ships, *Elite* and *Tier3* test hulls, *Atron much HP* and the like. Odd drones such as the *lewt drone* are gone too.
+- Skills that were never put into play, such as the Jove ship skills, *Omnipotent*, *Smuggling* and *Black Market Trading*.
+
 - Everything else stays as it was. The real market tree is kept exactly as the 2007 data has it, and the remaining extras are still in **Additional Items**. Anything already in someone's hangar stays there.
 
 *Takes effect when Start.bat restarts the server.*

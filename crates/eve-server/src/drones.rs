@@ -747,6 +747,8 @@ fn dock(park: &mut Park, id: i64, controller: i64, now: i64, out: &mut Out) {
 
 /// How far from its target a bot ship sends its drones.
 const BOT_DRONE_RANGE: f64 = 30_000.0;
+/// A bot carrier sends its fighters at targets this far off.
+const BOT_FIGHTER_RANGE: f64 = 150_000.0;
 
 /// A bot ship's drones: the type in its bay and how many fly at once. They
 /// fly as a player's do, with no client and no items behind them.
@@ -789,7 +791,8 @@ pub fn bot_drones_follow(park: &mut Park, controller: i64, target: Option<i64>, 
         }
         return;
     }
-    if park.surface_distance(controller, target).is_none_or(|d| d > BOT_DRONE_RANGE) {
+    let range = if plan.kind.group_id == FIGHTER_GROUP { BOT_FIGHTER_RANGE } else { BOT_DRONE_RANGE };
+    if park.surface_distance(controller, target).is_none_or(|d| d > range) {
         return;
     }
     let system = park.solar_system_id;

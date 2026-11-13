@@ -1835,7 +1835,7 @@ async function refreshBots() {
     if (events) {
         const state = events.controls ? "Controls are on." : "Controls are off: set bots.dashboardControls in rmr.yml to use them.";
         setText("controls-state", state);
-        for (const b of document.querySelectorAll("#w-control button")) {
+        for (const b of document.querySelectorAll("#w-control button, #w-battle form button")) {
             b.disabled = !events.controls;
         }
         list("raids", [
@@ -1912,8 +1912,8 @@ function unfollowButton(f) {
     b.addEventListener("click", () => void control(`unfollow ${f.id}`));
     return b;
 }
-async function control(what) {
-    const reply = document.getElementById("control-reply");
+async function control(what, replyId = "control-reply") {
+    const reply = document.getElementById(replyId);
     try {
         const response = await fetch(`/api/control?do=${encodeURIComponent(what)}`, { method: "POST" });
         const body = (await response.json());
@@ -2038,6 +2038,12 @@ document.getElementById("density-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
     void control(`density ${f.get("region")} ${f.get("factor")}`);
+});
+document.getElementById("battle-now-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const system = String(f.get("system") ?? "").trim();
+    void control(`battle ${system} ${f.get("stakes") ?? "decisive"}`.replace(/\s+/g, " "), "battle-now-reply");
 });
 const SOV_REFRESH_MS = 60000;
 const sov = {
@@ -2910,6 +2916,82 @@ function guideHaystack(g) {
     const ships = g.rooms.flatMap((r) => r.waves.flatMap((w) => w.ships.flatMap((s) => [...s.names, s.label ?? ""])));
     return [g.name, g.objective, guideFaction(g), guideLevel(g), ...g.rooms.map((r) => r.name), ...ships].join(" ").toLowerCase();
 }
+const openBattles = new Set();
+async function refreshBattles() {
+    const box = document.getElementById("battle-reports");
+    if (!box)
+        return;
+    let reports;
+    try {
+        reports = await get("/api/battles");
+    }
+    catch {
+        return;
+    }
+    box.replaceChildren();
+    if (!reports.length) {
+        box.append(el("p", "No battles yet. When the bot alliances fight for a system, the report appears here as it happens.", "note"));
+        return;
+    }
+    for (const r of reports)
+        box.append(battleReport(r));
+}
+function battleReport(r) {
+    const value = (ships) => ships.reduce((sum, s) => sum + s.value, 0);
+    const lostIsk = value(r.attackShips) + value(r.defendShips);
+    const card = el("details", undefined, "battle");
+    card.open = openBattles.has(r.id);
+    card.addEventListener("toggle", () => { if (card.open)
+        openBattles.add(r.id);
+    else
+        openBattles.delete(r.id); });
+    const summary = el("summary");
+    const ongoing = r.ended === null;
+    const status = ongoing ? "In progress" : r.attackersWon === true ? `${r.attacker} won` : r.attackersWon === false ? `${r.defender} held` : "Over";
+    summary.append(el("span", ongoing ? "LIVE" : "", ongoing ? "battle-live" : "battle-done"), el("strong", `${r.system}`), el("span", ` ${r.region} · ${r.stakes}`, "battle-where"), el("span", `${r.attacker} vs ${r.defender}`, "battle-who"), el("span", `${numbers.format(r.attackLost + r.defendLost)} ships · ${iskShort(lostIsk)} ISK`, "battle-cost"), el("span", status, "battle-status"));
+    card.append(summary);
+    const when = el("p", `${new Date(r.started).toLocaleString()}${r.ended !== null ? ` to ${new Date(r.ended).toLocaleTimeString()}` : ", still going"}`, "zkb-sub");
+    card.append(when);
+    const sides = el("div", undefined, "battle-sides");
+    const side = (title, id, allies, brought, lost, caps, capsLost, ships, won) => {
+        const col = el("div", undefined, "battle-side" + (won === true ? " won" : won === false ? " lost" : ""));
+        const head = el("h4");
+        const link = el("a", title);
+        link.href = `#alliance-${id}`;
+        head.append(link);
+        col.append(head);
+        if (allies)
+            col.append(el("p", `with ${allies}`, "zkb-sub"));
+        const stats = el("dl", undefined, "zkb-activity");
+        const stat = (k, v) => { stats.append(el("dt", k), el("dd", v)); };
+        stat("Fleet", numbers.format(brought));
+        stat("Lost", `${numbers.format(lost)} (${brought ? Math.round((lost / brought) * 100) : 0}%)`);
+        stat("ISK lost", iskShort(value(ships)));
+        stat("Capitals", caps || "none");
+        stat("Capitals lost", capsLost || "none");
+        col.append(stats);
+        const list = el("ol", undefined, "zkb-top battle-ships");
+        for (const s of ships.slice(0, 15)) {
+            const li = el("li");
+            const name = el("span", undefined, "zp-ship");
+            name.append(typeImage(s.typeID, "icon", 32), s.ship);
+            li.append(name, el("span", `× ${numbers.format(s.lost)}`, "battle-count"));
+            list.append(li);
+        }
+        if (ships.length > 15)
+            list.append(el("li", `and ${ships.length - 15} more types`, "zkb-sub"));
+        if (!ships.length)
+            list.append(el("li", "No losses yet", "zkb-sub"));
+        col.append(list);
+        return col;
+    };
+    const attackWon = r.attackersWon === null ? null : r.attackersWon;
+    sides.append(side(r.attacker, r.attackerID, r.attackerAllies, r.attackBrought, r.attackLost, r.attackCapitals, r.attackCapitalsLost, r.attackShips, attackWon), side(r.defender, r.defenderID, r.defenderAllies, r.defendBrought, r.defendLost, r.defendCapitals, r.defendCapitalsLost, r.defendShips, attackWon === null ? null : !attackWon));
+    card.append(sides);
+    if (r.outcome)
+        card.append(el("p", r.outcome, "battle-outcome"));
+    return card;
+}
 function el(tag, text, className) {
     const e = document.createElement(tag);
     if (text !== undefined)
@@ -3089,13 +3171,13 @@ const pages = {
     killboard: { title: "Killboard", description: "Killmails, top killers and recent destruction.", windows: ["w-killboard"] },
     sovereignty: { title: "Sovereignty map", description: "Who holds which systems, updated as sovereignty changes hands.", windows: ["w-sovmap"] },
     downtime: { title: "Server downtime", description: "Announce and schedule a graceful shutdown or restart.", windows: ["w-downtime"] },
-    bots: { title: "Bots", description: "How many bots the server plays, and how aggressive they are.", windows: ["w-bots"] },
+    bots: { title: "Bots", description: "How many bots the server plays, and how aggressive they are. Start a capital battle to watch.", windows: ["w-bots", "w-battle"] },
     market: { title: "Market", description: "Trade activity and hub stock.", windows: ["w-market"] },
     seeding: { title: "Market seeding", description: "Pick a station, such as a newly built outpost, and stock its market.", windows: ["w-seeding"] },
     relations: { title: "Standings", description: "Bot relationships and grudges.", windows: ["w-relations"] },
     follow: { title: "Follow a pilot", description: "Track a pilot's current activity.", windows: ["w-follow"] },
     guides: { title: "Mission & DED guides", description: "Walkthroughs for every agent mission and DED complex: filter by type, level or faction, or search.", windows: ["w-guides"] },
-    control: { title: "Events, raids and gangs", description: "Pirate raids and roaming gangs out now, and political events. Start one with the buttons below.", windows: ["w-control"] },
+    control: { title: "Events, raids and gangs", description: "Pirate raids and roaming gangs out now, and political events. Start one with the buttons below.", windows: ["w-control", "w-battle"] },
     users: { title: "User accounts", description: "Account roles and in-game staff colours.", windows: ["w-users"] },
     dungeons: { title: "Deadspace complexes", description: "DED 1/10 to 10/10 complexes: open one for a pilot to test it.", windows: ["w-dungeons"] },
     gm: { title: "GM commands", description: "Slash commands for staff, typed into any chat channel in game.", windows: ["w-gm"] },
@@ -3157,6 +3239,8 @@ function route() {
         void refreshHealth();
     if (hash === "bots")
         void refreshBotSettings();
+    if (activePage === "killboard" && killID === 0 && pilotID === 0 && groupID === 0)
+        void refreshBattles();
     if (hash === "sovereignty")
         void openSovMap();
     window.scrollTo(0, 0);
@@ -3169,6 +3253,8 @@ void refresh();
 setInterval(() => void refresh(), REFRESH_MS);
 void refreshArticles();
 setInterval(() => void refreshArticles(), REFRESH_MS);
+setInterval(() => { if (document.body.dataset.page === "killboard")
+    void refreshBattles(); }, REFRESH_MS * 2);
 void refreshDowntime();
 void refreshBotSettings();
 setInterval(() => void refreshBotSettings(), 15000);

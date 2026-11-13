@@ -256,6 +256,7 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
                 "/api/bots" => Some(Ok(bot_settings())),
                 "/api/health" => Some(Ok(crate::health::report())),
                 "/api/sieges" => Some(sieges(server)),
+                "/api/battles" => Some(battles(server).await),
                 "/api/wars" => Some(wars(server).await),
                 "/api/players" => Some(players(server).await),
                 "/api/users" => Some(users(server).await),
@@ -516,6 +517,51 @@ fn sieges(server: &Server) -> Answer {
             })
             .collect(),
     ))
+}
+
+/// The bots' sovereignty battles, newest first: who fought, what they
+/// brought and lost (capitals too), and each side's losses by ship from the
+/// killmails in that system while the battle lasted.
+async fn battles(server: &Server) -> Answer {
+    let now = crate::bulkdata::filetime_now();
+    let side_ships = |alliances: &str| {
+        format!(
+            r#"(SELECT COALESCE(json_agg(x ORDER BY x.lost DESC, x.ship), '[]')::text FROM (
+                 SELECT COALESCE(t."typeName", 'Unknown ship') AS ship, k."victimShipTypeID" AS "typeID",
+                        count(*)::int AS lost, sum(COALESCE(t."basePrice", 0))::float8 AS value
+                   FROM "killLog" k LEFT JOIN "invTypes" t ON t."typeID" = k."victimShipTypeID"
+                  WHERE k."solarSystemID" = b."solarSystemID"
+                    AND k."killTime" BETWEEN b."startedAt" AND COALESCE(b."endedAt", $1)
+                    AND k."victimAllianceID" = ANY(b."{alliances}")
+                  GROUP BY 1, 2) x)"#
+        )
+    };
+    let sql = format!(
+        r#"SELECT b."battleID" AS id, b."solarSystemID" AS "systemID", b."systemName" AS system, b."regionName" AS region,
+                  b."stakes", b."attackerID", b."attackerName" AS attacker, b."attackerAllies",
+                  b."defenderID", b."defenderName" AS defender, b."defenderAllies",
+                  {started} AS started, {ended} AS ended,
+                  b."attackBrought", b."defendBrought", b."attackLost", b."defendLost",
+                  b."attackCapitals", b."defendCapitals", b."attackCapitalsLost", b."defendCapitalsLost",
+                  b."outcome", b."attackersWon",
+                  {attack} AS "attackShips", {defend} AS "defendShips"
+             FROM "rmrBattleReports" b
+            ORDER BY b."startedAt" DESC LIMIT 40"#,
+        started = ms(r#"b."startedAt""#),
+        ended = ms(r#"b."endedAt""#),
+        attack = side_ships("attackAlliances"),
+        defend = side_ships("defendAlliances"),
+    );
+    let mut list = rows(&server.db.query(&sql, &[&now]).await?);
+    if let Json::Array(items) = &mut list {
+        for item in items.iter_mut() {
+            for key in ["attackShips", "defendShips"] {
+                let parsed = item[key].as_str().and_then(|t| serde_json::from_str::<Json>(t).ok()).unwrap_or(Json::Array(Vec::new()));
+                item[key] = parsed;
+            }
+        }
+    }
+    Ok(list)
 }
 
 /// What the bot alliances did in null-sec lately, newest first.

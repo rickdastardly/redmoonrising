@@ -714,6 +714,11 @@ pub fn warp_fx(tick: i64, ship_id: i64, start: bool) -> Value {
     special_fx_state(tick, ship_id, None, "effects.Warping", start, start)
 }
 
+/// A lasting effect switched on (`on`) or off, such as siege mode.
+pub fn special_fx_active(tick: i64, ship_id: i64, target_id: Option<i64>, guid: &str, on: bool) -> Value {
+    special_fx_state(tick, ship_id, target_id, guid, on, on)
+}
+
 fn special_fx_state(tick: i64, ship_id: i64, target_id: Option<i64>, guid: &str, start: bool, active: bool) -> Value {
     entry(
         tick,

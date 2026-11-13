@@ -913,3 +913,28 @@ body {
 .guide-body li { margin: 1px 0; }
 .guide-boss { color: var(--amber); font-size: 11px; margin-left: 6px; }
 .guide-gate { color: var(--dim); font-style: italic; }
+
+/* ---- battle reports (killboard) ---- */
+.battle-reports { display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px; }
+.battle { border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(0, 0, 0, 0.25); }
+.battle > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; padding: 8px 10px; cursor: pointer; list-style: none; }
+.battle > summary::-webkit-details-marker { display: none; }
+.battle > summary:hover { background: rgba(255, 255, 255, 0.05); }
+.battle[open] > summary { border-bottom: 1px solid rgba(255, 255, 255, 0.1); }
+.battle-live { color: #fff; background: #b3261e; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; padding: 1px 5px; animation: battle-pulse 1.6s ease-in-out infinite; }
+.battle-done:empty { display: none; }
+@keyframes battle-pulse { 50% { opacity: 0.55; } }
+.battle-where { opacity: 0.65; }
+.battle-who { flex: 1 1 auto; }
+.battle-cost { opacity: 0.8; font-variant-numeric: tabular-nums; }
+.battle-status { font-weight: 600; }
+.battle > .zkb-sub { padding: 6px 10px 0; margin: 0; }
+.battle-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 10px; }
+.battle-side { border-top: 3px solid rgba(255, 255, 255, 0.2); padding-top: 6px; min-width: 0; }
+.battle-side.won { border-top-color: #3a9b5c; }
+.battle-side.lost { border-top-color: #b3261e; }
+.battle-side h4 { margin: 0 0 4px; }
+.battle-ships li { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.battle-count { font-variant-numeric: tabular-nums; opacity: 0.85; }
+.battle-outcome { padding: 0 10px 10px; margin: 0; font-style: italic; opacity: 0.85; }
+@media (max-width: 720px) { .battle-sides { grid-template-columns: 1fr; } }

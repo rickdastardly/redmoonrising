@@ -3061,6 +3061,165 @@ def _rmr_report(message):
         sys.exc_clear()
 
 
+# ---- trace: what the market and reprocessing windows do ----------------------
+# The sell window can come up empty and Reprocess can do nothing, with no
+# error anywhere the server sees. These report, to the server log ("client
+# hook: trace"), every error inside them, anything that waits more than
+# eight seconds, and (for the windows and the reprocessing service) each step
+# they take.
+
+_rmr_trace_open = {}
+_rmr_trace_seen = {}
+_rmr_trace_next = [0]
+_rmr_trace_sent = [0, 0]
+
+
+def _rmr_trace_send(message):
+    now = blue.os.GetTime()
+    window = _rmr_trace_sent
+    if now - window[0] > 60 * 10000000L:
+        window[0] = now
+        window[1] = 0
+    window[1] += 1
+    if window[1] > 300:
+        return
+    _rmr_log(message)
+
+    def send():
+        try:
+            eve.RemoteSvc('factory').RmrReport(str(message)[:2000])
+        except:
+            sys.exc_clear()
+    uthread.new(send)
+
+
+def _rmr_trace_once(key, message, seconds):
+    now = blue.os.GetTime()
+    last = _rmr_trace_seen.get(key)
+    if last is not None and now - last < seconds * 10000000L:
+        return
+    _rmr_trace_seen[key] = now
+    _rmr_trace_send(message)
+
+
+def _rmr_trace_short(value):
+    try:
+        text = repr(value)
+    except:
+        sys.exc_clear()
+        text = '?'
+    if len(text) > 80:
+        text = text[:77] + '...'
+    return text
+
+
+def _rmr_trace_wrap(cls, label, name, original, steps):
+    full = label + '.' + name
+
+    def traced(self, *args, **kwargs):
+        _rmr_trace_next[0] += 1
+        token = _rmr_trace_next[0]
+        _rmr_trace_open[token] = [full, blue.os.GetTime(), 0]
+        if steps:
+            _rmr_trace_once('s:' + full, 'trace: %s(%s)' % (full, ', '.join([_rmr_trace_short(a) for a in args[:4]])), 2)
+        try:
+            try:
+                return original(self, *args, **kwargs)
+            except:
+                kind, value, tb = sys.exc_info()
+                try:
+                    text = ''.join(traceback.format_exception(kind, value, tb))
+                    _rmr_trace_once('x:%s:%s' % (full, kind), 'trace: %s raised %s: %s\n%s' % (full, getattr(kind, '__name__', kind), value, text[-1600:]), 30)
+                except:
+                    sys.exc_clear()
+                raise kind, value, tb
+        finally:
+            _rmr_trace_open.pop(token, None)
+    traced._rmr_traced = True
+    setattr(cls, name, traced)
+
+
+def _rmr_trace_class(cls, label, steps):
+    if cls.__dict__.get('_rmr_trace_class', False):
+        return 0
+    count = 0
+    for name, value in cls.__dict__.items():
+        if name.startswith('__') or not isinstance(value, types.FunctionType):
+            continue
+        if getattr(value, '_rmr_traced', False):
+            continue
+        try:
+            _rmr_trace_wrap(cls, label, name, value, steps)
+            count += 1
+        except:
+            sys.exc_clear()
+    try:
+        cls._rmr_trace_class = True
+    except:
+        sys.exc_clear()
+    return count
+
+
+def _rmr_trace_scan():
+    found = []
+    words = ('market', 'reprocess', 'quote', 'sell', 'refin')
+    services = getattr(sm, 'services', None) or {}
+    for name in services.keys():
+        lower = str(name).lower()
+        if [w for w in words if w in lower]:
+            try:
+                cls = services[name].__class__
+                # The quote service is asked for prices all the time: only its
+                # errors and waits are reported, not every call.
+                n = _rmr_trace_class(cls, str(name), lower != 'marketquote')
+                if n:
+                    found.append('%s (%d)' % (name, n))
+            except:
+                sys.exc_clear()
+    try:
+        forms = form
+        if forms is not None:
+            for name in dir(forms):
+                lower = name.lower()
+                if not [w for w in words if w in lower]:
+                    continue
+                cls = getattr(forms, name, None)
+                if not isinstance(cls, (type, types.ClassType)):
+                    continue
+                n = _rmr_trace_class(cls, 'form.' + name, True)
+                if n:
+                    found.append('form.%s (%d)' % (name, n))
+    except:
+        sys.exc_clear()
+    return found
+
+
+def _rmr_trace_watch():
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    blue.pyos.synchro.Sleep(5000)
+    ticks = 0
+    while True:
+        if ticks % 3 == 0:
+            try:
+                found = _rmr_trace_scan()
+                if found:
+                    _rmr_trace_send('trace: watching ' + ', '.join(found))
+            except:
+                _rmr_log('Trace scan failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+                sys.exc_clear()
+        ticks += 1
+        now = blue.os.GetTime()
+        for token, entry in _rmr_trace_open.items():
+            if not entry[2] and now - entry[1] > 8 * 10000000L:
+                entry[2] = 1
+                _rmr_trace_once('w:' + entry[0], 'trace: %s has waited %d s and not finished' % (entry[0], (now - entry[1]) / 10000000L), 60)
+        blue.pyos.synchro.Sleep(4000)
+
+
+uthread.new(_rmr_trace_watch)
+
+
 class _RmrQuietFlag:
     # Off when tested, and does nothing if called.
     def __call__(self, *args, **kwargs):

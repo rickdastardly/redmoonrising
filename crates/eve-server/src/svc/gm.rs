@@ -48,7 +48,7 @@ const ATTR_SKILL_LEVEL: i32 = 280;
 const REF_GM: i32 = 25;
 const OWNER_SYSTEM: i64 = 1;
 
-const HELP: &str = "/create <type> [qty], /gmships, /giveisk <amount>, /giveskill <skill> [level], /giveallskills, /setstanding <ownerID> <standing>, /maxstandings, /clearspace, /spawn, /moveme [hub], /outpostmats [platformID], /rushanchor [structureID], /tr me <place or pilot>, /bots on|off|status|event <kind>|war <a> | <b>|density <region> <x>|follow <name>";
+const HELP: &str = "/create <type> [qty], /gmships, /giveisk <amount>, /giveskill <skill> [level], /giveallskills, /setstanding <ownerID> <standing>, /maxstandings, /clearspace, /spawn, /moveme [hub], /outpostmats [platformID], /rushanchor [structureID], /tr me <place or pilot>, /bots on|off|status|event <kind>|war <a> | <b>|density <region> <x>|follow <name>|battle [here|system] [skirmish|battle|decisive]";
 
 const JOVE_RACE: i32 = 16;
 // Jove Frigate, Jove Cruiser, Jove Industrial, Jove Battleship and Polaris.
@@ -128,6 +128,18 @@ pub async fn slash(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
                 Ok("The bots are paused.".into())
             }
             Some("status") | None => Ok(crate::bots::status()),
+            // `/bots battle here`: the system the GM is in.
+            Some("battle") if rest.get(1).is_some_and(|w| w.eq_ignore_ascii_case("here")) => {
+                match ctx.session.solar_system_id2.or(ctx.session.solar_system_id) {
+                    Some(system) => {
+                        let system = system.to_string();
+                        let mut words: Vec<&str> = rest.to_vec();
+                        words[1] = system.as_str();
+                        crate::bots::request(&words)
+                    }
+                    None => Err("You are not in a solar system.".into()),
+                }
+            }
             Some(_) => crate::bots::request(&rest),
         },
         other => Err(format!("Unknown command /{other}. {HELP}")),

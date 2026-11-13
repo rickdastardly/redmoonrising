@@ -21,13 +21,15 @@
 //! fifth of what it brought, and outnumbered two to one, withdraws. A fight
 //! still going after `MAX_FIGHT` goes to whoever has more ships left.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use tokio_postgres::Client;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::behaviour::{self, Activity, Atlas, Bot};
+use super::capitals::{self, Assigned, Class};
+use crate::ballpark::{BattleOrder, Vec3};
 use super::politics::Politics;
 use super::presence::{Identity, Presence, Rally};
 use super::sov::{self, News, Siege};
@@ -56,6 +58,30 @@ const REINFORCE: Duration = Duration::from_secs(8);
 /// Allies at war with the other side who may join each side.
 const ALLIES_MAX: usize = 3;
 const ALLY_CHANCE: f64 = 0.5;
+/// How often, fought where players see it, the capitals act: sieged
+/// dreadnoughts fire on the tower, logistics repair, titans look to fire.
+const ORDERS_EVERY: Duration = Duration::from_secs(5);
+/// How often a fight players see says, in the server log, what its capitals
+/// are doing.
+const ORDERS_LOG_EVERY: Duration = Duration::from_secs(30);
+/// A sieged dreadnought's damage to a tower in that time.
+const BOMBARD_VOLLEY: f64 = 9_000.0;
+/// A logistics ship's repair in that time.
+const REPAIR_CYCLE: f64 = 700.0;
+/// A titan's doomsday recharges this long.
+const DOOMSDAY_EVERY: Duration = Duration::from_secs(600);
+/// A titan fires its first doomsday this long into the fight.
+const DOOMSDAY_FIRST: Duration = Duration::from_secs(90);
+/// Fought unseen, a doomsday takes this share of the enemy's subcapitals,
+/// and at most this many.
+const DOOMSDAY_SHARE: f64 = 0.05;
+const DOOMSDAY_MOST: usize = 60;
+/// With no cyno ship on the grid this long, any ship of the side lights one.
+const CYNO_WAIT: Duration = Duration::from_secs(45);
+/// Cynosural Field I, the beacon capitals jump to.
+const TYPE_CYNO_FIELD: i64 = 21094;
+/// How often the battle report is brought up to date.
+const REPORT_EVERY: Duration = Duration::from_secs(60);
 
 /// How much of themselves the sides commit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +115,16 @@ impl Stakes {
         lo + rng.unit() * (hi - lo)
     }
 
+    /// "skirmish", "battle" or "decisive".
+    pub fn parse(word: &str) -> Option<Stakes> {
+        match word.trim().to_ascii_lowercase().as_str() {
+            "skirmish" => Some(Stakes::Skirmish),
+            "battle" => Some(Stakes::Battle),
+            "decisive" => Some(Stakes::Decisive),
+            _ => None,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Stakes::Skirmish => "skirmish",
@@ -96,6 +132,15 @@ impl Stakes {
             Stakes::Decisive => "decisive battle",
         }
     }
+}
+
+/// What a seen fight's capitals did lately, for the server log.
+#[derive(Default)]
+struct Tally {
+    bombard: u32,
+    repairs: u32,
+    doomsdays: u32,
+    sieged: u32,
 }
 
 /// One side of a battle.
@@ -115,12 +160,91 @@ pub struct Side {
     /// How well it fights (a rich alliance's ships are better fitted).
     quality: f64,
     pub withdrew: bool,
+    /// Pilots flying capitals, logistics and cyno ships for this battle.
+    pub caps: Vec<Assigned>,
+    /// Capitals waiting for a cynosural field to jump to.
+    waiting: Vec<u32>,
+    /// Its cynosural field, once lit: the field and where it is.
+    cyno: Option<(i64, Vec3)>,
+    /// Since when its capitals have waited for a cyno.
+    waiting_since: Option<Instant>,
+    /// Dreadnoughts in siege mode.
+    sieged: HashSet<u32>,
+    /// When each titan last fired its doomsday.
+    doomsday: HashMap<u32, Instant>,
+    /// Capitals (and logistics) lost, by class.
+    pub caps_lost: HashMap<Class, u32>,
 }
 
 impl Side {
     /// Ships it has left, on the grid and to come.
     pub fn left(&self) -> u32 {
-        (self.on_grid.len() + self.reserve.len()) as u32
+        (self.on_grid.len() + self.reserve.len() + self.waiting.len()) as u32
+    }
+
+    fn new(alliances: Vec<i32>, reserve: Vec<u32>, brought: u32, quality: f64) -> Side {
+        Side {
+            alliances,
+            ally_names: Vec::new(),
+            on_grid: Vec::new(),
+            reserve,
+            brought,
+            lost: 0,
+            owed: 0.0,
+            quality,
+            withdrew: false,
+            caps: Vec::new(),
+            waiting: Vec::new(),
+            cyno: None,
+            waiting_since: None,
+            sieged: HashSet::new(),
+            doomsday: HashMap::new(),
+            caps_lost: HashMap::new(),
+        }
+    }
+
+    /// What a pilot flies for this battle, if it is special.
+    fn assigned(&self, i: u32) -> Option<Assigned> {
+        self.caps.iter().find(|a| a.bot == i).copied()
+    }
+
+    /// Still in the fight: on the grid, to come, or waiting for a cyno.
+    fn has(&self, i: u32) -> bool {
+        self.on_grid.contains(&i) || self.reserve.contains(&i) || self.waiting.contains(&i)
+    }
+
+    /// The side's strength fought unseen: capitals count for many ships.
+    fn strength(&self) -> f64 {
+        let extra: f64 = self.caps.iter().filter(|a| self.has(a.bot)).map(|a| a.class.weight() - 1.0).sum();
+        self.left() as f64 + extra
+    }
+
+    /// How much its logistics cut its losses fought unseen.
+    fn repairs(&self) -> f64 {
+        let logi = self.caps.iter().filter(|a| a.class == Class::Logistics && self.has(a.bot)).count() as f64;
+        (logi / self.left().max(1) as f64 * 3.0).min(0.35)
+    }
+
+    /// What its capitals were: "2 titans, 14 dreadnoughts".
+    pub fn capitals(&self) -> String {
+        let counts: Vec<(Class, usize)> = capitals::CLASSES.iter().map(|c| (*c, self.caps.iter().filter(|a| a.class == *c).count())).collect();
+        capitals::describe(&counts)
+    }
+
+    /// Capitals lost, the same way.
+    pub fn capitals_lost(&self) -> String {
+        let counts: Vec<(Class, usize)> = capitals::CLASSES.iter().map(|c| (*c, self.caps_lost.get(c).copied().unwrap_or(0) as usize)).collect();
+        capitals::describe(&counts)
+    }
+
+    /// A pilot of this side lost its ship: counted, and a capital pilot
+    /// goes back to its own hull (the killmail has the capital).
+    fn lost_ship(&mut self, i: u32, bots: &mut [Bot]) {
+        self.lost += 1;
+        if let Some(a) = self.assigned(i) {
+            *self.caps_lost.entry(a.class).or_insert(0) += 1;
+            capitals::restore(bots, &a);
+        }
     }
 }
 
@@ -137,6 +261,16 @@ pub struct Fight {
     /// When the last defender fell, and the bombardment began.
     cleared: Option<Instant>,
     rallies: Option<(Rally, Rally)>,
+    /// Its battle report on the dashboard's killboard.
+    report_id: Option<i64>,
+    last_report: Instant,
+    /// When the capitals last acted, and last said so in the log.
+    last_order: Instant,
+    last_order_log: Instant,
+    /// What the capitals did since the last log line.
+    tally: Tally,
+    /// When it was first fought where players see it.
+    seen_since: Option<Instant>,
 }
 
 impl Fight {
@@ -219,6 +353,10 @@ pub async fn run(
                 for a in side.alliances.iter().skip(1) {
                     side.ally_names.push(sov::alliance_name(db, *a).await);
                 }
+                // The capitals, logistics and cyno ships it brings, and who flies them.
+                let plan = capitals::plan(side.brought, f.stakes, side.quality, s.showcase.is_some(), rng);
+                let yard = presence.yard.clone();
+                side.caps = capitals::assign(&side.reserve, bots, &plan, |hull| yard.as_ref().map_or(4, |y| y.race_of(hull)));
             }
             let allies = |side: &Side| if side.ally_names.is_empty() { String::new() } else { format!(" with {}", side.ally_names.join(", ")) };
             let now = crate::bulkdata::filetime_now();
@@ -236,7 +374,17 @@ pub async fn run(
                     allies(&f.defend)
                 ),
             ));
-            info!("bots: {} in {}: {} against {}", f.stakes.label(), s.names.system, f.attack.brought, f.defend.brought);
+            for (side, who) in [(&f.attack, &s.names.attacker), (&f.defend, &s.names.defender)] {
+                let caps = side.capitals();
+                if !caps.is_empty() {
+                    report.news.push((now, format!("{who} bring {caps} to {}", s.names.system)));
+                }
+            }
+            info!("bots: {} in {}: {} ({}) against {} ({})", f.stakes.label(), s.names.system, f.attack.brought, f.attack.capitals(), f.defend.brought, f.defend.capitals());
+            match report_start(db, &s, &f).await {
+                Ok(id) => f.report_id = Some(id),
+                Err(e) => tracing::error!("bots: starting a battle report: {}", crate::logging::chain(&e)),
+            }
             s.fight = Some(f);
         }
         let seen = seen_in(world, presence, s.system);
@@ -245,24 +393,48 @@ pub async fn run(
             if seen && !f.seen {
                 f.seen = muster(&s.system, s.defender, world, f, bots, presence, rng, clock, &mut report);
             } else if !seen && f.seen {
-                stand_down(f, bots, atlas, presence, rng, &mut report);
+                stand_down(f, s.system, world, bots, atlas, presence, rng, &mut report);
             }
             if f.seen {
                 seen_systems.insert(s.system);
-                fight_seen(f, &s.system, bots, presence, clock, &mut report)
+                fight_seen(f, &s.system, world, bots, presence, clock, &mut report)
             } else {
                 fight_unseen(f, s.system, atlas, bots, p, rng, &mut report)
             }
         };
+        if verdict.is_none() {
+            let f = s.fight.as_mut().expect("a fight under way");
+            if f.last_report.elapsed() >= REPORT_EVERY {
+                f.last_report = Instant::now();
+                if let Some(id) = f.report_id {
+                    if let Err(e) = report_update(db, id, f, None).await {
+                        tracing::error!("bots: updating battle report {id}: {}", crate::logging::chain(&e));
+                    }
+                }
+            }
+        }
         let Some(won) = verdict else {
             kept.push(s);
             continue;
         };
-        let f = s.fight.take().expect("a fight under way");
+        let mut f = s.fight.take().expect("a fight under way");
         let lost = (f.attack.lost, f.defend.lost);
         let mut news = sov::conclude(db, p, &s, won, lost, rng, claim_delay_secs, speed).await?;
         news.1 = format!("{} ({} ships lost: {} of {}'s side, {} of {}'s)", news.1, lost.0 + lost.1, lost.0, s.names.attacker, lost.1, s.names.defender);
+        if let Some(id) = f.report_id {
+            if let Err(e) = report_update(db, id, &f, Some((&news.1, won))).await {
+                tracing::error!("bots: closing battle report {id}: {}", crate::logging::chain(&e));
+            }
+        }
         report.news.push(news);
+        // The cynos go out, and the capitals' pilots go back to their own ships.
+        for side in [&mut f.attack, &mut f.defend] {
+            put_out_cyno(side, s.system, world);
+            for a in side.caps.clone() {
+                capitals::restore(bots, &a);
+                report.touched.push(a.bot);
+            }
+        }
         sov::show_towers(db, world, s.system).await;
         for i in f.on_grid().collect::<Vec<_>>() {
             presence.dismiss(i);
@@ -279,6 +451,22 @@ pub async fn run(
     Ok(report)
 }
 
+/// Every pilot flying something special in a battle under way goes back to
+/// the ship it had before (at shutdown: battles are not saved). Returns them.
+pub fn restore_pilots(sieges: &mut [Siege], bots: &mut [Bot]) -> Vec<u32> {
+    let mut out = Vec::new();
+    for s in sieges.iter_mut() {
+        let Some(f) = s.fight.as_mut() else { continue };
+        for side in [&mut f.attack, &mut f.defend] {
+            for a in std::mem::take(&mut side.caps) {
+                capitals::restore(bots, &a);
+                out.push(a.bot);
+            }
+        }
+    }
+    out
+}
+
 fn capitalise(s: &str) -> String {
     let mut c = s.chars();
     c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
@@ -288,7 +476,7 @@ fn capitalise(s: &str) -> String {
 /// many ships they commit. None if a side has nobody to send.
 fn assemble(s: &Siege, bots: &[Bot], ids: &[Identity], presence: &Presence, p: &Politics, rng: &mut Rng, report: &mut Report) -> Option<Fight> {
     let _ = report;
-    let stakes = Stakes::roll(rng);
+    let stakes = s.showcase.unwrap_or_else(|| Stakes::roll(rng));
     let wealth = |side: i32| 1.0 + (p.treasury.get(&side).copied().unwrap_or(0.0) / 5_000_000_000.0).clamp(0.0, 1.0);
     // Allies: others at war with the enemy, some of whom come.
     let allies_of = |me: i32, enemy: i32, rng: &mut Rng| -> Vec<i32> {
@@ -324,12 +512,28 @@ fn assemble(s: &Siege, bots: &[Bot], ids: &[Identity], presence: &Presence, p: &
         // The nearest come; the reserve is kept nearest last, to call up in turn.
         fit.sort_by_key(|i| std::cmp::Reverse(nearness(&bots[*i as usize], s.system)));
         let reserve = fit.split_off(fit.len() - brought as usize);
-        Some(Side { alliances, ally_names: Vec::new(), on_grid: Vec::new(), reserve, brought, lost: 0, owed: 0.0, quality: wealth(main), withdrew: false })
+        Some(Side::new(alliances, reserve, brought, wealth(main)))
     };
     let attack = side(s.attacker, &attack_allies, false, rng)?;
     let defend = side(s.defender, &defend_allies, true, rng)?;
     let now = Instant::now();
-    Some(Fight { stakes, attack, defend, seen: false, began: now, last: now, last_wave: now - REINFORCE, cleared: None, rallies: None })
+    Some(Fight {
+        stakes,
+        attack,
+        defend,
+        seen: false,
+        began: now,
+        last: now,
+        last_wave: now - REINFORCE,
+        cleared: None,
+        rallies: None,
+        report_id: None,
+        last_report: now,
+        last_order: now,
+        last_order_log: now,
+        tally: Tally::default(),
+        seen_since: None,
+    })
 }
 
 /// The fight comes into view: rally points round the defender's tower. False
@@ -350,12 +554,16 @@ fn muster(system: &i32, defender: i32, world: &World, f: &mut Fight, bots: &mut 
     let attack = Rally { anchor: tower, point: at + dir * (field + ATTACKERS_IN), orbit: field + ATTACKERS_ORBIT, target: None };
     f.rallies = Some((attack, defend));
     f.last_wave = Instant::now() - REINFORCE;
-    reinforce(f, *system, bots, presence, clock, report);
+    f.seen_since.get_or_insert_with(Instant::now);
+    reinforce(f, *system, world, bots, presence, clock, report);
     true
 }
 
-/// Both sides' reserves warp in, as far as the grid has room.
-fn reinforce(f: &mut Fight, system: i32, bots: &mut [Bot], presence: &mut Presence, clock: u32, report: &mut Report) {
+/// Both sides' reserves warp in, as far as the grid has room. A side's
+/// capitals wait for a cynosural field and jump to it; with a titan on the
+/// grid, the rest of its fleet comes through the titan's bridge.
+#[allow(clippy::too_many_arguments)]
+fn reinforce(f: &mut Fight, system: i32, world: &World, bots: &mut [Bot], presence: &mut Presence, clock: u32, report: &mut Report) {
     if f.last_wave.elapsed() < REINFORCE {
         return;
     }
@@ -366,22 +574,164 @@ fn reinforce(f: &mut Fight, system: i32, bots: &mut [Bot], presence: &mut Presen
         if side.withdrew {
             continue;
         }
+        let bridge = titan_on_grid(side, system, world, presence);
+        let mut bridged = 0;
         while side.on_grid.len() < room {
             let Some(i) = side.reserve.pop() else { break };
             if bots[i as usize].pod.is_some() || bots[i as usize].activity == Activity::Sieging {
                 continue;
             }
+            if side.assigned(i).is_some_and(|a| a.class.jumps()) {
+                side.waiting.push(i);
+                continue;
+            }
             enlist(bots, presence, i, system, rally, clock);
+            if let Some((titan, at)) = bridge {
+                presence.jump_in(i, at + scatter(i, 8_000.0), titan);
+                bridged += 1;
+            }
             side.on_grid.push(i);
             report.touched.push(i);
+        }
+        if let (Some((titan, _)), true) = (bridge, bridged > 0) {
+            info!("bots: titan {titan} bridged {bridged} ship(s) of alliance {} into {system}", side.alliances[0]);
+            let w = world.lock();
+            let tick = w.parks.get(&(system as i64)).map_or(0, |p| p.tick);
+            crate::svc::space::broadcast(&w, system as i64, None, vec![crate::svc::space::special_fx(tick, titan, None, "effects.JumpPortal")]);
+        }
+        // Capitals jump to the side's cyno, once it is lit.
+        if side.waiting.is_empty() {
+            continue;
+        }
+        if side.cyno.is_none() {
+            light_cyno(side, system, world, presence);
+        }
+        let Some((beacon, at)) = side.cyno else { continue };
+        let mut jumped: Vec<&'static str> = Vec::new();
+        while side.on_grid.len() < room {
+            let Some(i) = side.waiting.pop() else { break };
+            if bots[i as usize].pod.is_some() || bots[i as usize].activity == Activity::Sieging {
+                continue;
+            }
+            enlist(bots, presence, i, system, rally, clock);
+            presence.jump_in(i, at + scatter(i, 10_000.0), beacon);
+            side.on_grid.push(i);
+            report.touched.push(i);
+            jumped.push(side.assigned(i).map_or("ship", |a| a.class.name(1)));
+        }
+        if !jumped.is_empty() {
+            let mut counts: HashMap<&str, usize> = HashMap::new();
+            for c in &jumped {
+                *counts.entry(c).or_default() += 1;
+            }
+            let mut said: Vec<String> = counts.iter().map(|(c, n)| format!("{n} {c}")).collect();
+            said.sort();
+            info!("bots: {} jumped to cynosural field {beacon} in {system} (alliance {}; {} still waiting)", said.join(", "), side.alliances[0], side.waiting.len());
         }
     }
 }
 
+/// A point within `spread` of nowhere in particular, the same for the same bot.
+fn scatter(i: u32, spread: f64) -> Vec3 {
+    let mut rng = Rng::seeded(u64::from(i).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    let v = rng.in_sphere(1.0);
+    if v.len() > 1e-6 { v.unit() * (spread * (0.3 + 0.7 * rng.unit())) } else { Vec3::new(spread, 0.0, 0.0) }
+}
+
+/// The side's titan on the grid, out of warp: its ship and where it is.
+fn titan_on_grid(side: &Side, system: i32, world: &World, presence: &Presence) -> Option<(i64, Vec3)> {
+    let w = world.lock();
+    let park = w.parks.get(&(system as i64))?;
+    let titan = side
+        .caps
+        .iter()
+        .filter(|a| a.class == Class::Titan && side.on_grid.contains(&a.bot))
+        .filter_map(|a| presence.shown_at(a.bot))
+        .filter_map(|(_, ship)| park.ships.get(&ship))
+        .find(|s| !s.warping())
+        .map(|s| (s.id, s.pos));
+    titan
+}
+
+/// A cyno ship of the side on the grid lights a cynosural field: a beacon
+/// the capitals jump to. With none there for a while, any of its ships does.
+fn light_cyno(side: &mut Side, system: i32, world: &World, presence: &Presence) {
+    let since = *side.waiting_since.get_or_insert_with(Instant::now);
+    let mut w = world.lock();
+    let Some(park) = w.parks.get_mut(&(system as i64)) else { return };
+    let cyno_pilots: Vec<u32> = side.caps.iter().filter(|a| a.class == Class::Cyno).map(|a| a.bot).collect();
+    let anyone = since.elapsed() >= CYNO_WAIT;
+    let lighter = side
+        .on_grid
+        .iter()
+        .filter(|i| anyone || cyno_pilots.contains(i))
+        .filter_map(|i| presence.shown_at(*i))
+        .filter_map(|(_, ship)| park.ships.get(&ship))
+        .find(|s| !s.warping())
+        .map(|s| (s.id, s.pos));
+    let Some((ship, at)) = lighter else {
+        // Said once a minute while the capitals wait for want of a cyno.
+        let waited = since.elapsed().as_secs();
+        if waited >= CYNO_WAIT.as_secs() && waited % 60 < 2 {
+            warn!(
+                "bots: alliance {}'s {} capital(s) have waited {waited}s in {system}: no ship of theirs on the grid to light a cyno ({} on grid, {} cyno pilot(s))",
+                side.alliances[0],
+                side.waiting.len(),
+                side.on_grid.len(),
+                cyno_pilots.len()
+            );
+        }
+        return;
+    };
+    let id = crate::npc::next_id();
+    let pos = at + Vec3::new(0.0, 600.0, 0.0);
+    park.sites.insert(
+        id,
+        crate::sites::Site {
+            id,
+            mission_id: 0,
+            char_id: 0,
+            name: "Cynosural Field I".into(),
+            pos,
+            rats: Vec::new(),
+            wave: 0,
+            waves: 0,
+            security: -1.0,
+            type_id: TYPE_CYNO_FIELD,
+            dungeon: None,
+            gate: None,
+            part_of: Some(id),
+            size: 0.0,
+        },
+    );
+    let entries = crate::svc::space::add_object_entries_for_nearby(park, id);
+    for (client, entry) in entries {
+        w.notify(&[client], "DoDestinyUpdate", eve_marshal::Value::Tuple(vec![eve_marshal::Value::List(vec![entry]), eve_marshal::Value::Int(0)]));
+    }
+    let by = if cyno_pilots.iter().any(|i| presence.shown_at(*i).is_some_and(|(_, s)| s == ship)) { "cyno ship" } else { "ship (no cyno ship came)" };
+    info!("bots: {by} {ship} of alliance {} lit cynosural field {id} in {system} after {:.0}s; {} capital(s) waiting", side.alliances[0], since.elapsed().as_secs_f64(), side.waiting.len());
+    side.cyno = Some((id, pos));
+}
+
+/// The side's cynosural field goes out.
+fn put_out_cyno(side: &mut Side, system: i32, world: &World) {
+    let Some((id, _)) = side.cyno.take() else { return };
+    side.waiting_since = None;
+    let mut w = world.lock();
+    let Some(park) = w.parks.get_mut(&(system as i64)) else { return };
+    let gone = crate::sites::close_site(park, id);
+    crate::svc::space::broadcast(&w, system as i64, None, gone);
+}
+
 /// The fight goes out of view: the ships on the grid go back to the
 /// reserves, to fight on unseen.
-fn stand_down(f: &mut Fight, bots: &mut [Bot], atlas: &Atlas, presence: &mut Presence, rng: &mut Rng, report: &mut Report) {
+#[allow(clippy::too_many_arguments)]
+fn stand_down(f: &mut Fight, system: i32, world: &World, bots: &mut [Bot], atlas: &Atlas, presence: &mut Presence, rng: &mut Rng, report: &mut Report) {
     for side in [&mut f.attack, &mut f.defend] {
+        put_out_cyno(side, system, world);
+        side.sieged.clear();
+        let waiting = std::mem::take(&mut side.waiting);
+        side.reserve.extend(waiting);
         for i in std::mem::take(&mut side.on_grid) {
             presence.dismiss(i);
             let bot = &mut bots[i as usize];
@@ -401,64 +751,243 @@ fn stand_down(f: &mut Fight, bots: &mut [Bot], atlas: &Atlas, presence: &mut Pre
 
 /// A second of a fight players can see: losses counted, reinforcements
 /// called, and the verdict once there is one (true: the attackers won).
-fn fight_seen(f: &mut Fight, system: &i32, bots: &mut [Bot], presence: &mut Presence, clock: u32, report: &mut Report) -> Option<bool> {
+#[allow(clippy::too_many_arguments)]
+fn fight_seen(f: &mut Fight, system: &i32, world: &World, bots: &mut [Bot], presence: &mut Presence, clock: u32, report: &mut Report) -> Option<bool> {
     for side in [&mut f.attack, &mut f.defend] {
-        let mut lost = 0;
+        let mut lost = Vec::new();
         side.on_grid.retain(|i| {
             let b = &bots[*i as usize];
             if b.pod.is_some() {
-                lost += 1;
+                lost.push(*i);
                 return false;
             }
             b.activity == Activity::Sieging && b.system == *system
         });
-        side.lost += lost;
+        for i in lost {
+            side.sieged.remove(&i);
+            side.lost_ship(i, bots);
+        }
     }
     rout(f);
-    reinforce(f, *system, bots, presence, clock, report);
+    reinforce(f, *system, world, bots, presence, clock, report);
+    capital_orders(f, *system, world, presence);
     verdict(f, true)
 }
 
+/// Every few seconds, where players see it: dreadnoughts go into siege and
+/// the attackers' bombard the defenders' tower, logistics repair the most
+/// hurt ship of their side, and titans fire their doomsday on the enemy.
+fn capital_orders(f: &mut Fight, system: i32, world: &World, presence: &Presence) {
+    if f.last_order.elapsed() < ORDERS_EVERY {
+        return;
+    }
+    f.last_order = Instant::now();
+    let seen_for = f.seen_since.map_or(Duration::ZERO, |t| t.elapsed());
+    let hostile_to_attack: Vec<i64> = f.defend.alliances.iter().map(|a| i64::from(*a)).collect();
+    let hostile_to_defend: Vec<i64> = f.attack.alliances.iter().map(|a| i64::from(*a)).collect();
+    let mut w = world.lock();
+    let Some(park) = w.parks.get_mut(&(system as i64)) else { return };
+    let tower = park
+        .structures
+        .values()
+        .find(|t| t.is_tower() && t.alliance_id.is_some_and(|a| hostile_to_attack.contains(&a)))
+        .map(|t| t.id);
+    let now_ms = crate::combat::now_ms();
+    let tick = park.tick;
+    let mut tally = Tally::default();
+    let mut orders = Vec::new();
+    let mut fx = Vec::new();
+    for (side, hostile, attacking) in [(&mut f.attack, &hostile_to_attack, true), (&mut f.defend, &hostile_to_defend, false)] {
+        // Its ships on the grid: (bot, ship, how hurt).
+        let ships: Vec<(u32, i64, f64)> = side
+            .on_grid
+            .iter()
+            .filter_map(|i| presence.shown_at(*i).map(|(_, ship)| (*i, ship)))
+            .filter_map(|(i, ship)| {
+                let s = park.ships.get(&ship)?;
+                let v = &s.fight.as_ref()?.vitals;
+                let hurt = (1.0 - v.shield.fraction(now_ms)) + if v.armor_max > 0.0 { v.armor_damage / v.armor_max } else { 0.0 };
+                Some((i, ship, hurt))
+            })
+            .collect();
+        for a in side.caps.clone() {
+            let Some(&(_, ship, _)) = ships.iter().find(|(i, ..)| *i == a.bot) else { continue };
+            if park.ships.get(&ship).map_or(true, |s| s.warping()) {
+                continue;
+            }
+            match a.class {
+                Class::Dreadnought => {
+                    if side.sieged.insert(a.bot) {
+                        fx.push(crate::svc::space::special_fx_active(tick, ship, None, "effects.SiegeMode", true));
+                        tally.sieged += 1;
+                        info!("bots: dreadnought {ship} of alliance {} went into siege mode in {system}", side.alliances[0]);
+                    }
+                    if let (true, Some(tower)) = (attacking, tower) {
+                        orders.push(BattleOrder::Bombard { ship, tower, damage: BOMBARD_VOLLEY });
+                        tally.bombard += 1;
+                    }
+                }
+                Class::Logistics => {
+                    let target = ships.iter().filter(|(i, s, _)| *i != a.bot && *s != ship).max_by(|x, y| x.2.total_cmp(&y.2));
+                    if let Some(&(_, to, hurt)) = target {
+                        if hurt > 0.05 {
+                            orders.push(BattleOrder::Repair { from: ship, to, amount: REPAIR_CYCLE, shield: Class::shield_logistics(a.race) });
+                            tally.repairs += 1;
+                        }
+                    }
+                }
+                Class::Titan => {
+                    let ready = match side.doomsday.get(&a.bot) {
+                        Some(t) => t.elapsed() >= DOOMSDAY_EVERY,
+                        None => seen_for >= DOOMSDAY_FIRST,
+                    };
+                    if ready {
+                        side.doomsday.insert(a.bot, Instant::now());
+                        orders.push(BattleOrder::Doomsday { titan: ship, hostile: hostile.clone() });
+                        tally.doomsdays += 1;
+                    }
+                }
+                Class::Carrier | Class::Cyno => {}
+            }
+        }
+    }
+    park.battle_orders.extend(orders);
+    let tower_state = tower.and_then(|t| park.structures.get(&t)).map(|t| {
+        let v = &t.vitals;
+        let part = |damage: f64, max: f64| if max > 0.0 { 100.0 * (1.0 - damage / max) } else { 100.0 };
+        format!(
+            "tower {} at shield {:.0}%, armour {:.0}%, structure {:.0}%",
+            t.id,
+            100.0 * v.shield.fraction(now_ms),
+            part(v.armor_damage, v.armor_max),
+            part(v.hull_damage, v.hull_max)
+        )
+    });
+    if !fx.is_empty() {
+        crate::svc::space::broadcast(&w, system as i64, None, fx);
+    }
+    drop(w);
+    f.tally.sieged += tally.sieged;
+    f.tally.bombard += tally.bombard;
+    f.tally.repairs += tally.repairs;
+    f.tally.doomsdays += tally.doomsdays;
+    if f.last_order_log.elapsed() >= ORDERS_LOG_EVERY {
+        f.last_order_log = Instant::now();
+        let t = std::mem::take(&mut f.tally);
+        let on_grid = |side: &Side, class: Class| side.caps.iter().filter(|a| a.class == class && side.on_grid.contains(&a.bot)).count();
+        let dreads_attacking = on_grid(&f.attack, Class::Dreadnought);
+        info!(
+            "bots: battle in {system}: on grid {} v {} (titans {}/{}, dreads {}/{}, carriers {}/{}, logistics {}/{}); in {}s: {} bombard volley(s), {} repair cycle(s), {} doomsday(s), {} into siege; {}",
+            f.attack.on_grid.len(),
+            f.defend.on_grid.len(),
+            on_grid(&f.attack, Class::Titan),
+            on_grid(&f.defend, Class::Titan),
+            dreads_attacking,
+            on_grid(&f.defend, Class::Dreadnought),
+            on_grid(&f.attack, Class::Carrier),
+            on_grid(&f.defend, Class::Carrier),
+            on_grid(&f.attack, Class::Logistics),
+            on_grid(&f.defend, Class::Logistics),
+            ORDERS_LOG_EVERY.as_secs(),
+            t.bombard,
+            t.repairs,
+            t.doomsdays,
+            t.sieged,
+            tower_state.unwrap_or_else(|| if dreads_attacking > 0 { "no enemy tower on the grid for the dreadnoughts to bombard".into() } else { "no tower in view".into() })
+        );
+    }
+}
+
 /// A second of a fight nobody sees: each side loses ships in proportion to
-/// the other's, every one a killmail.
+/// the other's strength (capitals count for many), less what its logistics
+/// save; capitals are hard to kill; titans' doomsdays thin the enemy. Every
+/// ship lost is a killmail.
 fn fight_unseen(f: &mut Fight, system: i32, atlas: &Atlas, bots: &mut [Bot], p: &mut Politics, rng: &mut Rng, report: &mut Report) -> Option<bool> {
     let dt = f.last.elapsed().as_secs_f64().min(5.0);
     f.last = Instant::now();
-    let (a, d) = (f.attack.left() as f64, f.defend.left() as f64);
+    let (a, d) = (f.attack.strength(), f.defend.strength());
     let noise = |rng: &mut Rng| 0.7 + rng.unit() * 0.6;
     if !f.attack.withdrew && !f.defend.withdrew {
-        f.attack.owed += ATTRITION * d * f.defend.quality / f.attack.quality.max(0.1) * dt * noise(rng);
-        f.defend.owed += ATTRITION * a * f.attack.quality / f.defend.quality.max(0.1) * dt * noise(rng);
+        f.attack.owed += ATTRITION * d * f.defend.quality / f.attack.quality.max(0.1) * dt * noise(rng) * (1.0 - f.attack.repairs());
+        f.defend.owed += ATTRITION * a * f.attack.quality / f.defend.quality.max(0.1) * dt * noise(rng) * (1.0 - f.defend.repairs());
     }
-    for (victims, killers) in [(0usize, 1usize), (1, 0)] {
-        let whole = {
-            let side = if victims == 0 { &mut f.attack } else { &mut f.defend };
-            let whole = side.owed.floor() as u32;
-            side.owed -= whole as f64;
-            whole
-        };
+    for attacking in [true, false] {
+        let (victims, killers) = if attacking { (&mut f.attack, &mut f.defend) } else { (&mut f.defend, &mut f.attack) };
+        let whole = victims.owed.floor() as u32;
+        victims.owed -= whole as f64;
         for _ in 0..whole {
-            let (victim_side, killer_side) = if victims == 0 { (&mut f.attack, &f.defend) } else { (&mut f.defend, &f.attack) };
-            if victim_side.reserve.is_empty() {
+            let killer = pick_killer(killers, rng);
+            if !lose_one(victims, killer, system, atlas, bots, p, rng, report, true) {
                 break;
             }
-            let v = victim_side.reserve.swap_remove(rng.below(victim_side.reserve.len()));
-            victim_side.lost += 1;
-            let killer = if killer_side.reserve.is_empty() { killer_side.on_grid.first().copied() } else { Some(killer_side.reserve[rng.below(killer_side.reserve.len())]) };
-            if let Some(k) = killer {
-                p.unseen_kills.push((v, k, system, bots[v as usize].hull));
+        }
+        // The killers' titans fire their doomsdays.
+        if killers.withdrew || victims.withdrew {
+            continue;
+        }
+        let titans: Vec<u32> = killers.caps.iter().filter(|c| c.class == Class::Titan && killers.has(c.bot)).map(|c| c.bot).collect();
+        for t in titans {
+            let ready = match killers.doomsday.get(&t) {
+                Some(at) => at.elapsed() >= DOOMSDAY_EVERY,
+                None => f.began.elapsed() >= DOOMSDAY_FIRST,
+            };
+            if !ready {
+                continue;
             }
-            p.lost += 1;
-            let bot = &mut bots[v as usize];
-            if bot.activity != Activity::Sieging {
-                let _ = behaviour::reclone(bot, atlas, rng);
-                report.touched.push(v);
+            killers.doomsday.insert(t, Instant::now());
+            let subcaps = victims.reserve.iter().filter(|i| victims.assigned(**i).map_or(true, |a| !a.class.jumps())).count();
+            let n = ((subcaps as f64 * DOOMSDAY_SHARE).ceil() as usize).min(DOOMSDAY_MOST);
+            for _ in 0..n {
+                if !lose_one(victims, Some(t), system, atlas, bots, p, rng, report, false) {
+                    break;
+                }
             }
         }
-        let _ = killers;
     }
     rout(f);
     verdict(f, false)
+}
+
+/// Who gets the kill: one of the side's ships, a capital now and then.
+fn pick_killer(side: &Side, rng: &mut Rng) -> Option<u32> {
+    let in_fight: Vec<u32> = side.reserve.iter().chain(&side.on_grid).copied().collect();
+    if in_fight.is_empty() {
+        return None;
+    }
+    Some(in_fight[rng.below(in_fight.len())])
+}
+
+/// One ship of `side` is lost, fought unseen: a capital only now and then
+/// (`spare_capitals`), never a capital to a doomsday. False if it has none
+/// left to lose.
+#[allow(clippy::too_many_arguments)]
+fn lose_one(side: &mut Side, killer: Option<u32>, system: i32, atlas: &Atlas, bots: &mut [Bot], p: &mut Politics, rng: &mut Rng, report: &mut Report, spare_capitals: bool) -> bool {
+    let mut pool: Vec<u32> = side.reserve.iter().chain(&side.waiting).copied().collect();
+    if !spare_capitals {
+        pool.retain(|i| side.assigned(*i).map_or(true, |a| !a.class.jumps()));
+    }
+    if pool.is_empty() {
+        return false;
+    }
+    let mut v = pool[rng.below(pool.len())];
+    if let Some(a) = side.assigned(v) {
+        if rng.unit() < a.class.hard_to_kill() {
+            v = pool[rng.below(pool.len())];
+        }
+    }
+    side.reserve.retain(|i| *i != v);
+    side.waiting.retain(|i| *i != v);
+    if let Some(k) = killer {
+        p.unseen_kills.push((v, k, system, bots[v as usize].hull));
+    }
+    p.lost += 1;
+    side.lost_ship(v, bots);
+    let bot = &mut bots[v as usize];
+    if bot.activity != Activity::Sieging {
+        let _ = behaviour::reclone(bot, atlas, rng);
+        report.touched.push(v);
+    }
+    true
 }
 
 /// A side worn down to a fifth and outnumbered two to one withdraws.
@@ -526,6 +1055,70 @@ pub fn enlist(bots: &mut [Bot], presence: &mut Presence, i: u32, system: i32, ra
     let docked_here = (b.online && b.system == system && b.station != 0).then_some(b.station);
     behaviour::muster(b, system, clock);
     presence.muster(i, rally, docked_here);
+}
+
+/// Opens the battle's report on the dashboard's killboard.
+async fn report_start(db: &Client, s: &Siege, f: &Fight) -> Result<i64, tokio_postgres::Error> {
+    let ids = |side: &Side| side.alliances.clone();
+    let row = db
+        .query_one(
+            r#"INSERT INTO "rmrBattleReports"
+                   ("solarSystemID", "systemName", "regionName", "stakes",
+                    "attackerID", "attackerName", "attackerAllies", "defenderID", "defenderName", "defenderAllies",
+                    "attackAlliances", "defendAlliances", "startedAt", "attackBrought", "defendBrought",
+                    "attackCapitals", "defendCapitals")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+               RETURNING "battleID""#,
+            &[
+                &s.system,
+                &s.names.system,
+                &s.names.region,
+                &f.stakes.label(),
+                &s.attacker,
+                &s.names.attacker,
+                &f.attack.ally_names.join(", "),
+                &s.defender,
+                &s.names.defender,
+                &f.defend.ally_names.join(", "),
+                &ids(&f.attack),
+                &ids(&f.defend),
+                &crate::bulkdata::filetime_now(),
+                &(f.attack.brought as i32),
+                &(f.defend.brought as i32),
+                &f.attack.capitals(),
+                &f.defend.capitals(),
+            ],
+        )
+        .await?;
+    Ok(row.get(0))
+}
+
+/// Brings the report up to date; `ended`: how it ended, and whether the
+/// attackers won.
+async fn report_update(db: &Client, id: i64, f: &Fight, ended: Option<(&str, bool)>) -> Result<(), tokio_postgres::Error> {
+    let (outcome, won, at) = match ended {
+        Some((text, won)) => (text.to_string(), Some(won), Some(crate::bulkdata::filetime_now())),
+        None => (String::new(), None, None),
+    };
+    db.execute(
+        r#"UPDATE "rmrBattleReports"
+              SET "attackLost" = $2, "defendLost" = $3, "attackCapitalsLost" = $4, "defendCapitalsLost" = $5,
+                  "outcome" = CASE WHEN $6 = '' THEN "outcome" ELSE $6 END,
+                  "attackersWon" = COALESCE($7, "attackersWon"), "endedAt" = COALESCE($8, "endedAt")
+            WHERE "battleID" = $1"#,
+        &[
+            &id,
+            &(f.attack.lost as i32),
+            &(f.defend.lost as i32),
+            &f.attack.capitals_lost(),
+            &f.defend.capitals_lost(),
+            &outcome,
+            &won,
+            &at,
+        ],
+    )
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -626,7 +1219,7 @@ mod tests {
         // Somebody is watching, so the fleets are called up.
         presence.sync(&world, &atlas, &mut bots, &ids, &by_char, Vec::new(), &mut rng);
         let names = sov::SiegeNames { attacker: "A".into(), defender: "D".into(), system: "Here".into(), region: "R".into(), security: -0.3 };
-        let siege = Siege { war: 1, attacker: ATTACKER, defender: DEFENDER, attacker_exec: 1, attacker_race: 1, attackers: 300, defenders: 300, system: HERE, names, starts: 0, starts_at: 0, fight: None };
+        let siege = Siege { war: 1, attacker: ATTACKER, defender: DEFENDER, attacker_exec: 1, attacker_race: 1, attackers: 300, defenders: 300, system: HERE, names, starts: 0, starts_at: 0, fight: None, showcase: None };
         let politics = Politics::new(&atlas);
         let mut report = Report::default();
         let mut fight = assemble(&siege, &bots, &ids, &presence, &politics, &mut rng, &mut report).expect("both sides have armed ships");
@@ -649,7 +1242,7 @@ mod tests {
             drop(w);
             presence.sync(&world, &atlas, &mut bots, &ids, &by_char, Vec::new(), &mut rng);
             fight.cleared = fight.cleared.map(|_| Instant::now() - BOMBARD);
-            verdict = fight_seen(&mut fight, &HERE, &mut bots, &mut presence, 0, &mut report);
+            verdict = fight_seen(&mut fight, &HERE, &world, &mut bots, &mut presence, 0, &mut report);
             if verdict.is_some() {
                 break;
             }

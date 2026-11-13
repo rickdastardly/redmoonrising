@@ -6,7 +6,7 @@
 //! hangar floor, or one or two containers deep) or, in space, in its ship.
 
 use eve_marshal::Value;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::dogma::category;
 use crate::items::{self, DbResult, Item, ItemTxn, NewItem};
@@ -59,12 +59,13 @@ pub async fn container_write(ctx: &Ctx<'_>, container: Container, call: &Call) -
         v.and_then(|v| v.seq()).unwrap_or(&[]).iter().filter_map(|v| v.as_i64()).collect()
     };
     let op = match call.method.as_str() {
-        // Add(itemID, quantity=None, flag=None)
-        "Add" => Op::Add {
-            items: vec![call.arg_id(0)],
-            quantity: call.kwarg("qty").or(call.args.get(1)).and_then(|v| v.as_i64()),
-            flag: flag(2),
-        },
+        // Add(itemID, sourceID, qty=None, flag=None); older callers pass the
+        // quantity second (`add` sets aside a "quantity" that is the source).
+        "Add" => {
+            let quantity = call.kwarg("qty").or(call.kwarg("quantity")).or(call.args.get(1)).and_then(|v| v.as_i64());
+            debug!("Add {:?} args={:?} qty={:?} flag={:?}", call.arg_id(0), call.args.get(1), quantity, flag(2));
+            Op::Add { items: vec![call.arg_id(0)], quantity, flag: flag(2) }
+        }
         // MultiAdd(itemIDs, quantity, flag): always whole stacks.
         "MultiAdd" => Op::Add { items: ids(call.args.first()), quantity: None, flag: flag(2) },
         "MergeItems" => Op::Merge(vec![(call.arg_id(0), call.arg_id(1), call.arg_i64(2))]),
@@ -472,7 +473,15 @@ async fn add(
     if !reachable(ctx, txn, &item).await? {
         return refuse("That item is out of reach.");
     }
+    // The client names where the item comes from second: that is no quantity.
+    let quantity = quantity.filter(|q| *q != item.location_id && *q > 0);
     if item.location_id == dest.location && item.flag == dest.flag {
+        // Shift-dragging a stack into its own window splits it in two.
+        if let Some(q) = quantity.filter(|q| !item.singleton && *q < item.quantity) {
+            txn.set_quantity(item.id, item.quantity - q).await?;
+            txn.create(NewItem { quantity: q, singleton: false, ..new_like(&item) }).await?;
+            info!("split {} of {} ({}) off its stack", q, item.quantity, item.id);
+        }
         return Ok(());
     }
     if item.id == dest.location {

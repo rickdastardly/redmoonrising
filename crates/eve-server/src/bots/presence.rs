@@ -101,6 +101,10 @@ pub struct Presence {
     /// Fleet bots called up while docked in their fleet's system: they come
     /// out of that station, not through a gate.
     undock: HashMap<u32, i32>,
+    /// Fleet bots arriving by jump drive or titan bridge, not through a
+    /// gate: where they appear, and the cynosural field or titan they come
+    /// out at.
+    jump_in: HashMap<u32, (Vec3, i64)>,
     /// Hired wingmen, and the player each flies with (`hire`).
     escort: HashMap<u32, i64>,
     /// Bots hunting a player (`relations`): they go for them on sight.
@@ -128,6 +132,10 @@ pub struct Meet {
 
 /// How far from the meeting point bots orbit.
 const MEET_ORBIT: f64 = 8_000.0;
+/// How far off a carrier picks its fighters' targets, and how far it keeps
+/// from them.
+const CARRIER_REACH: f64 = 100_000.0;
+const CARRIER_STANDOFF: f64 = 45_000.0;
 
 /// Where a bot in a fleet goes: in by warp to `point`, then around `anchor`
 /// (the tower) at `orbit`; going for `target`, if it has one.
@@ -152,6 +160,7 @@ impl Presence {
             cap: cap.max(1),
             rally: HashMap::new(),
             undock: HashMap::new(),
+            jump_in: HashMap::new(),
             escort: HashMap::new(),
             hunts: HashMap::new(),
             raiders: HashSet::new(),
@@ -236,8 +245,16 @@ impl Presence {
         }
     }
 
+    /// A fleet bot arrives at `at` by jump drive to the cynosural field
+    /// `beacon`, or through a titan's bridge (`beacon` the titan).
+    pub fn jump_in(&mut self, i: u32, at: Vec3, beacon: i64) {
+        self.undock.remove(&i);
+        self.jump_in.insert(i, (at, beacon));
+    }
+
     /// Takes a bot out of its siege fleet.
     pub fn dismiss(&mut self, i: u32) {
+        self.jump_in.remove(&i);
         self.undock.remove(&i);
         self.rally.remove(&i);
     }
@@ -444,6 +461,11 @@ impl Presence {
                     }
                 }
                 let b = &bots[i as usize];
+                if let Some((at, beacon)) = self.jump_in.remove(&i) {
+                    // Out of a cynosural field, or a titan's bridge.
+                    self.show(&mut w, i, b, &ids[i as usize], Some(at), Some(beacon), now);
+                    continue;
+                }
                 let at = self.undock.remove(&i).and_then(|station| {
                     self.station_exit(w.parks.get_mut(&(system as i64))?, station as i64, b, &ids[i as usize])
                 });
@@ -651,7 +673,7 @@ impl Presence {
     fn station_exit(&self, park: &mut Park, station_id: i64, bot: &Bot, id: &Identity) -> Option<Vec3> {
         park.advance(crate::destiny::tick_now());
         let station = park.celestial(station_id)?;
-        let hull = if bot.pod.is_some() { TYPE_CAPSULE } else { id.hull };
+        let hull = if bot.pod.is_some() { TYPE_CAPSULE } else if bot.hull != 0 { bot.hull as i64 } else { id.hull };
         let radius = self.hulls.get(&hull).map_or(20.0, |h| h.radius.max(20.0));
         let nominal = match station.undock {
             Some((entry, orientation)) => station.pos + space::undock_exit(entry, orientation, station.radius, radius).0,
@@ -690,7 +712,8 @@ impl Presence {
         // A podded bot flies its capsule.
         let (ship_id, hull) = match bot.pod {
             Some(capsule) => (capsule, TYPE_CAPSULE),
-            None => (id.ship, id.hull),
+            // The hull it flies now: a capital it brought to a battle, say.
+            None => (id.ship, if bot.hull != 0 { bot.hull as i64 } else { id.hull }),
         };
         let Some(hull) = self.hulls.get(&hull) else { return };
         let system = bot.system as i64;
@@ -722,6 +745,13 @@ impl Presence {
                 });
                 loot.extend(fitting.into_iter().map(|(t, n)| (t as i64, n)));
                 fitted = loot.len();
+            }
+            // A carrier or mothership fights with its fighters, and carries them.
+            if let Some((fighter, n)) = super::capitals::fighters(hull.type_id) {
+                if let Some(kind) = self.hulls.get(&fighter) {
+                    drones = Some(crate::drones::BotDrones { kind: kind.clone(), count: n });
+                    loot.push((fighter, n as i64));
+                }
             }
             loot.extend(bot.hold.iter().map(|(t, n)| (*t as i64, *n)));
         }
@@ -776,6 +806,11 @@ fn steer(w: &mut WorldState, system: i64, ship: i64, command: Command) {
 /// NPC's weapons, so the guns are made to suit its class. None for hulls
 /// that carry no guns.
 pub fn arms(hull: &NpcType, ship_id: i64, pirate: bool, punch: f64) -> Option<(Vec<Active>, f64, f64)> {
+    // Carriers and motherships carry no guns: they lock a target from far
+    // off, hang back, and their fighters (`capitals::fighters`) do the work.
+    if matches!(hull.group_id, 547 | 659) {
+        return Some((Vec::new(), CARRIER_REACH, CARRIER_STANDOFF));
+    }
     // (damage per second, optimal, falloff, tracking, signature resolution, cycle ms)
     let (dps, optimal, falloff, tracking, sig, cycle) = match hull.group_id {
         // Frigates: plain, assault, covert ops, interceptors, electronic attack.
@@ -790,6 +825,11 @@ pub fn arms(hull: &NpcType, ship_id: i64, pirate: bool, punch: f64) -> Option<(V
         27 | 898 | 900 => (380.0, 35_000.0, 20_000.0, 0.03, 400.0, 8_000.0),
         // Mining barges and exhumers: a flight of light drones.
         463 | 543 => (25.0, 8_000.0, 4_000.0, 0.5, 40.0, 4_000.0),
+        // Capitals (carriers and motherships are above). Dreadnoughts: siege
+        // guns, deadly to big targets, hopeless against small ones. Titans:
+        // the heaviest guns there are.
+        485 => (2_400.0, 80_000.0, 40_000.0, 0.004, 1_000.0, 10_000.0),
+        30 => (3_200.0, 90_000.0, 40_000.0, 0.006, 1_000.0, 10_000.0),
         _ => return None,
     };
     let dps = if pirate { dps * 1.5 } else { dps } * punch;

@@ -22,6 +22,10 @@ pub enum Request {
     /// A bot, by name (or character ID).
     Follow(String),
     Unfollow(i64),
+    /// A siege fought at once (`/bots battle`): in a system (by name or ID;
+    /// none: wherever a bot alliance holds a tower), at these stakes (none:
+    /// a decisive battle). Both sides bring every kind of capital ship.
+    Battle { place: Option<String>, stakes: Option<String> },
     /// Bots (by character) answering a fight call in a system's Local: they
     /// go to `point` and stay around `anchor`, ready to fight.
     Meet { system: i32, anchor: i64, point: (f64, f64, f64), bots: Vec<i64> },
@@ -56,7 +60,20 @@ pub fn parse(words: &[&str]) -> Result<Request, String> {
         }
         Some("follow") if !rest.trim().is_empty() => Ok(Request::Follow(rest.trim().to_string())),
         Some("unfollow") => rest.trim().parse().map(Request::Unfollow).map_err(|_| "unfollow <characterID>".to_string()),
-        _ => Err("event <kind> | war <a> | <b> | density <region> <factor> | follow <name> | unfollow <id>".into()),
+        Some("battle") => {
+            let mut words: Vec<&str> = rest.split_whitespace().collect();
+            let stakes = match words.last().map(|w| w.to_ascii_lowercase()).as_deref() {
+                Some(w @ ("skirmish" | "battle" | "decisive")) => {
+                    let w = w.to_string();
+                    words.pop();
+                    Some(w)
+                }
+                _ => None,
+            };
+            let place = words.join(" ");
+            Ok(Request::Battle { place: (!place.is_empty()).then_some(place), stakes })
+        }
+        _ => Err("event <kind> | war <a> | <b> | density <region> <factor> | follow <name> | unfollow <id> | battle [system] [skirmish|battle|decisive]".into()),
     }
 }
 
