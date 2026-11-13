@@ -1,8 +1,9 @@
 @echo off
 setlocal DisableDelayedExpansion
-rem Red Moon Rising dashboard, online behind a sign-in: point a browser at this
-rem PC's address (or your public IP, with the port forwarded) and only you can
-rem get in. When the game server is down it offers to start it.
+rem Red Moon Rising dashboard, behind a sign-in, for your local network: point a
+rem browser on another device at this PC's network address and only you can get
+rem in. When the game server is down it offers to start it. It is for your own
+rem PC and local network only.
 rem Nothing is kept between runs: each start asks for the sign-in and address
 rem afresh, and closing the window forgets them.
 rem The game server's own dashboard stays on 127.0.0.1; this sits in front of it.
@@ -10,6 +11,7 @@ set "RMR_ROOT=%~dp0"
 set "RMR_SETUP="
 if /i "%~1"=="--help" goto help
 if /i "%~1"=="-h" goto help
+if /i "%~1"=="--allow-public" set "RMR_ALLOW_PUBLIC=1"
 set "RMR_PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 if exist "%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" set "RMR_PS=%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
 title Red Moon Rising dashboard
@@ -45,6 +47,18 @@ if (-not (Test-Path -LiteralPath $exe) -or (Get-FileHash -LiteralPath $exe).Hash
     try { Copy-Item -LiteralPath $built -Destination $exe -Force }
     catch { throw 'Could not update the dashboard program; is another Dashboard.bat still running? Close it and try again.' }
 }
+
+# Red Moon Rising is for your own PC and your local network: localhost, or a
+# private IPv4 address (10.x, 172.16-31.x, 192.168.x; 100.64-127.x for a
+# private VPN such as Tailscale).
+function Test-RmrPrivateIPv4([string]$Address) {
+    $ip = $null
+    if (-not [Net.IPAddress]::TryParse($Address, [ref]$ip) -or $ip.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) { return $false }
+    $b = $ip.GetAddressBytes()
+    return ($b[0] -eq 127 -or $b[0] -eq 10 -or ($b[0] -eq 172 -and $b[1] -ge 16 -and $b[1] -le 31) -or
+            ($b[0] -eq 192 -and $b[1] -eq 168) -or ($b[0] -eq 100 -and $b[1] -ge 64 -and $b[1] -le 127))
+}
+
 
 # ---- router port forwarding (UPnP) ---------------------------------------------------------------
 
@@ -144,13 +158,15 @@ $serve = [pscustomobject]@{ address = 'this-pc'; port = 18080 }
 if ($true) {
     Write-Host ''
     Write-Host 'Which address should the dashboard listen on?' -ForegroundColor Cyan
-    Write-Host '  this-pc   every network address of this PC (for your public IP, forward the port on your router)'
-    Write-Host '  or one IPv4 address of this PC, such as 192.168.1.20'
+    Write-Host '  this-pc   every local-network address of this PC'
+    Write-Host '  or one local-network IPv4 address of this PC, such as 192.168.1.20'
+    Write-Host 'The dashboard is for your own local network only.'
     Write-Host '127.0.0.1 is left to the game server''s own dashboard, so both can use port 18080.'
     $typed = (Read-Host ("Address [Enter for " + $serve.address + "]")).Trim()
     if ($typed -in @('0.0.0.0', 'all', '*')) { $typed = 'this-pc' }
     if ($typed -and $typed -ne 'this-pc') {
         if ($typed -notmatch '^\d{1,3}(\.\d{1,3}){3}$') { throw "Not an IPv4 address: $typed" }
+        if (-not (Test-RmrPrivateIPv4 $typed) -and $env:RMR_ALLOW_PUBLIC -ne '1') { throw "Use this-pc, or this PC's IPv4 address on your local network (such as 192.168.1.20). The dashboard is for your own local network only." }
         if ($typed -like '127.*') { Write-Host '127.0.0.1 belongs to the game server''s own dashboard; using every network address of this PC instead.' -ForegroundColor Yellow; $typed = 'this-pc' }
     }
     if ($typed) { $serve.address = $typed }
@@ -175,11 +191,14 @@ if ($serve.address -eq 'this-pc' -or $serve.address -eq '0.0.0.0') {
         if ($nic.OperationalStatus -ne 'Up') { continue }
         foreach ($unicast in $nic.GetIPProperties().UnicastAddresses) {
             $a = $unicast.Address
-            if ($a.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork -and -not [Net.IPAddress]::IsLoopback($a)) { $addresses += $a.ToString() }
+            if ($a.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork -and -not [Net.IPAddress]::IsLoopback($a)) {
+                # Local-network addresses only (unless the owner's --allow-public).
+                if ((Test-RmrPrivateIPv4 $a.ToString()) -or $env:RMR_ALLOW_PUBLIC -eq '1') { $addresses += $a.ToString() }
+            }
         }
     }
     $addresses = @($addresses | Select-Object -Unique)
-    if ($addresses.Count -eq 0) { throw 'This PC has no network address to serve the dashboard on.' }
+    if ($addresses.Count -eq 0) { throw 'This PC has no local-network address to serve the dashboard on.' }
 } else {
     $addresses = @($serve.address)
 }
@@ -191,9 +210,10 @@ $ruleName = 'Red Moon Rising dashboard (TCP ' + $serve.port + ')'
 try {
     if (-not (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)) {
         Write-Host ''
-        $yes = (Read-Host ('Allow other computers through Windows Firewall on port ' + $serve.port + '? This asks for administrator. [Y/n]')).Trim()
+        $yes = (Read-Host ('Allow other computers on your local network through Windows Firewall on port ' + $serve.port + '? This asks for administrator. [Y/n]')).Trim()
         if ($yes -eq '' -or $yes -match '^[Yy]') {
-            $command = "New-NetFirewallRule -DisplayName '$ruleName' -Direction Inbound -Protocol TCP -LocalPort $($serve.port) -Action Allow -Profile Any | Out-Null"
+            $profiles = if ($env:RMR_ALLOW_PUBLIC -eq '1') { 'Any' } else { 'Private,Domain' }
+            $command = "New-NetFirewallRule -DisplayName '$ruleName' -Direction Inbound -Protocol TCP -LocalPort $($serve.port) -Action Allow -Profile $profiles | Out-Null"
             Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-Command', $command) -Verb RunAs -Wait -WindowStyle Hidden
         }
     }
@@ -201,7 +221,7 @@ try {
 
 # Ask the router to forward the dashboard port for this session only.
 $forwarded = $false
-if ($serve.address -eq 'this-pc' -or $serve.address -eq '0.0.0.0') {
+if ($env:RMR_ALLOW_PUBLIC -eq '1' -and ($serve.address -eq 'this-pc' -or $serve.address -eq '0.0.0.0')) {
     $yes = (Read-Host ('Forward port ' + $serve.port + ' on your router for this session (UPnP), so it can be reached from outside? [Y/n]')).Trim()
     if ($yes -eq '' -or $yes -match '^[Yy]') {
         $forward = Set-RmrUpnpForward $serve.port 'Red Moon Rising dashboard'
@@ -215,10 +235,9 @@ if ($serve.address -eq 'this-pc' -or $serve.address -eq '0.0.0.0') {
 
 Write-Host ''
 foreach ($a in $addresses) { Write-Host ('Dashboard: http://' + $a + ':' + $serve.port + '/') -ForegroundColor Green }
-Write-Host ('From outside your network: http://<your public IP>:' + $serve.port + '/ with port ' + $serve.port + ' forwarded to this PC.')
 Write-Host ('On this PC, http://127.0.0.1:' + $serve.port + '/ is the game server''s own dashboard (no sign-in).') 
 Write-Host 'Sign in with the name and password you set. Close this window to take the dashboard offline.'
-Write-Host 'It is plain HTTP: use a strong password, and only forward this port if you need to reach it from outside.'
+Write-Host 'Open it from devices on your local network. It is plain HTTP and meant for your own network only; use a strong password.'
 Write-Host 'Closing this window forgets the sign-in; the next start asks for a new one.'
 Write-Host ''
 try {

@@ -1,7 +1,7 @@
 @echo off
 setlocal DisableDelayedExpansion
 rem Red Moon Rising launcher: pick a server, press Play. It keeps a list of
-rem servers (this PC, a friend's, a public one), shows each one's status and
+rem servers (this PC, others on your local network), shows each one's status and
 rem news, points your EVE 2.10 (build 3913) client at the chosen one and starts
 rem it. Players need only this file and their client; Start.bat runs a server.
 rem Usage: Client.bat [server-address[:port]] [--client "EVE folder"] [--no-launch]
@@ -14,6 +14,11 @@ set "RMR_NO_LAUNCH="
 if "%~1"=="" goto parsed
 if /i "%~1"=="--help" goto help
 if /i "%~1"=="-h" goto help
+if /i "%~1"=="--allow-public" (
+    set "RMR_ALLOW_PUBLIC=1"
+    shift
+    goto parse
+)
 if /i "%~1"=="--no-launch" (
     set "RMR_NO_LAUNCH=1"
     shift
@@ -3102,6 +3107,24 @@ namespace RmrClient {
 '@
 }
 
+# Red Moon Rising is for your own PC and your local network: localhost, or a
+# private IPv4 address (10.x, 172.16-31.x, 192.168.x; 100.64-127.x for a
+# private VPN such as Tailscale).
+function Test-RmrPrivateIPv4([string]$Address) {
+    $ip = $null
+    if (-not [Net.IPAddress]::TryParse($Address, [ref]$ip) -or $ip.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) { return $false }
+    $b = $ip.GetAddressBytes()
+    return ($b[0] -eq 127 -or $b[0] -eq 10 -or ($b[0] -eq 172 -and $b[1] -ge 16 -and $b[1] -le 31) -or
+            ($b[0] -eq 192 -and $b[1] -eq 168) -or ($b[0] -eq 100 -and $b[1] -ge 64 -and $b[1] -le 127))
+}
+
+# Only localhost and local-network IPv4 addresses, unless this launcher was
+# once started with --allow-public (remembered in its settings).
+function Test-RmrAllowedHost([string]$HostName) {
+    if ($HostName -eq 'localhost' -or (Test-RmrPrivateIPv4 $HostName)) { return $true }
+    return ($env:RMR_ALLOW_PUBLIC -eq '1')
+}
+
 function Split-RmrServer([string]$Text) {
     $Text = $Text.Trim()
     if (-not $Text -or $Text -in @('local', 'localhost', 'this pc')) { $Text = '127.0.0.1' }
@@ -3109,6 +3132,7 @@ function Split-RmrServer([string]$Text) {
     $m = [regex]::Match($Text, '^(.+):(\d{1,5})$')
     if ($m.Success) { $hostName = $m.Groups[1].Value; $port = [int]$m.Groups[2].Value }
     if ($hostName -notmatch '^[A-Za-z0-9.-]+$') { throw "That is not a server address: $Text" }
+    if (-not (Test-RmrAllowedHost $hostName)) { throw "Use localhost, or the server's IPv4 address on your local network (such as 192.168.1.20). Red Moon Rising is for your own PC and local network only." }
     if ($port -lt 1 -or $port -gt 65535) { throw "That port is out of range: $port" }
     return [pscustomobject]@{ Host = $hostName; Port = $port }
 }
@@ -3119,7 +3143,7 @@ function New-RmrServer([string]$Name, [string]$HostName, [int]$Port, [int]$NewsP
     return [pscustomobject]@{ name = $Name; host = $HostName; port = $Port; newsPort = $NewsPort }
 }
 
-$settings = [pscustomobject]@{ servers = @(); selected = 0; clientPath = ''; closeOnPlay = $false }
+$settings = [pscustomobject]@{ servers = @(); selected = 0; clientPath = ''; closeOnPlay = $false; allowPublic = $false }
 if (Test-Path -LiteralPath $SettingsPath) {
     try {
         $saved = Get-Content -Raw -LiteralPath $SettingsPath | ConvertFrom-Json
@@ -3139,9 +3163,12 @@ if (Test-Path -LiteralPath $SettingsPath) {
         if ($saved.PSObject.Properties['selected']) { $settings.selected = [int]$saved.selected }
         if ($saved.PSObject.Properties['clientPath']) { $settings.clientPath = [string]$saved.clientPath }
         if ($saved.PSObject.Properties['closeOnPlay']) { $settings.closeOnPlay = [bool]$saved.closeOnPlay }
+        if ($saved.PSObject.Properties['allowPublic']) { $settings.allowPublic = [bool]$saved.allowPublic }
     } catch { }
 }
 if (@($settings.servers).Count -eq 0) { $settings.servers = @(New-RmrServer 'This PC' '127.0.0.1' 26000 18080) }
+if ($env:RMR_ALLOW_PUBLIC -eq '1') { $settings.allowPublic = $true; [IO.File]::WriteAllText($SettingsPath, ($settings | ConvertTo-Json -Depth 4), $Utf8) }
+elseif ($settings.allowPublic) { $env:RMR_ALLOW_PUBLIC = '1' }
 
 function Save-RmrSettings {
     [IO.File]::WriteAllText($SettingsPath, ($settings | ConvertTo-Json -Depth 4), $Utf8)
@@ -3207,7 +3234,7 @@ function Edit-RmrServerEntry($Entry) {
     $dialog.Font = New-Object Drawing.Font('Segoe UI', 10)
     $fields = @()
     $y = 16
-    foreach ($spec in @(@('Name', 'name', 'My server'), @('Address (IPv4 or host name)', 'host', ''), @('Game port', 'port', '26000'), @('News port (the server''s Dashboard.bat port)', 'newsPort', '18080'))) {
+    foreach ($spec in @(@('Name', 'name', 'My server'), @('Address (localhost or a local-network IPv4 address)', 'host', ''), @('Game port', 'port', '26000'), @('News port (the server''s Dashboard.bat port)', 'newsPort', '18080'))) {
         $label = New-Object Windows.Forms.Label
         $label.Text = $spec[0]
         $label.ForeColor = [Drawing.Color]::FromArgb(140, 150, 162)
@@ -3408,7 +3435,7 @@ function Get-RmrSelected {
 function Get-RmrServerKey($s) { return ([string]$s.host + ':' + [string]$s.port) }
 
 # This PC's own addresses, and the address a server beside this file is hosted
-# on. Most home routers cannot loop a connection to their own public address
+# on. Most home routers cannot loop a connection to their own outside address
 # back inside, so a server on this PC is always reached on 127.0.0.1.
 $script:RmrOwnAddresses = @('127.0.0.1', 'localhost')
 try {
@@ -3437,7 +3464,7 @@ function Test-RmrReachable([string]$HostName, [int]$Port) {
 }
 
 # The address EVE is given: the one chosen. Only when that cannot be reached
-# from here and the server runs on this PC (your own public address, which
+# from here and the server runs on this PC (an outside address, which
 # most routers will not loop back inside) does it go via 127.0.0.1.
 function Get-RmrConnectHost($s) {
     $chosen = [string]$s.host
@@ -3696,6 +3723,10 @@ $folderButton.Add_Click({
 function Invoke-RmrPrepare([switch]$Launch) {
     $s = Get-RmrSelected
     if (-not $s) { return }
+    if (-not (Test-RmrAllowedHost ([string]$s.host))) {
+        [Windows.Forms.MessageBox]::Show($form, ($s.host + ' is not localhost or a local-network IPv4 address. Red Moon Rising is for your own PC and local network only; edit this server to use one.'), 'Red Moon Rising', 'OK', 'Warning') | Out-Null
+        return
+    }
     $ui.Busy = $true
     $playButton.Enabled = $false
     try {

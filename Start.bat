@@ -20,6 +20,7 @@ if /i "%~1"=="--game-port" goto gameport
 if /i "%~1"=="--web-port" goto webport
 if /i "%~1"=="--database-port" goto databaseport
 if /i "%~1"=="--host" goto hostaddress
+if /i "%~1"=="--allow-public" goto allowpublic
 echo Unknown option. Use --help for usage. 1>&2
 exit /b 2
 :headless
@@ -79,6 +80,10 @@ set "RMR_DATABASE_PORT=%RMR_VALUE%"
 shift
 shift
 goto parse
+:allowpublic
+set "RMR_ALLOW_PUBLIC=1"
+shift
+goto parse
 :hostaddress
 if "%~2"=="" goto missing
 set "RMR_VALUE=%~2"
@@ -95,8 +100,9 @@ echo Red Moon Rising server launcher
 echo Usage: Start.bat [--headless ^| --server-only ^| --check ^| --stop]
 echo                  [--host local^|ADDRESS] [--game-port N] [--web-port N] [--database-port N]
 echo No options opens the launcher window, which asks where to host the server.
-echo --host local hosts for this PC only; --host ADDRESS hosts on that IPv4 address
-echo (0.0.0.0 for every address). Without --host the last choice is used.
+echo --host local hosts for this PC only; --host ADDRESS hosts on this PC's IPv4
+echo address on your local network (such as 192.168.1.20). Red Moon Rising is for
+echo your own PC and local network only. Without --host the last choice is used.
 echo --server-only runs in this console with the saved choices and asks nothing.
 echo --check tests the server then stops it. Client.bat sets up and starts EVE;
 echo Dashboard.bat puts the dashboard online behind a login.
@@ -769,6 +775,17 @@ function Remove-RmrUpnpForward([int]$Port) {
     } catch { }
 }
 
+# Red Moon Rising is for your own PC and your local network: localhost, or a
+# private IPv4 address (10.x, 172.16-31.x, 192.168.x; 100.64-127.x for a
+# private VPN such as Tailscale).
+function Test-RmrPrivateIPv4([string]$Address) {
+    $ip = $null
+    if (-not [Net.IPAddress]::TryParse($Address, [ref]$ip) -or $ip.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) { return $false }
+    $b = $ip.GetAddressBytes()
+    return ($b[0] -eq 127 -or $b[0] -eq 10 -or ($b[0] -eq 172 -and $b[1] -ge 16 -and $b[1] -le 31) -or
+            ($b[0] -eq 192 -and $b[1] -eq 168) -or ($b[0] -eq 100 -and $b[1] -ge 64 -and $b[1] -le 127))
+}
+
 # ---- where the server is hosted ----------------------------------------------------------------
 
 function Test-RmrLocalAddress([string]$Address) {
@@ -790,21 +807,23 @@ function Resolve-RmrHost([string]$Text) {
         return [pscustomobject]@{ Choice = 'local'; Bind = '127.0.0.1'; Advertise = '127.0.0.1'; Note = '' }
     }
     if ($Text -in @('0.0.0.0', 'all', '*')) {
-        return [pscustomobject]@{ Choice = '0.0.0.0'; Bind = '0.0.0.0'; Advertise = 'this PC''s address'; Note = '' }
+        return [pscustomobject]@{ Choice = '0.0.0.0'; Bind = '0.0.0.0'; Advertise = 'this PC''s network address'; Note = '' }
+    }
+    $allowAny = ($env:RMR_ALLOW_PUBLIC -eq '1')
+    if (-not $allowAny -and -not (Test-RmrPrivateIPv4 $Text)) {
+        throw "Use 'local', or this PC's IPv4 address on your local network (such as 192.168.1.20). Red Moon Rising is for your own PC and local network only: $Text"
     }
     $parsed = $null
     if (-not [Net.IPAddress]::TryParse($Text, [ref]$parsed) -or $parsed.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or $Text -notmatch '^\d{1,3}(\.\d{1,3}){3}$') {
         throw "Host address must be 'local' or an IPv4 address such as 192.168.1.20: $Text"
     }
     if (Test-RmrLocalAddress $Text) {
-        # Listen on every address, so this PC (127.0.0.1), the LAN and a
-        # forwarded public address all reach it; players are told $Text.
+        # Listen on every address, so this PC (127.0.0.1) and the local
+        # network both reach it; players are told $Text.
         return [pscustomobject]@{ Choice = $Text; Bind = '0.0.0.0'; Advertise = $Text; Note = '' }
     }
-    # A public address belongs to the router: listen on every address here
-    # and let the router forward the game port to this PC.
     return [pscustomobject]@{ Choice = $Text; Bind = '0.0.0.0'; Advertise = $Text
-        Note = "$Text is not an address of this PC (a router's public address?). Listening on every address; forward the game port to this PC." }
+        Note = "$Text is not an address of this PC. Listening on every address of this PC." }
 }
 
 # The launcher window asks before each start; the last answer is offered.
@@ -828,7 +847,7 @@ function Read-RmrHostChoice([string]$Current) {
     $local.Text = 'Locally - only this PC can connect'
     $local.SetBounds(18, 50, 440, 24)
     $remote = New-Object Windows.Forms.RadioButton
-    $remote.Text = 'On this IPv4 address (LAN or public; 0.0.0.0 for every address):'
+    $remote.Text = 'On my local network, at this PC''s IPv4 address:'
     $remote.SetBounds(18, 80, 450, 24)
     $box = New-Object Windows.Forms.TextBox
     $box.SetBounds(38, 108, 220, 26)
@@ -846,7 +865,7 @@ function Read-RmrHostChoice([string]$Current) {
         }
     } catch { }
     $lan = if ($real.Count -gt 0) { 'This PC on your network: ' + ($real -join ', ') + '. ' } else { '' }
-    $hint.Text = $lan + 'Players point Client.bat at the address you give. For your public address, forward the game port on your router.'
+    $hint.Text = $lan + 'Other computers on your network point Client.bat at it. Red Moon Rising is for your own PC and local network only.'
     $hint.ForeColor = [Drawing.Color]::FromArgb(140, 148, 156)
     $hint.SetBounds(18, 138, 444, 50)
     if (-not $Current -or $Current -eq 'local') { $local.Checked = $true; $box.Text = '' } else { $remote.Checked = $true; $box.Text = $Current }
@@ -865,7 +884,8 @@ function Read-RmrHostChoice([string]$Current) {
     $cancel.FlatStyle = 'Flat'
     $upnp = New-Object Windows.Forms.CheckBox
     $upnp.Text = 'Forward the game port on my router automatically (UPnP)'
-    $upnp.Checked = $true
+    $upnp.Checked = ($env:RMR_ALLOW_PUBLIC -eq '1')
+    $upnp.Visible = ($env:RMR_ALLOW_PUBLIC -eq '1')
     $upnp.SetBounds(18, 192, 444, 24)
     $form.Controls.AddRange(@($title, $local, $remote, $box, $hint, $upnp, $ok, $cancel))
     $form.AcceptButton = $ok
@@ -940,10 +960,10 @@ function Start-RmrWorker {
             if (-not (Test-Path -LiteralPath (Join-Path $Root $required))) { throw "Missing $required. Keep start.bat in the extracted RMR repository." }
         }
         $settingsPath = Join-Path $Runtime 'settings.json'
-        $settings = [pscustomobject]@{ clientPath = ''; gamePort = 26000; webPort = 18080; databasePort = 5432; webPortDefaultVersion = 0; hostAddress = 'local' }
+        $settings = [pscustomobject]@{ clientPath = ''; gamePort = 26000; webPort = 18080; databasePort = 5432; webPortDefaultVersion = 0; hostAddress = 'local'; allowPublic = $false }
         if (Test-Path -LiteralPath $settingsPath) {
             $savedSettings = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
-            foreach ($key in @('clientPath','gamePort','webPort','databasePort','webPortDefaultVersion','hostAddress')) {
+            foreach ($key in @('clientPath','gamePort','webPort','databasePort','webPortDefaultVersion','hostAddress','allowPublic')) {
                 if ($savedSettings.PSObject.Properties[$key]) { $settings.$key = $savedSettings.$key }
             }
         }
@@ -961,9 +981,11 @@ function Start-RmrWorker {
         $settings.webPortDefaultVersion = 2
         # Where to host: --host or the launcher window's answer, else (asked in
         # an interactive console) the last choice.
+        if ($env:RMR_ALLOW_PUBLIC -eq '1') { $settings.allowPublic = $true }
+        elseif ([bool]$settings.allowPublic) { $env:RMR_ALLOW_PUBLIC = '1' }
         $hostChoice = if ($env:RMR_HOST) { $env:RMR_HOST } else { [string]$settings.hostAddress }
         if (-not $env:RMR_HOST -and $env:RMR_MODE -eq 'headless' -and $env:RMR_SERVER_ONLY -ne '1' -and [Environment]::UserInteractive) {
-            $typed = Read-Host ("Host the server locally or on an IPv4 address? [local / address, Enter for '" + $hostChoice + "']")
+            $typed = Read-Host ("Host for this PC only, or on this PC's local-network IPv4 address? [local / address, Enter for '" + $hostChoice + "']")
             if ($typed) { $hostChoice = $typed }
         }
         $hosting = Resolve-RmrHost $hostChoice
@@ -971,7 +993,7 @@ function Start-RmrWorker {
         if ($hosting.Note) { Write-Log $hosting.Note }
         # Hosting beyond this PC: ask the router to forward the game port
         # (the launcher window's tick box; on by default otherwise).
-        if ($hosting.Choice -ne 'local' -and $env:RMR_UPNP -ne '0') {
+        if ($hosting.Choice -ne 'local' -and $env:RMR_ALLOW_PUBLIC -eq '1' -and $env:RMR_UPNP -ne '0' -and -not (Test-RmrPrivateIPv4 $hosting.Choice)) {
             Set-Status 'Router' ('Asking your router to forward port ' + $gamePort + ' to this PC') 7
             $forward = Set-RmrUpnpForward $gamePort ('Red Moon Rising game server')
             Write-Log $forward.Message
@@ -1756,6 +1778,7 @@ namespace Rmr {
         if ([IO.File]::Exists($savedSettingsPath)) {
             $savedJson = [IO.File]::ReadAllText($savedSettingsPath) | ConvertFrom-Json
             if ($savedJson.PSObject.Properties['hostAddress'] -and $savedJson.hostAddress) { $savedHost = [string]$savedJson.hostAddress }
+            if ($savedJson.PSObject.Properties['allowPublic'] -and $savedJson.allowPublic) { $env:RMR_ALLOW_PUBLIC = '1' }
         }
     } catch { }
     # Once per port: an inbound rule for the game port (asks for administrator).
@@ -1766,9 +1789,10 @@ namespace Rmr {
             if ($gamePort -lt 1) { $gamePort = 26000 }
             $ruleName = 'Red Moon Rising game server (TCP ' + $gamePort + ')'
             if (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue) { return }
-            $answer = [System.Windows.Forms.MessageBox]::Show(('Let other computers reach the server through Windows Firewall on port ' + $gamePort + '? Windows will ask for administrator permission.' + [Environment]::NewLine + [Environment]::NewLine + 'Players outside your network also need port ' + $gamePort + ' forwarded to this PC on your router.'), 'Red Moon Rising', 'YesNo', 'Question')
+            $answer = [System.Windows.Forms.MessageBox]::Show(('Let other computers on your local network reach the server through Windows Firewall on port ' + $gamePort + '? Windows will ask for administrator permission.'), 'Red Moon Rising', 'YesNo', 'Question')
             if ($answer -ne 'Yes') { return }
-            $command = "New-NetFirewallRule -DisplayName '$ruleName' -Direction Inbound -Protocol TCP -LocalPort $gamePort -Action Allow -Profile Any | Out-Null"
+            $profiles = if ($env:RMR_ALLOW_PUBLIC -eq '1') { 'Any' } else { 'Private,Domain' }
+            $command = "New-NetFirewallRule -DisplayName '$ruleName' -Direction Inbound -Protocol TCP -LocalPort $gamePort -Action Allow -Profile $profiles | Out-Null"
             Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-Command', $command) -Verb RunAs -Wait -WindowStyle Hidden
         } catch { }
     }.GetNewClosure()
