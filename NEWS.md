@@ -2,6 +2,26 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Selling to buy orders, bot buy orders, account creation and a calmer Start.bat
+
+*2026-11-13 13:29 UTC*
+
+### Market
+
+- **Selling into buy orders works where you are.** The bots' buy orders only took items at their own station, and they were only placed at the busiest trade hubs, so the market showed buy orders you could not sell into. Bot buy orders now reach the whole region, a number of jumps, the system or the station, like players' orders.
+- **Bots bid on what you have.** Where you are docked, bot traders put up buy orders for the items in your station hangar that nobody nearby is buying: a fair bit under the NPC price, or under the base price for loot the NPCs do not sell. Blueprints are left out. Give it a few minutes after docking.
+- Order ranges are now counted in real jumps through the gates, and the market window shows how many jumps each order is from you.
+
+### Accounts
+
+- **New names get an account at their first login again.** A server whose `rmr.yml` was written by an earlier version and never edited had account creation, bots and the dashboard bot controls switched off. That file is now brought up to today's defaults when the server starts: accounts made at first login, 100,000 bots and the Bots page controls on. A file you have edited yourself is left exactly as it is.
+
+### Start.bat
+
+- **Your PC stays responsive.** Building the server, PostgreSQL and the game server now run at a lower priority, so the game and your other programs get the processor first.
+- The build and the game server leave a quarter of the processor free.
+- The launchers' animated backgrounds redraw less often, and only while their window is in front.
+
 ## Fix: new servers started with no bots
 
 *2026-11-13 13:08 UTC*
