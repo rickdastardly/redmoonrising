@@ -141,6 +141,18 @@ async fn start_training(ctx: &Ctx<'_>, skill_id: i64) -> Result<(), String> {
         warn!("CharStartTrainingSkill: no item {skill_id}");
         return Err("That skill could not be found.".into());
     };
+    // Train Skill on a skill book in a hangar or cargo hold: the character
+    // learns it from the book (one book is used up) and starts training it.
+    // A skill the character already knows trains as it is, book untouched.
+    let (skill_id, it) = if it.category_id == CATEGORY_SKILL && it.owner_id == char_id
+        && it.flag != FLAG_SKILL && it.flag != FLAG_SKILL_IN_TRAINING
+    {
+        let id = learn_from_book(ctx, char_id, skill_id, it.type_id).await?;
+        let Some(learned) = item(ctx, id).await else { return Err("That skill could not be found.".into()) };
+        (id, learned)
+    } else {
+        (skill_id, it)
+    };
     if it.owner_id != char_id || it.category_id != CATEGORY_SKILL || (it.flag != FLAG_SKILL && it.flag != FLAG_SKILL_IN_TRAINING) {
         warn!("CharStartTrainingSkill: {skill_id} is not {char_id}'s skill");
         return Err("That is not one of your skills.".into());
@@ -203,6 +215,64 @@ async fn start_training(ctx: &Ctx<'_>, skill_id: i64) -> Result<(), String> {
     world.notify(&[ctx.client_id], "OnSkillStartTraining", Value::Tuple(vec![Value::Int(skill_id), Value::Long(end)]));
     info!("{char_id} started training skill {} (item {skill_id}) to level {}, {:.0} SP a minute", p.type_id, p.level + 1, rate);
     Ok(())
+}
+
+/// The character's own copy of a skill: the one it knows already, or one
+/// injected from `book` (whose prerequisites it must have).
+async fn learn_from_book(ctx: &Ctx<'_>, char_id: i64, book: i64, type_id: i64) -> Result<i64, String> {
+    let known = ctx
+        .db
+        .query_opt(
+            r#"SELECT "itemID" FROM entity WHERE "ownerID" = $1 AND "typeID" = $2 AND "flag" IN ($3, $4) ORDER BY "itemID" LIMIT 1"#,
+            &[&(char_id as i32), &(type_id as i32), &FLAG_SKILL, &FLAG_SKILL_IN_TRAINING],
+        )
+        .await
+        .map_err(|e| {
+            error!("CharStartTrainingSkill (known skills): {}", crate::logging::chain(&e));
+            "Your skills could not be read.".to_string()
+        })?;
+    if let Some(r) = known {
+        return Ok(r.get::<_, i32>(0) as i64);
+    }
+    let missing = missing_for(ctx.db, char_id, type_id).await.map_err(|e| {
+        error!("CharStartTrainingSkill (requirements): {}", crate::logging::chain(&e));
+        "The skill's requirements could not be read.".to_string()
+    })?;
+    if !missing.is_empty() {
+        return Err(format!("You need {} before you can learn that skill.", describe(ctx.db, &missing).await));
+    }
+    let result: Result<(i64, Vec<Value>), tokio_postgres::Error> = async {
+        let mut client = crate::db::connect(ctx.db_url).await?;
+        let mut txn = ItemTxn::begin(&mut client).await?;
+        let quantity = txn.item(book).await?.map_or(1, |b| b.quantity.max(1));
+        let skill = if quantity > 1 {
+            txn.set_quantity(book, quantity - 1).await?;
+            txn.create(crate::items::NewItem {
+                type_id,
+                owner_id: char_id,
+                location_id: char_id,
+                flag: FLAG_SKILL as i64,
+                quantity: 1,
+                singleton: true,
+            })
+            .await?
+        } else {
+            txn.move_to(book, char_id, FLAG_SKILL as i64).await?;
+            txn.set_singleton(book, true).await?;
+            book
+        };
+        set_attribute(txn.tx(), skill, ATTR_SKILL_LEVEL, 0).await?;
+        set_attribute(txn.tx(), skill, ATTR_SKILL_POINTS, 0).await?;
+        Ok((skill, txn.commit().await?))
+    }
+    .await;
+    let (skill, events) = result.map_err(|e| {
+        error!("CharStartTrainingSkill (learning {type_id}): {}", crate::logging::chain(&e));
+        "The skill could not be learned.".to_string()
+    })?;
+    crate::items::notify(ctx.world, ctx.client_id, events);
+    info!("{char_id} learned skill {type_id} from book {book} (skill item {skill})");
+    Ok(skill)
 }
 
 async fn stop_training(ctx: &Ctx<'_>, skill_id: i64) -> Result<(), String> {

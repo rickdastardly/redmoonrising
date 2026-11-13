@@ -2,6 +2,40 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## The market tab is Red Moon Rising's again
+
+*2026-11-13 17:10 UTC*
+
+- **The main market tab now lists exactly what it did in 2007.** To fill gaps, the server had been slotting items the 2007 market never sold in beside their ordinary versions: faction, officer and deadspace modules, pirate faction ships and unreleased placeholders. Every item now sits in the market group the 2007 data gives it, and nothing else goes in the main tab.
+- Items the 2007 market never listed go to the **Additional Items** group instead, so the extras are still there to find, kept apart from the real market.
+- Developer test items and the NPC *Boss Rank* placeholders stay off the market completely, as in the previous note.
+- Player orders aren't touched. Items you own stay as they are.
+
+*Takes effect when Start.bat restarts the server.*
+
+## Train skills straight from the skill book
+
+*2026-11-13 17:08 UTC*
+
+- **Fixed:** **Train Skill** on a skill book in your hangar or cargo said *That is not one of your skills*, even when you met every requirement. Training only worked on skills you already knew, so a new skill could never be learned without a GM command.
+- Now **Train Skill** on a book teaches you the skill and starts training it at once, from level 0. One book is used up; the rest of a stack stays where it is.
+- If you already know the skill, its training starts and the book is left alone.
+- If you're missing a prerequisite, the message names the skill and level you need, and the book isn't used up.
+
+*Takes effect when Start.bat restarts the server.*
+
+## Developer test items taken off the market
+
+*2026-11-13 17:07 UTC*
+
+- **Test items are gone from the market.** Everything CCP made for testing is no longer published, listed or sold, and is never seeded again: *TEST Smartbomb*, the *Uber Test* control towers, *New EW Test* modules, *Gfx_turret_test*, *Skunks Cruise Test* and the rest. Any you already own stay in your hangar.
+- **The "Boss Rank" items are gone too.** Items such as *Serpentis Bship Boss Rank1 Armor EM Hardener* were never Shadow Serpentis gear. They're unreleased placeholders CCP used to set NPC boss stats. The real faction modules, such as *Shadow Serpentis Armor EM Hardener*, stay on the market as before.
+- Leftover developer modules named *Dummy* or *UNUSED* are also gone.
+- Real items that just have "test" in the name stay: *Test Dummies*, *Serpentis Test Reports* and *'Protest' Large Armor Repairer I*.
+- The rest of the **Additional Items** market group stays, including the GM modules: real items from the game's data that had no market group in 2007.
+
+*Takes effect when Start.bat restarts the server.*
+
 ## Turrets you can see and hear, fairer rats, docking and agent list fixes
 
 *2026-11-13 17:01 UTC*

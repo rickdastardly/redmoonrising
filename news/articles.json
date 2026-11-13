@@ -1,5 +1,23 @@
 [
   {
+    "published": "2026-11-13 17:10 UTC",
+    "publishedMs": 1794589858707,
+    "title": "The market tab is Red Moon Rising's again",
+    "body": "<ul>\n<li><b>The main market tab now lists exactly what it did in 2007.</b> To fill gaps, the server had been slotting items the 2007 market never sold in beside their ordinary versions: faction, officer and deadspace modules, pirate faction ships and unreleased placeholders. Every item now sits in the market group the 2007 data gives it, and nothing else goes in the main tab.</li>\n<li>Items the 2007 market never listed go to the <b>Additional Items</b> group instead, so the extras are still there to find, kept apart from the real market.</li>\n<li>Developer test items and the NPC <i>Boss Rank</i> placeholders stay off the market completely, as in the previous note.</li>\n<li>Player orders aren't touched. Items you own stay as they are.</li>\n</ul>\n<p><i>Takes effect when Start.bat restarts the server.</i></p>"
+  },
+  {
+    "published": "2026-11-13 17:08 UTC",
+    "publishedMs": 1794589737716,
+    "title": "Train skills straight from the skill book",
+    "body": "<ul>\n<li><b>Fixed:</b> <b>Train Skill</b> on a skill book in your hangar or cargo said <i>That is not one of your skills</i>, even when you met every requirement. Training only worked on skills you already knew, so a new skill could never be learned without a GM command.</li>\n<li>Now <b>Train Skill</b> on a book teaches you the skill and starts training it at once, from level 0. One book is used up; the rest of a stack stays where it is.</li>\n<li>If you already know the skill, its training starts and the book is left alone.</li>\n<li>If you're missing a prerequisite, the message names the skill and level you need, and the book isn't used up.</li>\n</ul>\n<p><i>Takes effect when Start.bat restarts the server.</i></p>"
+  },
+  {
+    "published": "2026-11-13 17:07 UTC",
+    "publishedMs": 1794589641969,
+    "title": "Developer test items taken off the market",
+    "body": "<ul>\n<li><b>Test items are gone from the market.</b> Everything CCP made for testing is no longer published, listed or sold, and is never seeded again: <i>TEST Smartbomb</i>, the <i>Uber Test</i> control towers, <i>New EW Test</i> modules, <i>Gfx_turret_test</i>, <i>Skunks Cruise Test</i> and the rest. Any you already own stay in your hangar.</li>\n<li><b>The \"Boss Rank\" items are gone too.</b> Items such as <i>Serpentis Bship Boss Rank1 Armor EM Hardener</i> were never Shadow Serpentis gear. They're unreleased placeholders CCP used to set NPC boss stats. The real faction modules, such as <i>Shadow Serpentis Armor EM Hardener</i>, stay on the market as before.</li>\n<li>Leftover developer modules named <i>Dummy</i> or <i>UNUSED</i> are also gone.</li>\n<li>Real items that just have \"test\" in the name stay: <i>Test Dummies</i>, <i>Serpentis Test Reports</i> and <i>'Protest' Large Armor Repairer I</i>.</li>\n<li>The rest of the <b>Additional Items</b> market group stays, including the GM modules: real items from the game's data that had no market group in 2007.</li>\n</ul>\n<p><i>Takes effect when Start.bat restarts the server.</i></p>"
+  },
+  {
     "published": "2026-11-13 17:01 UTC",
     "publishedMs": 1794589284172,
     "title": "Turrets you can see and hear, fairer rats, docking and agent list fixes",

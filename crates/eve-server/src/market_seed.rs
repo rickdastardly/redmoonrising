@@ -11,6 +11,29 @@ const ISOTOPE_STOCK: i32 = 100_000_000;
 const ISOTOPE_TYPES: &[i32] = &[16258, 16259, 16260, 16261, 16274, 17887, 17888, 17889];
 const CATEGORIES: &[i32] = &[4, 5, 6, 7, 8, 9, 16, 17, 18, 20, 22, 23, 24, 25];
 
+/// The 2007 market tree: (typeID, marketGroupID) for every type the source
+/// data placed in the market browser.
+fn market_tree_2007() -> Vec<(i32, i32)> {
+    include_str!("market_tree_2007.tsv")
+        .lines()
+        .filter_map(|line| {
+            let (t, g) = line.trim().split_once('\t')?;
+            Some((t.parse().ok()?, g.parse().ok()?))
+        })
+        .collect()
+}
+
+/// CCP's developer items, never meant for players: anything named "test"
+/// (TEST Smartbomb, Uber Test Control Towers, Gfx_turret_test...), the NPC
+/// boss placeholders ("Serpentis Bship Boss Rank1 Armor EM Hardener"; the
+/// real ones are the Shadow Serpentis modules), and dummy or unused
+/// modules. The real items whose names happen to contain "test" stay.
+const DEVELOPER_ITEM: &str = r#"(
+       (t."typeName" ~* 'test' AND t."typeName" !~* 'protest'
+        AND t."typeName" NOT IN ('Test Dummies', 'Serpentis Test Reports'))
+    OR t."typeName" ~* 'boss rank ?[0-9]'
+    OR t."typeName" ~* '(^|[^a-z])(dummy|unused)([^a-z]|$)')"#;
+
 pub async fn ensure(db: &mut Client) -> Result<(), Error> {
     // A freshly imported universe has no planner statistics yet, and without
     // them the regional seeding below can run for many minutes. ANALYZE takes
@@ -24,35 +47,63 @@ pub async fn ensure(db: &mut Client) -> Result<(), Error> {
     // every inventory item in the marketable categories, including test hulls
     // until the special-ship catalog gets its own policy.
     let published = tx.execute(
-        r#"UPDATE "invTypes" t SET "published" = 1
+        format!(r#"UPDATE "invTypes" t SET "published" = 1
              FROM "invGroups" g
             WHERE g."groupID" = t."groupID" AND t."published" = 0
-              AND g."categoryID" = ANY($1)"#,
+              AND g."categoryID" = ANY($1) AND NOT {DEVELOPER_ITEM}"#).as_str(),
         &[&CATEGORIES],
     ).await?;
 
-    // Variants belong beside their Tech I parent whenever that parent has a
-    // market group. A group with only one market category is also unambiguous.
-    let parent_group = r#"UPDATE "invTypes" t SET "marketGroupID" = p."marketGroupID"
-                           FROM "invMetaTypes" m
-                           JOIN "invTypes" p ON p."typeID" = m."parentTypeID"
-                          WHERE t."typeID" = m."typeID" AND t."marketGroupID" IS NULL
-                            AND t."published" = 1 AND p."marketGroupID" IS NOT NULL
-                            AND (SELECT "categoryID" FROM "invGroups" WHERE "groupID" = t."groupID") = ANY($1)"#;
-    let mut categorized = tx.execute(parent_group, &[&CATEGORIES]).await?;
-    categorized += tx.execute(
-        r#"WITH peer AS (
-               SELECT "groupID", min("marketGroupID") AS market_group
-                 FROM "invTypes" WHERE "marketGroupID" IS NOT NULL
-                GROUP BY "groupID" HAVING count(DISTINCT "marketGroupID") = 1
-           )
-           UPDATE "invTypes" t SET "marketGroupID" = peer.market_group
-             FROM peer JOIN "invGroups" g ON g."groupID" = peer."groupID"
-            WHERE t."groupID" = peer."groupID" AND t."marketGroupID" IS NULL
-              AND t."published" = 1 AND g."categoryID" = ANY($1)"#,
+    // Developer items come off the market: unpublished, out of the market
+    // browser, and their NPC sell orders withdrawn. Players keep any they own.
+    let hidden = tx.execute(
+        format!(r#"UPDATE "invTypes" t SET "published" = 0, "marketGroupID" = NULL
+             FROM "invGroups" g
+            WHERE g."groupID" = t."groupID" AND g."categoryID" = ANY($1)
+              AND (t."published" = 1 OR t."marketGroupID" IS NOT NULL) AND {DEVELOPER_ITEM}"#).as_str(),
         &[&CATEGORIES],
     ).await?;
-    categorized += tx.execute(parent_group, &[&CATEGORIES]).await?;
+    let mut withdrawn = tx.execute(
+        format!(r#"DELETE FROM market_orders o USING "invTypes" t
+            WHERE t."typeID" = o."typeID" AND o."charID" < $1 AND {DEVELOPER_ITEM}"#).as_str(),
+        &[&FIRST_PLAYER_ID],
+    ).await?;
+    // The bot traders' orders too, once their table exists.
+    let bot_orders: bool = tx.query_one(r#"SELECT to_regclass('public."rmrBotMarketOrders"') IS NOT NULL"#, &[]).await?.get(0);
+    if bot_orders {
+        withdrawn += tx.execute(
+            format!(r#"DELETE FROM market_orders o USING "invTypes" t
+                WHERE t."typeID" = o."typeID" AND {DEVELOPER_ITEM}
+                  AND o."orderID" IN (SELECT "orderID" FROM "rmrBotMarketOrders")"#).as_str(),
+            &[],
+        ).await?;
+    }
+    if hidden > 0 || withdrawn > 0 {
+        info!("market: {hidden} developer item type(s) taken off the market, {withdrawn} NPC order(s) withdrawn");
+    }
+
+    // The market tab is the one Red Moon Rising had: every item keeps the
+    // market group the 2007 data gives it, and nothing else goes in it.
+    // Items the 2007 market never listed (faction, officer and deadspace
+    // modules, pirate ships, unreleased items) go to Additional Items below
+    // instead of being slotted in beside their Tech I parents.
+    let (tree_types, tree_groups): (Vec<i32>, Vec<i32>) = market_tree_2007().into_iter().unzip();
+    let mut categorized = tx.execute(
+        format!(r#"UPDATE "invTypes" t SET "marketGroupID" = r.mg
+             FROM unnest($1::int[], $2::int[]) AS r(id, mg)
+            WHERE t."typeID" = r.id AND t."marketGroupID" IS DISTINCT FROM r.mg AND NOT {DEVELOPER_ITEM}"#).as_str(),
+        &[&tree_types, &tree_groups],
+    ).await?;
+    let pulled = tx.execute(
+        r#"UPDATE "invTypes" t SET "marketGroupID" = NULL
+             FROM "invGroups" g
+            WHERE g."groupID" = t."groupID" AND g."categoryID" = ANY($1)
+              AND t."marketGroupID" < 1000000 AND NOT (t."typeID" = ANY($2))"#,
+        &[&CATEGORIES, &tree_types],
+    ).await?;
+    if pulled > 0 {
+        info!("market: {pulled} item type(s) the 2007 market tab never listed moved to Additional Items");
+    }
 
     // The source data has no suitable peer for some published types. Stable
     // IDs keep these additional groups unchanged across server restarts.
