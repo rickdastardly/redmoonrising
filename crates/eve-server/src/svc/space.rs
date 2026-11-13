@@ -8,6 +8,7 @@
 
 use eve_marshal::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tracing::{debug, warn};
 
 use crate::ballpark::{Celestial, Command, Park, Ship, Vec3, LOCAL_GRID_RANGE};
@@ -492,12 +493,67 @@ pub fn set_state_entries(park: &Park, ego: i64, station_owners: &[(i64, i64)], c
     entries
 }
 
-pub(crate) fn visible_ship_ids(park: &Park, ego: i64) -> BTreeSet<i64> {
-    park.ships
+/// The most ships one player's client is sent at once: the dashboard's
+/// "Ships your client is sent". A 2007 client given hundreds of armed ships
+/// stalls for seconds at a time, falls behind the server's updates, and
+/// asks for the whole grid again (UpdateStateRequest), which stalls it
+/// longer: its ship snaps about and its overview is rebuilt, again and
+/// again. The battle itself is not limited; the client is sent the ships
+/// that matter most to it, and the rest fight on without being drawn.
+static CLIENT_SHIPS: AtomicUsize = AtomicUsize::new(CLIENT_SHIPS_DEFAULT);
+pub const CLIENT_SHIPS_DEFAULT: usize = 250;
+pub const CLIENT_SHIPS_RANGE: (usize, usize) = (50, 20_000);
+/// Ships newly sent to a client in one second, past the ones that matter
+/// most: a client takes a grid in a little at a time.
+const NEW_SHIPS_A_SECOND: usize = 30;
+/// Titan, dreadnought, freighter, carrier and mothership groups.
+const CAPITAL_GROUPS: [i64; 5] = [30, 485, 513, 547, 659];
+
+pub fn client_ships() -> usize {
+    CLIENT_SHIPS.load(Ordering::Relaxed)
+}
+
+pub fn set_client_ships(n: usize) {
+    CLIENT_SHIPS.store(n.clamp(CLIENT_SHIPS_RANGE.0, CLIENT_SHIPS_RANGE.1), Ordering::Relaxed);
+}
+
+/// How much a ship matters to the pilot of `ego`: 0 for what is always
+/// drawn (its own ship and drones, other players, its own targets), 1 for
+/// ships that have it targeted and capitals, 2 for the rest.
+fn draw_rank(ego: &Ship, ship: &Ship) -> u8 {
+    let locked_by = |a: &Ship, b: i64| a.fight.as_ref().is_some_and(|f| f.locks.contains_key(&b));
+    if ship.id == ego.id || ship.is_player() || ship.drone.as_ref().is_some_and(|d| d.controller == Some(ego.id)) || locked_by(ego, ship.id) {
+        0
+    } else if locked_by(ship, ego.id) || CAPITAL_GROUPS.contains(&ship.pilot.group_id) {
+        1
+    } else {
+        2
+    }
+}
+
+/// The ships in range of `ego` its client is sent, at most `client_ships`:
+/// those that matter most first, then those it already has (`kept`), then
+/// the nearest.
+fn drawn_ship_ids(park: &Park, ego: i64, kept: Option<&BTreeSet<i64>>) -> BTreeSet<i64> {
+    let in_range: Vec<&Ship> = park
+        .ships
         .values()
         .filter(|ship| !crate::drones::in_transit(ship) && (ship.id == ego || within_overview_range(park, ego, ship.id)))
-        .map(|ship| ship.id)
-        .collect()
+        .collect();
+    let budget = client_ships();
+    let Some(me) = park.ships.get(&ego).filter(|_| in_range.len() > budget) else {
+        return in_range.iter().map(|s| s.id).collect();
+    };
+    let mut ranked: Vec<(u8, bool, f64, i64)> = in_range
+        .iter()
+        .map(|s| (draw_rank(me, s), !kept.is_some_and(|k| k.contains(&s.id)), (s.pos - me.pos).len(), s.id))
+        .collect();
+    ranked.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)).then(a.2.total_cmp(&b.2)));
+    ranked.iter().enumerate().filter(|(n, r)| *n < budget || r.0 == 0).map(|(_, r)| r.3).collect()
+}
+
+pub(crate) fn visible_ship_ids(park: &Park, ego: i64) -> BTreeSet<i64> {
+    drawn_ship_ids(park, ego, None)
 }
 
 fn within_overview_range(park: &Park, viewer: i64, target: i64) -> bool {
@@ -600,8 +656,24 @@ pub fn sync_ship_visibility(park: &mut Park) -> Vec<(i64, Value)> {
     let mut updates = Vec::new();
     for (client, ego) in viewers {
         let Some(previous) = park.visible_ships.get(&client).cloned() else { continue };
-        let current = visible_ship_ids(park, ego);
-        let added: Vec<i64> = current.difference(&previous).copied().filter(|id| *id != ego).collect();
+        let mut current = drawn_ship_ids(park, ego, Some(&previous));
+        // New ships a few at a time, those that matter most first; the rest
+        // come in the next seconds.
+        let mut added: Vec<i64> = current.difference(&previous).copied().filter(|id| *id != ego).collect();
+        if added.len() > NEW_SHIPS_A_SECOND {
+            if let Some(me) = park.ships.get(&ego) {
+                let rank = |id: &i64| park.ships.get(id).map_or((3, f64::MAX), |s| (draw_rank(me, s), (s.pos - me.pos).len()));
+                added.sort_by(|a, b| {
+                    let (ra, rb) = (rank(a), rank(b));
+                    ra.0.cmp(&rb.0).then(ra.1.total_cmp(&rb.1))
+                });
+                let later: Vec<i64> = added.iter().enumerate().filter(|(n, id)| *n >= NEW_SHIPS_A_SECOND && rank(id).0 > 0).map(|(_, id)| *id).collect();
+                for id in &later {
+                    current.remove(id);
+                }
+                added.retain(|id| !later.contains(id));
+            }
+        }
         let removed: Vec<i64> = previous
             .difference(&current)
             .copied()
@@ -636,7 +708,11 @@ pub fn add_ball_entries_for_nearby(park: &mut Park, ship_id: i64) -> Vec<(i64, V
     let entries = add_ball_entries(park, ship_id);
     let mut updates = Vec::new();
     for (client, ego) in viewers {
+        // A client with its fill of ships gets this one, if at all, when the
+        // next second's visibility pass makes room for it.
+        let full = !is_player_ship && park.visible_ships.get(&client).is_some_and(|seen| seen.len() >= client_ships());
         if (is_player_ship && client == owner)
+            || full
             || !within_overview_range(park, ego, ship_id)
             || !park.visible_ships.get_mut(&client).is_some_and(|seen| seen.insert(ship_id))
         {
@@ -685,7 +761,17 @@ pub fn add_ball_entries(park: &Park, ship_id: i64) -> Vec<Value> {
     ]);
     let mut entries = vec![entry(park.tick, "AddBalls", vec![chunk])];
     entries.extend(course_entries(ship, park.tick));
+    entries.extend(running_fx(ship, park.tick));
     entries
+}
+
+/// The effects of a ship's weapons already firing, for a client that has
+/// only now been sent the ship: without them it is drawn sitting idle.
+pub fn running_fx(ship: &Ship, tick: i64) -> Vec<Value> {
+    ship.fight
+        .as_ref()
+        .map(|f| f.modules.iter().filter(|m| m.offensive && m.target.is_some()).map(|m| crate::fight::module_fx(tick, ship.id, m, true)).collect())
+        .unwrap_or_default()
 }
 
 /// AddBalls for a celestial that appears while pilots are in the system (a
@@ -760,6 +846,9 @@ pub fn add_ship(world: &mut WorldState, system: i64, ship: Ship) {
     let others: Vec<i64> = in_space
         .into_iter()
         .filter(|client| *client != owner && park.visible_ships.contains_key(client))
+        // A client with its fill of ships gets this one when the next
+        // visibility pass makes room.
+        .filter(|client| park.visible_ships.get(client).is_some_and(|seen| seen.len() < client_ships()))
         .filter(|client| {
             park.ships
                 .values()
@@ -806,6 +895,7 @@ pub fn remove_ship(world: &mut WorldState, system: i64, ship_id: i64) -> Option<
     crate::fight::stand_down(park, ship_id, now, &mut out);
     crate::drones::recover_nonfighters_for_controller(park, ship_id, now, &mut out);
     let ship = crate::fight::detach(park, ship_id, now, &mut out)?;
+    let saw: Vec<i64> = park.visible_ships.iter().filter(|(_, seen)| seen.contains(&ship_id)).map(|(c, _)| *c).collect();
     for visible in park.visible_ships.values_mut() {
         visible.remove(&ship_id);
     }
@@ -815,7 +905,8 @@ pub fn remove_ship(world: &mut WorldState, system: i64, ship_id: i64) -> Option<
     let entries = remove_ball_entries(park.tick, ship_id);
     let jobs = out.deliver(world);
     world.pending_jobs.extend(jobs);
-    let others: Vec<i64> = world.in_space(system).into_iter().filter(|c| *c != ship.client_id).collect();
+    // Only the clients that were sent the ship are told it is gone.
+    let others: Vec<i64> = saw.into_iter().filter(|c| *c != ship.client_id).collect();
     let args = Value::Tuple(vec![Value::List(entries), Value::Int(0)]);
     world.notify(&others, "DoDestinyUpdate", args);
     Some(ship)
@@ -841,6 +932,12 @@ async fn push_set_state(ctx: &Ctx<'_>) {
     let Some(park) = world.parks.get(&system) else { return };
     let mut entries = set_state_entries(park, ship_id, &owners, &char_gangs);
     let visible = visible_ship_ids(park, ship_id);
+    // What is already firing, fires on the new screen too.
+    for id in &visible {
+        if let Some(s) = park.ships.get(id) {
+            entries.extend(running_fx(s, park.tick));
+        }
+    }
     let visible_objects = visible_object_ids(park, ship_id);
     if let Some(gate) = arrival {
         entries.push(special_fx(park.tick, ship_id, Some(gate), "effects.JumpIn"));

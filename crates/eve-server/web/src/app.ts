@@ -621,6 +621,8 @@ interface BotSettings {
   sovWarfare?: "low" | "moderate" | "war";
   battleSize?: number;
   battleSizeRange?: [number, number];
+  clientShips?: number;
+  clientShipsRange?: [number, number];
   countOverridden: boolean;
   aggressionOverridden: boolean;
   restartAvailable: boolean;
@@ -668,6 +670,9 @@ function renderBots(settings: BotSettings): void {
   }
   const shown = document.getElementById("bots-shown") as HTMLInputElement;
   if (document.activeElement !== shown && settings.shownPerSystem > 0) shown.value = String(settings.shownPerSystem);
+  const client = document.getElementById("bots-client") as HTMLInputElement;
+  if (settings.clientShipsRange) { client.min = String(settings.clientShipsRange[0]); client.max = String(settings.clientShipsRange[1]); }
+  if (document.activeElement !== client && settings.clientShips) client.value = String(settings.clientShips);
   if (settings.sovWarfare) setText("bots-sov-note", SOV_NOTES[settings.sovWarfare]);
   const battle = document.getElementById("bots-battle") as HTMLInputElement;
   if (settings.battleSizeRange) { battle.min = String(settings.battleSizeRange[0]); battle.max = String(settings.battleSizeRange[1]); }
@@ -2170,6 +2175,12 @@ for (const group of document.querySelectorAll<HTMLElement>(".bot-choice[data-set
   const input = document.getElementById("bots-shown") as HTMLInputElement;
   if (!input.checkValidity()) { input.reportValidity(); return; }
   void changeBots({ shownPerSystem: Number(input.value) });
+});
+(document.getElementById("bots-client-form") as HTMLFormElement).addEventListener("submit", (e) => {
+  e.preventDefault();
+  const input = document.getElementById("bots-client") as HTMLInputElement;
+  if (!input.checkValidity()) { input.reportValidity(); return; }
+  void changeBots({ clientShips: Number(input.value) });
 });
 (document.getElementById("bots-battle-form") as HTMLFormElement).addEventListener("submit", (e) => {
   e.preventDefault();

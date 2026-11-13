@@ -432,6 +432,13 @@ function renderBots(settings) {
     const shown = document.getElementById("bots-shown");
     if (document.activeElement !== shown && settings.shownPerSystem > 0)
         shown.value = String(settings.shownPerSystem);
+    const client = document.getElementById("bots-client");
+    if (settings.clientShipsRange) {
+        client.min = String(settings.clientShipsRange[0]);
+        client.max = String(settings.clientShipsRange[1]);
+    }
+    if (document.activeElement !== client && settings.clientShips)
+        client.value = String(settings.clientShips);
     if (settings.sovWarfare)
         setText("bots-sov-note", SOV_NOTES[settings.sovWarfare]);
     const battle = document.getElementById("bots-battle");
@@ -2001,6 +2008,15 @@ document.getElementById("bots-shown-form").addEventListener("submit", (e) => {
         return;
     }
     void changeBots({ shownPerSystem: Number(input.value) });
+});
+document.getElementById("bots-client-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const input = document.getElementById("bots-client");
+    if (!input.checkValidity()) {
+        input.reportValidity();
+        return;
+    }
+    void changeBots({ clientShips: Number(input.value) });
 });
 document.getElementById("bots-battle-form").addEventListener("submit", (e) => {
     e.preventDefault();

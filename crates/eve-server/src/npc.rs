@@ -1353,12 +1353,17 @@ fn think_one(park: &mut Park, id: i64, now: i64, seen: &[Seen], enemies: &HashSe
             }
         }
     }
+    // Only to the clients that have the ship: a battle of hundreds sends
+    // thousands of these, and the rest would get effects for ships they
+    // were never sent.
     let tick = park.tick;
-    for m in stopped {
-        out.destiny(park.solar_system_id, crate::fight::module_fx(tick, id, &m, false));
-    }
-    for m in started {
-        out.destiny(park.solar_system_id, crate::fight::module_fx(tick, id, &m, true));
+    let fx: Vec<Value> = stopped
+        .iter()
+        .map(|m| crate::fight::module_fx(tick, id, m, false))
+        .chain(started.iter().map(|m| crate::fight::module_fx(tick, id, m, true)))
+        .collect();
+    if !fx.is_empty() {
+        space::queue_ship_entries(park, id, fx, out);
     }
 }
 

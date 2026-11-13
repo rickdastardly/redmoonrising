@@ -199,6 +199,7 @@ struct BotsSection {
     bot_market: String,
     sov_warfare: String,
     battle_size: usize,
+    client_ships: usize,
 }
 
 impl Default for ServerSection {
@@ -227,7 +228,7 @@ impl Default for BotsSection {
             chat: "normal".into(), trash_talk: true, join_player_corps: "normal".into(), join_player_alliances: "normal".into(),
             accept_applications: "selective".into(), online_activity: 1.0, roaming_gangs: "normal".into(), hunt_players: true,
             mining_fleets: true, clear_belts: true, wingmen: "paid".into(), bot_market: "normal".into(),
-            sov_warfare: "moderate".into(), battle_size: 2_000 }
+            sov_warfare: "moderate".into(), battle_size: 2_000, client_ships: crate::svc::space::CLIENT_SHIPS_DEFAULT }
     }
 }
 
@@ -263,6 +264,7 @@ impl Config {
             sov_warfare: crate::bots::SovWarfare::parse(&file.bots.sov_warfare)
                 .ok_or_else(|| bad("sovWarfare", "low, moderate or war", &file.bots.sov_warfare))?,
             battle_size: file.bots.battle_size.clamp(crate::bots::BATTLE_SIZE_RANGE.0, crate::bots::BATTLE_SIZE_RANGE.1),
+            client_ships: file.bots.client_ships.clamp(crate::svc::space::CLIENT_SHIPS_RANGE.0, crate::svc::space::CLIENT_SHIPS_RANGE.1),
         };
         let mut c = Config {
             bind: file.server.bind,

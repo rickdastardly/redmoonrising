@@ -623,6 +623,8 @@ fn bot_settings() -> Json {
         "sovWarfare": crate::bots::sov_warfare().as_str(),
         "battleSize": crate::bots::battle_size(),
         "battleSizeRange": [crate::bots::BATTLE_SIZE_RANGE.0, crate::bots::BATTLE_SIZE_RANGE.1],
+        "clientShips": crate::svc::space::client_ships(),
+        "clientShipsRange": [crate::svc::space::CLIENT_SHIPS_RANGE.0, crate::svc::space::CLIENT_SHIPS_RANGE.1],
         "countOverridden": crate::config::overridden("RMR_BOTS"),
         "aggressionOverridden": crate::config::overridden("RMR_BOTS_AGGRESSION"),
         "restartAvailable": restart_available(),
@@ -700,6 +702,15 @@ async fn change_bots(server: &Server, body: &[u8]) -> EditResult {
         crate::bots::set_shown_per_system(n as usize);
         save_bots_setting("shownPerSystem", &n.to_string())?;
         said.push(format!("Up to {n} bot ships shown per system."));
+    }
+    if let Some(n) = input["clientShips"].as_u64() {
+        let (lo, hi) = crate::svc::space::CLIENT_SHIPS_RANGE;
+        if !(lo as u64..=hi as u64).contains(&n) {
+            return Err((400, format!("Ships your client is sent must be from {lo} to {hi}.")));
+        }
+        crate::svc::space::set_client_ships(n as usize);
+        save_bots_setting("clientShips", &n.to_string())?;
+        said.push(format!("Each player's client is sent up to {n} ships at once."));
     }
     if let Some(on) = input["piratesAttackPlayers"].as_bool() {
         crate::bots::set_pirates_attack_players(on);

@@ -471,7 +471,9 @@ pub fn stop(park: &mut Park, ship_id: i64, module_id: i64, now: i64, out: &mut O
             out.jobs.push(Job::Refit { client_id: ship.client_id, char_id: ship.pilot.char_id, ship_id, system });
         }
     }
-    out.destiny(system, module_fx(tick, ship_id, &m, false));
+    // To the clients that have the ship (its pilot among them).
+    let _ = system;
+    crate::svc::space::queue_ship_entries(park, ship_id, vec![module_fx(tick, ship_id, &m, false)], out);
 }
 
 /// OnGodmaShipEffect(itemID, effectID, time, start, active, environment,

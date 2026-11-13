@@ -2,6 +2,24 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Big battles without the teleporting
+
+*2026-11-13 21:07 UTC*
+
+The teleporting in big battles is fixed at its cause.
+
+### What was happening
+
+With hundreds of armed ships on grid, your game stalled for a second or more. It fell behind the server's updates and asked for the whole grid again, every 4 to 5 seconds. Each time it got 500 to 800 ships at once, which stalled it even longer. Each of those resends is the ship snapping to a new place and the overview being rebuilt from scratch.
+
+### What changed
+
+- **New Bots setting: "Ships your client is sent"**, 250 by default, up to 20,000. Battles are never limited by it: every ship still fights, dies and shows in local. Your game is sent the ships that matter most: your own drones, other players and your targets always, then ships that have you targeted, then capitals, then the nearest. The ships it already has are kept rather than swapped about, and new ones come in at up to 30 a second.
+- A full resend, if your game still asks for one, is the same capped set instead of the whole grid. It now includes the guns already firing, so ships don't appear sitting idle.
+- Weapon effects and "ship gone" messages now go only to players who were sent that ship. Before, every player in the system got thousands of effects for ships their game didn't even have.
+
+Start a decisive battle and watch. If your game keeps up, raise "Ships your client is sent" a little at a time on the Bots page.
+
 ## Glorious capital battles: cynos, real fits, hundreds of ships
 
 *2026-11-13 20:50 UTC*

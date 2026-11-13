@@ -443,6 +443,12 @@
               <button type="submit">Apply</button>
             </form>
             <p class="note">The most bot ships in space in one system where a player is, up to 20,000 (a 2,000 against 2,000 battle needs 4,000 or more). A capital battle you start from the Capital battle window or with /bots battle is not held to this: all its ships come. Ships arrive in waves of 25 a side every few seconds, so your client loads them as they come rather than all at once. More means bigger fights and far more work for the server and your client.</p>
+            <form id="bots-client-form" class="toolbar">
+              <label class="bot-label" for="bots-client">Ships your client is sent</label>
+              <input id="bots-client" type="number" min="50" max="20000" step="10" required>
+              <button type="submit">Apply</button>
+            </form>
+            <p class="note">The most ships one player's game is sent at once, up to 20,000. Battles are never limited by this: every ship fights. Your game is sent the ships that matter most to it first: anything that has you targeted or that you have targeted, your drones, other players, then capitals, then the nearest. Past this many your game stalls for seconds at a time, falls behind and asks the server for the whole grid again, which is the ship snapping about and the overview rebuilding. 250 suits most PCs; raise it a little at a time if your game keeps up.</p>
           </fieldset>
         </div>
         <p id="bots-reply" class="note" role="status"></p>

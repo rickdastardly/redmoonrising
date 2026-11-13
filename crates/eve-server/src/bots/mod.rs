@@ -529,6 +529,8 @@ pub struct Settings {
     pub market: Rate,
     pub sov_warfare: SovWarfare,
     pub battle_size: usize,
+    /// The most ships one player's client is sent at once.
+    pub client_ships: usize,
 }
 
 impl Default for Settings {
@@ -536,7 +538,7 @@ impl Default for Settings {
         Settings {
             chatter: Chatter::Normal, trash_talk: true, recruiting: Rate::Normal, alliance_applying: Rate::Normal, door: Door::Selective, activity: 1.0,
             roaming: Rate::Normal, hunt_players: true, mining_fleets: true, clear_belts: true, wingmen: Wingmen::Paid, market: Rate::Normal,
-            sov_warfare: SovWarfare::Moderate, battle_size: 2_000,
+            sov_warfare: SovWarfare::Moderate, battle_size: 2_000, client_ships: crate::svc::space::CLIENT_SHIPS_DEFAULT,
         }
     }
 }
@@ -550,6 +552,7 @@ pub fn apply_settings(s: &Settings, shown: usize) {
     set_bot_market(s.market);
     set_sov_warfare(s.sov_warfare);
     set_battle_size(s.battle_size);
+    crate::svc::space::set_client_ships(s.client_ships);
     set_chatter(s.chatter);
     set_trash_talk(s.trash_talk);
     set_recruiting(s.recruiting);
