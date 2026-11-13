@@ -3063,8 +3063,8 @@ namespace RmrClient {
         public SkyForm() {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             animation = new Timer();
-            animation.Interval = 120;
-            animation.Tick += delegate { if (Visible && WindowState != FormWindowState.Minimized) Invalidate(false); };
+            animation.Interval = 200;
+            animation.Tick += delegate { if (Visible && WindowState != FormWindowState.Minimized && Form.ActiveForm == this) Invalidate(false); };
             animation.Start();
         }
         protected override void OnPaintBackground(PaintEventArgs e) {

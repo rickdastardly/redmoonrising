@@ -908,6 +908,14 @@ function Start-RmrWorker {
     $previousOriginalTemp = $env:RMR_ORIGINAL_TEMP; $previousOriginalTmp = $env:RMR_ORIGINAL_TMP
     $pgBin = Join-Path $Runtime 'postgres-16.15\pgsql\bin'
     $data = Join-Path $Runtime 'data'
+    # Everything this worker starts (the compiler, PostgreSQL, the game
+    # server) inherits its priority, so Windows serves the programs in front
+    # of you first and the PC stays responsive while they work. They also
+    # leave a quarter of the processor's threads free (one on a small PC).
+    try { [Diagnostics.Process]::GetCurrentProcess().PriorityClass = [Diagnostics.ProcessPriorityClass]::BelowNormal } catch { }
+    $cpuThreads = [Math]::Max(1, [Environment]::ProcessorCount)
+    $busyThreads = $cpuThreads
+    if ($cpuThreads -gt 2) { $busyThreads = $cpuThreads - [Math]::Max(1, [int][Math]::Floor($cpuThreads / 4)) }
     try {
         try { $lock = [IO.File]::Open((Join-Path $Runtime 'launcher.lock'), 'OpenOrCreate', 'ReadWrite', 'None') }
         catch { Write-Host 'RMR is already running from this folder. Use its launcher window.'; return 2 }
@@ -1030,6 +1038,7 @@ function Start-RmrWorker {
         $env:CARGO_TARGET_DIR = Join-Path $Root 'target'
         $env:CARGO_BUILD_TARGET = 'x86_64-pc-windows-gnu'
         $env:CARGO_TERM_COLOR = 'never'
+        $env:CARGO_BUILD_JOBS = [string]$busyThreads
         $toolDir = Join-Path $Runtime 'tools'
         [IO.Directory]::CreateDirectory($toolDir) | Out-Null
         $rustup = Join-Path $toolDir 'rustup.exe'
@@ -1273,6 +1282,7 @@ function Start-RmrWorker {
         while ($restartServer) {
             $restartServer = $false
             if ([IO.File]::Exists($env:RMR_SHUTDOWN_FILE)) { Remove-Item -LiteralPath $env:RMR_SHUTDOWN_FILE -Force }
+            $env:TOKIO_WORKER_THREADS = [string]$busyThreads
             $server = New-NativeProcess (Join-Path $binaryDir 'eve-server.exe') @()
             # A first start prepares a new universe (market seeding and the
             # rest), which can take many minutes on a slower PC. Wait as long
@@ -1487,8 +1497,10 @@ namespace Rmr {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
                      ControlStyles.ResizeRedraw, true);
             animation = new Timer();
-            animation.Interval = 100;
-            animation.Tick += delegate { if (Visible && WindowState != FormWindowState.Minimized) Invalidate(); };
+            // The twinkling sky only moves while this window is the one in
+            // front, so it costs nothing while you play.
+            animation.Interval = 200;
+            animation.Tick += delegate { if (Visible && WindowState != FormWindowState.Minimized && Form.ActiveForm == this) Invalidate(); };
             animation.Start();
         }
         protected override void OnPaintBackground(PaintEventArgs e) {
@@ -1507,8 +1519,11 @@ namespace Rmr {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
                      ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             animation = new Timer();
-            animation.Interval = 100;
-            animation.Tick += delegate { if (Visible) Invalidate(true); };
+            animation.Interval = 200;
+            animation.Tick += delegate {
+                Form owner = FindForm();
+                if (Visible && owner != null && owner.WindowState != FormWindowState.Minimized && Form.ActiveForm == owner) Invalidate(true);
+            };
             animation.Start();
         }
         protected override void OnPaintBackground(PaintEventArgs e) {
