@@ -1,3 +1,4 @@
+mod attr_fixes;
 mod ballpark;
 mod bot_market;
 mod bots;
@@ -109,6 +110,7 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         auto_create_accounts: config.auto_create_accounts,
     });
 
+    attr_fixes::repair(&mut client).await.map_err(|e| format!("repairing item attributes: {}", logging::chain(&e)))?;
     svc::medical::ensure_grades(&mut client).await.map_err(|e| format!("preparing medical clone grades: {e}"))?;
     svc::skills::ensure_training(&client).await.map_err(|e| format!("preparing skill training: {}", logging::chain(&e)))?;
     match svc::skills::grant_missing_prerequisites(&client).await {
