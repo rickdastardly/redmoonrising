@@ -592,18 +592,80 @@ fn drawn_ship_ids(park: &Park, ego: i64, kept: Option<&BTreeSet<i64>>) -> BTreeS
         .collect();
     let budget = park.ships.get(&ego).map_or_else(client_ships, |me| ships_for(me.client_id));
     let Some(me) = park.ships.get(&ego).filter(|_| in_range.len() > budget) else {
-        return in_range.iter().map(|s| s.id).collect();
+        let mut all: BTreeSet<i64> = in_range.iter().map(|s| s.id).collect();
+        with_course_targets(park, &mut all);
+        return all;
     };
     let mut ranked: Vec<(u8, bool, f64, i64)> = in_range
         .iter()
         .map(|s| (draw_rank(me, s), !kept.is_some_and(|k| k.contains(&s.id)), (s.pos - me.pos).len(), s.id))
         .collect();
     ranked.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)).then(a.2.total_cmp(&b.2)));
-    ranked.iter().enumerate().filter(|(n, r)| *n < budget || r.0 == 0).map(|(_, r)| r.3).collect()
+    let mut drawn: BTreeSet<i64> = ranked.iter().enumerate().filter(|(n, r)| *n < budget || r.0 == 0).map(|(_, r)| r.3).collect();
+    // What their courses orbit or follow comes too, over the budget if it must.
+    with_course_targets(park, &mut drawn);
+    drawn
 }
 
 pub(crate) fn visible_ship_ids(park: &Park, ego: i64) -> BTreeSet<i64> {
     drawn_ship_ids(park, ego, None)
+}
+
+/// The ship a ship's course is set by: the one it orbits or follows.
+fn course_target(park: &Park, ship_id: i64) -> Option<i64> {
+    match park.ships.get(&ship_id)?.command {
+        Command::Follow { target, .. } | Command::Orbit { target, .. } => {
+            park.ships.get(&target).filter(|t| !crate::drones::in_transit(t)).map(|t| t.id)
+        }
+        _ => None,
+    }
+}
+
+/// Adds to `set` the ships its ships' courses orbit or follow, and theirs:
+/// a client sent a ship orbiting a ball it was never sent loses sync and
+/// asks for the whole grid again.
+fn with_course_targets(park: &Park, set: &mut BTreeSet<i64>) {
+    let mut queue: Vec<i64> = set.iter().copied().collect();
+    while let Some(id) = queue.pop() {
+        if let Some(t) = course_target(park, id) {
+            if set.insert(t) {
+                queue.push(t);
+            }
+        }
+    }
+}
+
+/// Before `ship_id`'s course goes to `client`: the ships that course orbits
+/// or follows (and theirs), added for the client first if it lacks them,
+/// the furthest along first so every course names a ball the client has.
+fn course_target_adds(park: &mut Park, client: i64, ship_id: i64) -> Vec<Value> {
+    let mut chain = Vec::new();
+    let mut at = ship_id;
+    while chain.len() < 8 {
+        let Some(t) = course_target(park, at) else { break };
+        let Some(seen) = park.visible_ships.get_mut(&client) else { break };
+        if !seen.insert(t) {
+            break;
+        }
+        chain.push(t);
+        at = t;
+    }
+    chain.iter().rev().flat_map(|t| add_ball_entries(park, *t)).collect()
+}
+
+/// A ship's course (or any update about it) to the clients that have it,
+/// each sent first the ships the course orbits or follows that it lacks.
+pub fn ship_updates(park: &mut Park, ship_id: i64, entries: &[Value], also: Option<i64>) -> Vec<(i64, Value)> {
+    let mut viewers = ship_viewers(park, ship_id);
+    if let Some(c) = also.filter(|c| !viewers.contains(c)) {
+        viewers.push(c);
+    }
+    let mut updates = Vec::new();
+    for client in viewers {
+        updates.extend(course_target_adds(park, client, ship_id).into_iter().map(|e| (client, e)));
+        updates.extend(entries.iter().cloned().map(|e| (client, e)));
+    }
+    updates
 }
 
 fn within_overview_range(park: &Park, viewer: i64, target: i64) -> bool {
@@ -721,7 +783,9 @@ pub fn sync_ship_visibility(park: &mut Park) -> Vec<(i64, Value)> {
                 for id in &later {
                     current.remove(id);
                 }
-                added.retain(|id| !later.contains(id));
+                // Held back or not, what a sent ship orbits or follows is sent with it.
+                with_course_targets(park, &mut current);
+                added = current.difference(&previous).copied().filter(|id| *id != ego).collect();
             }
         }
         let removed: Vec<i64> = previous
@@ -792,11 +856,10 @@ pub fn ship_viewers(park: &Park, ship_id: i64) -> Vec<i64> {
         .collect()
 }
 
-pub fn queue_ship_entries(park: &Park, ship_id: i64, entries: Vec<Value>, out: &mut crate::heartbeat::Out) {
-    for client in ship_viewers(park, ship_id) {
-        for entry in &entries {
-            out.destiny_to(park.solar_system_id, client, entry.clone());
-        }
+pub fn queue_ship_entries(park: &mut Park, ship_id: i64, entries: Vec<Value>, out: &mut crate::heartbeat::Out) {
+    let system = park.solar_system_id;
+    for (client, entry) in ship_updates(park, ship_id, &entries, None) {
+        out.destiny_to(system, client, entry);
     }
 }
 
@@ -848,6 +911,28 @@ pub fn special_fx(tick: i64, ship_id: i64, target_id: Option<i64>, guid: &str) -
 /// camera shake. Keep it active from actual warp entry until landing.
 pub fn warp_fx(tick: i64, ship_id: i64, start: bool) -> Value {
     special_fx_state(tick, ship_id, None, "effects.Warping", start, start)
+}
+
+/// An effect of a module of `type_id` on `ship_id`: the client draws some
+/// (a titan's doomsday, EMPWaveGrid) from the module's type and fails
+/// without it.
+pub fn module_type_fx(tick: i64, ship_id: i64, module_id: i64, type_id: i64, target_id: Option<i64>, guid: &str) -> Value {
+    entry(
+        tick,
+        "OnSpecialFX",
+        vec![
+            Value::Int(ship_id),
+            Value::Int(module_id),
+            Value::Int(type_id),
+            Value::int_or_none(target_id),
+            Value::None,
+            Value::List(Vec::new()),
+            Value::bytes(guid),
+            Value::Int(1),
+            Value::Int(1),
+            Value::Int(1),
+        ],
+    )
 }
 
 /// A lasting effect switched on (`on`) or off, such as siege mode.
@@ -931,7 +1016,7 @@ pub fn order(world: &mut WorldState, system: i64, ship_id: i64, command: Command
     }
     park.command(ship_id, command);
     entries.insert(0, command_entry(&park.ships[&ship_id], tick));
-    let updates = ship_viewers(park, ship_id).into_iter().flat_map(|client| entries.iter().cloned().map(move |entry| (client, entry))).collect();
+    let updates = ship_updates(park, ship_id, &entries, None);
     notify_targeted_updates(world, updates);
 }
 
@@ -1125,11 +1210,7 @@ fn steer(ctx: &Ctx<'_>, system: i64, ship_id: i64, order: Order, method: &str) -
     if warp_order && ship.warping() {
         updates.extend(ship_motion_entries(ship, tick).map(|entry| (ctx.client_id, entry)));
     }
-    let mut viewers = ship_viewers(park, ship_id);
-    if !viewers.contains(&ctx.client_id) {
-        viewers.push(ctx.client_id);
-    }
-    updates.extend(viewers.into_iter().flat_map(|client| entries.iter().cloned().map(move |entry| (client, entry))));
+    updates.extend(ship_updates(park, ship_id, &entries, Some(ctx.client_id)));
     notify_targeted_updates(&world, updates);
     Outcome::Value(Value::None)
 }

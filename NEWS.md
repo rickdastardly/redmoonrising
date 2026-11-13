@@ -2,6 +2,22 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## The real cause of the battle desyncs
+
+*2026-11-13 22:05 UTC*
+
+Found why your game kept losing sync in big battles even when it had only 60 ships.
+
+### The cause
+
+A ship that orbits or chases something is sent with what it is following. Since your game began getting only some of the ships, it was often sent a ship orbiting one it had never been sent. It couldn't follow a ship it didn't have, so it lost sync and asked for the whole grid again, every few seconds. That made fewer ships no help, and it was worse than before the ship limit.
+
+### Fixed
+
+- **Your game is never sent a ship without the ship it orbits or follows.** They come together, even past "Ships your client is sent".
+- When a ship turns to orbit or chase one your game doesn't have, that ship is sent first. This covers bots, NPCs, drones, ships landing from warp, and players.
+- **Titans' doomsdays now show.** The effect is sent with the titan's own doomsday (Judgement, Aurora Ominae, Oblivion or Gjallarhorn). Before, the game couldn't draw it and logged an error each time.
+
 ## Your game can use 4 GB of memory
 
 *2026-11-13 21:45 UTC*

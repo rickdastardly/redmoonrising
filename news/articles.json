@@ -472,5 +472,11 @@
     "publishedMs": 1794606306987,
     "title": "Your game can use 4 GB of memory",
     "body": "<p><b>Your game can now use up to 4 GB of memory instead of 2.</b> EVE 2.10 is a 32-bit program, and Windows gives a 32-bit program 2 GB unless the program says it can handle more. A big battle can use those 2 GB up, and the game then closes without warning.</p>\n<ul>\n<li><code>Client.bat</code> now sets the one-bit \"large address aware\" flag in <code>bin\\exefile.exe</code> when it prepares your game. On 64-bit Windows, that gives the game 4 GB.</li>\n<li>The original <code>exefile.exe</code> is kept in the <code>.rmr-backup</code> folder inside your EVE folder.</li>\n<li>To go back to 2 GB, run <code>Client.bat --memory-2gb</code>.</li>\n<li>If the game is running when <code>Client.bat</code> prepares it, Windows won't let the file change. The flag is then set the next time.</li>\n</ul>\n<p>Run <code>Client.bat</code> once with the game closed to apply it. If your game still closes in a big battle, open Task Manager and watch <code>exefile.exe</code>'s memory before it happens, and tell us what it reached.</p>"
+  },
+  {
+    "published": "2026-11-13 22:05 UTC",
+    "publishedMs": 1794607534431,
+    "title": "The real cause of the battle desyncs",
+    "body": "<p>Found why your game kept losing sync in big battles even when it had only 60 ships.</p>\n<h3>The cause</h3>\n<p>A ship that orbits or chases something is sent with what it is following. Since your game began getting only some of the ships, it was often sent a ship orbiting one it had never been sent. It couldn't follow a ship it didn't have, so it lost sync and asked for the whole grid again, every few seconds. That made fewer ships no help, and it was worse than before the ship limit.</p>\n<h3>Fixed</h3>\n<ul>\n<li><b>Your game is never sent a ship without the ship it orbits or follows.</b> They come together, even past \"Ships your client is sent\".</li>\n<li>When a ship turns to orbit or chase one your game doesn't have, that ship is sent first. This covers bots, NPCs, drones, ships landing from warp, and players.</li>\n<li><b>Titans' doomsdays now show.</b> The effect is sent with the titan's own doomsday (Judgement, Aurora Ominae, Oblivion or Gjallarhorn). Before, the game couldn't draw it and logged an error each time.</li>\n</ul>"
   }
 ]

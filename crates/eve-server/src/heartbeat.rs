@@ -244,10 +244,11 @@ fn pulse(world: &World, now: i64) -> Vec<Job> {
                 info!("player warp landing: ship {ship_id} at {:?}, nearest belt {nearest:?}, {rocks} nearby asteroid(s), {} viewer(s)", ship.pos, viewers.len());
             }
             let entries = space::warp_landing_entries(ship, park.tick);
-            for client in viewers {
-                for entry in &entries {
-                    out.destiny_to(park.solar_system_id, client, entry.clone());
-                }
+            let own = ship.is_player().then_some(ship.client_id);
+            let _ = viewers;
+            let system = park.solar_system_id;
+            for (client, entry) in space::ship_updates(park, ship_id, &entries, own) {
+                out.destiny_to(system, client, entry);
             }
             crate::drones::on_warp_landed(park, ship_id, now);
         }

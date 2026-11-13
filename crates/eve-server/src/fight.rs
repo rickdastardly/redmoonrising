@@ -206,7 +206,17 @@ fn battle_orders(park: &mut Park, now: i64, out: &mut Out) {
                         && (s.pos - at).len() <= DOOMSDAY_RANGE)
                     .map(|s| s.id)
                     .collect();
-                out.destiny(system, crate::svc::space::special_fx(tick, titan, None, "effects.EMPWaveGrid"));
+                // The client draws the doomsday from its module's type: the
+                // titan's race's own (Judgement, Aurora Ominae, Oblivion,
+                // Gjallarhorn).
+                let doomsday = match source.pilot.type_id {
+                    11567 => 24550,
+                    3764 => 24554,
+                    671 => 24552,
+                    23773 => 23674,
+                    _ => 24550,
+                };
+                out.destiny(system, crate::svc::space::module_type_fx(tick, titan, crate::npc::slot::mount(titan, 9), doomsday, None, "effects.EMPWaveGrid"));
                 info!("titan {titan} fires its doomsday on {} ship(s) in {system}", targets.len());
                 for t in targets {
                     hit(park, attacker, t, [1.0e9; 4], Shot::Hit { quality: 3, multiplier: 1.0 }, "Doomsday", now, out);

@@ -448,8 +448,8 @@ fn abandon(ctx: &Ctx<'_>, ids: &[i64]) -> Value {
             }
         }
         park.command(*id, Command::Stop);
-        if let Some(ship) = park.ships.get(id) {
-            space::queue_ship_entries(park, *id, vec![space::command_entry(ship, park.tick)], &mut out);
+        if let Some(entry) = park.ships.get(id).map(|ship| space::command_entry(ship, park.tick)) {
+            space::queue_ship_entries(park, *id, vec![entry], &mut out);
         }
     }
     out.deliver(&world);
@@ -724,10 +724,11 @@ fn think_one(park: &mut Park, id: i64, now: i64, out: &mut Out) {
         park.command(id, course);
         park.set_speed_fraction(id, speed);
         if let Some(s) = park.ships.get(&id) {
-            space::queue_ship_entries(park, id, space::course_entries(s, tick), out);
+            let mut entries = space::course_entries(s, tick);
             if s.command == Command::Stop {
-                space::queue_ship_entries(park, id, vec![space::command_entry(s, tick)], out);
+                entries.push(space::command_entry(s, tick));
             }
+            space::queue_ship_entries(park, id, entries, out);
         }
     }
 }
