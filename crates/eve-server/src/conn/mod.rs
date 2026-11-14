@@ -42,8 +42,6 @@ pub struct Server {
     pub dump_dir: PathBuf,
     /// Seconds before an accepted alliance application takes effect.
     pub alliance_join_delay_secs: i64,
-    /// Seconds a tower's claim stands before it counts toward sovereignty.
-    pub sov_claim_delay_secs: i64,
 }
 
 #[derive(Debug, thiserror::Error)]

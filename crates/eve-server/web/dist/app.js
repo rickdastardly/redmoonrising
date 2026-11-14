@@ -432,6 +432,9 @@ function renderBots(settings) {
     const shown = document.getElementById("bots-shown");
     if (document.activeElement !== shown && settings.shownPerSystem > 0)
         shown.value = String(settings.shownPerSystem);
+    const claim = document.getElementById("bots-sovclaim");
+    if (document.activeElement !== claim && settings.sovClaimHours !== undefined)
+        claim.value = String(settings.sovClaimHours);
     const client = document.getElementById("bots-client");
     if (settings.clientShipsRange) {
         client.min = String(settings.clientShipsRange[0]);
@@ -1386,6 +1389,16 @@ async function showGroup(kind, id) {
             return e;
         };
         side.append(sideBox("Activity (last 90 days)", activityHeat(g.activity), span("EVE time, Monday to Sunday", "zp-note")), sideBox("Active PvP (last 7 days)", week), sideBox("Top pilots", rankedList(g.pilots.map((p) => ({ label: pilotLink(p.id, p.name), count: p.kills })), "No kills yet.")));
+        if (kind === "corporation" && g.officers && g.officers.length) {
+            const list = document.createElement("ol");
+            list.className = "zp-officers";
+            for (const o of g.officers) {
+                const li = document.createElement("li");
+                li.append(span(o.title, "dim"), " ", pilotLink(o.id, o.name));
+                list.append(li);
+            }
+            side.append(sideBox("Officers", list, span("Bot pilots holding the corporation's roles, who do its work.", "zp-note")));
+        }
         if (kind === "alliance") {
             side.append(sideBox("Member corporations", rankedList(g.corporations.map((c) => {
                 const e = document.createElement("span");
@@ -1580,8 +1593,9 @@ async function refresh() {
         list("corporations", [
             { title: "Corporation", key: (c) => c.name, cell: (c) => [corpLink(c.id, c.name), corpTicker(c.ticker), c.bots ? "" : span(" (players)", "dim")] },
             { title: "Alliance", key: (c) => c.alliance ?? "", cell: (c) => [c.alliance ? allianceLink(c.allianceID, c.alliance) : ""] },
+            { title: "CEO", key: (c) => c.ceo ?? "", cell: (c) => [c.ceo ? pilotLink(c.ceoID, c.ceo) : ""] },
             { title: "Members", num: true, key: (c) => c.members, cell: (c) => count(c.members) },
-        ], corporations, "No corporations have been founded.", 2, true);
+        ], corporations, "No corporations have been founded.", 3, true);
         const withAllies = (main, allies) => allies && allies.length ? [main, span(` with ${allies.join(", ")}`, "dim")] : [main];
         const fleet = (s, side) => {
             if (!s.fighting || !s.brought)
@@ -2009,6 +2023,15 @@ document.getElementById("bots-shown-form").addEventListener("submit", (e) => {
     }
     void changeBots({ shownPerSystem: Number(input.value) });
 });
+document.getElementById("bots-sovclaim-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const input = document.getElementById("bots-sovclaim");
+    if (!input.checkValidity()) {
+        input.reportValidity();
+        return;
+    }
+    void changeBots({ sovClaimHours: Number(input.value) });
+});
 document.getElementById("bots-client-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const input = document.getElementById("bots-client");
@@ -2203,6 +2226,47 @@ function typicalSpacing() {
     nearest.sort((a, b) => a - b);
     return nearest[Math.floor(nearest.length / 2)] || size;
 }
+/// Player alliances whose bots are claiming space on their word.
+async function refreshCampaigns() {
+    if (document.body.dataset.page !== "sovereignty")
+        return;
+    try {
+        const data = await get("/api/campaigns");
+        const table = document.getElementById("campaigns");
+        const head = document.createElement("tr");
+        for (const h of ["Alliance", "Ordered by", "Since", "Towers anchoring", "Onlining", "Online", "Outposts building", "Outposts", "Systems held"]) {
+            const th = document.createElement("th");
+            th.textContent = h;
+            head.append(th);
+        }
+        const lines = data.campaigns.map((c) => {
+            const tr = document.createElement("tr");
+            const name = document.createElement("td");
+            name.append(allianceLink(c.id, c.name), c.ticker ? ` <${c.ticker}>` : "");
+            tr.append(name);
+            for (const v of [c.orderedBy, `${eveTime(c.since)} EVE`, c.anchoring, c.onlining, c.online, c.platforms, c.outposts, c.systems]) {
+                const td = document.createElement("td");
+                td.textContent = typeof v === "number" ? numbers.format(v) : v;
+                tr.append(td);
+            }
+            return tr;
+        });
+        if (!lines.length) {
+            const tr = document.createElement("tr");
+            const td = document.createElement("td");
+            td.colSpan = 9;
+            td.textContent = "No alliance has told its bots to claim space. Say \"start claiming sov for our alliance\" in alliance chat.";
+            tr.append(td);
+            lines.push(tr);
+        }
+        table.replaceChildren(head, ...lines);
+        setText("campaigns-delay", `Claims count ${numbers.format(data.claimHours)} h after a tower comes online`);
+    }
+    catch (e) {
+        setText("campaigns-delay", `Could not load campaigns: ${String(e)}`);
+    }
+}
+setInterval(() => void refreshCampaigns(), 30000);
 async function refreshSov() {
     if (!sov.loaded || document.body.dataset.page !== "sovereignty")
         return;
@@ -2632,7 +2696,11 @@ function showSovPanels(state) {
         const li = document.createElement("li");
         const time = document.createElement("time");
         time.textContent = r.since ? `${eveTime(r.since)} EVE` : "";
-        li.append(time, `${r.system} (${r.region}) → ${r.alliance}${r.ticker ? ` <${r.ticker}>` : ""}`);
+        const to = r.alliance ? `${r.alliance}${r.ticker ? ` <${r.ticker}>` : ""}` : "";
+        const what = !to ? `${r.from || "its holder"} lost it` : r.from ? `${r.from} → ${to}` : `→ ${to}`;
+        li.append(time, `${r.system} (${r.region}) ${what}`);
+        if (!to)
+            li.classList.add("lost");
         li.addEventListener("click", () => centreSovOn(r.id));
         return li;
     }));
@@ -3185,7 +3253,7 @@ const pages = {
     sieges: { title: "Sieges and battles", description: "Sovereignty wars: sieges massing and battles being fought, from skirmishes to thousands of ships. Fly to one to watch it ship against ship.", windows: ["w-sieges", "w-news"] },
     news: { title: "Galactic news", description: "Published articles and recent events from across the cluster.", windows: ["w-articles", "w-news"] },
     killboard: { title: "Killboard", description: "Killmails, top killers and recent destruction.", windows: ["w-killboard"] },
-    sovereignty: { title: "Sovereignty map", description: "Who holds which systems, updated as sovereignty changes hands.", windows: ["w-sovmap"] },
+    sovereignty: { title: "Sovereignty map", description: "Who holds which systems, updated as sovereignty changes hands.", windows: ["w-sovmap", "w-campaigns"] },
     downtime: { title: "Server downtime", description: "Announce and schedule a graceful shutdown or restart.", windows: ["w-downtime"] },
     bots: { title: "Bots", description: "How many bots the server plays, and how aggressive they are. Start a capital battle to watch.", windows: ["w-bots", "w-battle"] },
     market: { title: "Market", description: "Trade activity and hub stock.", windows: ["w-market"] },
@@ -3257,8 +3325,10 @@ function route() {
         void refreshBotSettings();
     if (activePage === "killboard" && killID === 0 && pilotID === 0 && groupID === 0)
         void refreshBattles();
-    if (hash === "sovereignty")
+    if (hash === "sovereignty") {
         void openSovMap();
+        void refreshCampaigns();
+    }
     window.scrollTo(0, 0);
 }
 window.addEventListener("hashchange", route);

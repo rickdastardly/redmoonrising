@@ -51,9 +51,13 @@ const ALLIANCE_HEADER: &[&str] = &[
     "allianceID", "allianceName", "shortName", "description", "url", "executorCorpID",
     "creatorCorpID", "creatorCharID", "dictatorial", "startDate", "memberCount", "deleted",
 ];
+/// memberCount is counted from the corporations, not the stored tally,
+/// which drifts as corporations come and go.
 const ALLIANCE_SELECT: &str = r#"
     SELECT "allianceID", "allianceName", "shortName", "description", "url", "executorCorpID",
-           "creatorCorpID", "creatorCharID", "dictatorial", "startDate", "memberCount", "deleted"
+           "creatorCorpID", "creatorCharID", "dictatorial", "startDate",
+           (SELECT count(*)::int FROM "corporation" mc WHERE mc."allianceID" = alliances."allianceID" AND mc."deleted" = 0) AS "memberCount",
+           "deleted"
       FROM alliances"#;
 
 const MEMBER_HEADER: &[&str] = &["allianceID", "corporationID", "chosenExecutorID", "startDate"];

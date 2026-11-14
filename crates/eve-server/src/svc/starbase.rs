@@ -1188,7 +1188,26 @@ pub async fn ensure_sovereignty(db: &Client) -> Result<(), tokio_postgres::Error
     db.batch_execute(r#"
         ALTER TABLE "posStructures" ADD COLUMN IF NOT EXISTS "claimAllianceID" integer;
         ALTER TABLE "mapSolarSystems" ADD COLUMN IF NOT EXISTS "sovereigntySince" bigint;
+        CREATE TABLE IF NOT EXISTS "rmrSovHistory" (
+            "changeID" bigserial PRIMARY KEY,
+            "solarSystemID" integer NOT NULL,
+            "fromAllianceID" integer,
+            "toAllianceID" integer,
+            "changedAt" bigint NOT NULL);
+        COMMENT ON TABLE "rmrSovHistory" IS 'MADE: every change of sovereignty, gained and lost, for the dashboard''s sovereignty map (svc::starbase::resolve_sovereignty).';
     "#).await
+}
+
+static CLAIM_DELAY: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// Seconds a tower's claim stands before it counts towards sovereignty: the
+/// config's sovClaimDelaySeconds, changeable from the dashboard.
+pub fn claim_delay_secs() -> i64 {
+    CLAIM_DELAY.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn set_claim_delay_secs(secs: i64) {
+    CLAIM_DELAY.store(secs.max(0), std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Counts claiming towers and moves sovereignty where it has changed hands.
@@ -1258,7 +1277,11 @@ async fn resolve_sovereignty(db: &mut Client, claim_delay_secs: i64) -> Result<(
     // Many at once (null-sec settled at the start) are summed up, not listed.
     let many = changes.len() > SOV_CHANGES_LISTED;
     let mut moved = 0;
-    for (system, _, winner) in &changes {
+    for (system, holder, winner) in &changes {
+        tx.execute(
+            r#"INSERT INTO "rmrSovHistory" ("solarSystemID", "fromAllianceID", "toAllianceID", "changedAt") VALUES ($1, $2, $3, $4)"#,
+            &[&(*system as i32), &holder.map(|a| a as i32), &winner.map(|a| a as i32), &now],
+        ).await?;
         tx.execute(
             r#"UPDATE "mapSolarSystems" SET "allianceID" = $2,
                    "sovereigntySince" = CASE WHEN $2::integer IS NULL THEN NULL ELSE $3::bigint END

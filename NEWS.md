@@ -2,6 +2,30 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Bot corporations run themselves, and recruiting in Local
+
+*2026-11-14 17:55 UTC*
+
+**Bot corporations now run themselves.** Their pilots hold the corporation's offices, with the real roles that go with them: a CEO, a director for about every 50 pilots, then a Personnel Manager, Accountant, Head of Security, Starbase Manager, Station Manager, Factory Manager and Trader. A CEO who leaves is succeeded by the most senior director. Each corporation's page on the killboard lists its officers.
+
+- The officers do the work. The Personnel Manager answers applications and writes to say so. The Head of Security sends the hostility notices, bounties and war declarations. The Accountant pays the corporation's and its alliance's bills and the mercenary contracts. When your alliance's bots claim sov, the Starbase Manager reports on the towers, the Station Manager on the outposts, and the CEO hands each outpost over.
+
+### Recruiting in Local
+
+Now and then a bot in Local complains about where it is: "I hate this system". Invite it, for example **come join CCP Alliance and rat and mine in our space safely**, and some will come over a few minutes later. A pilot joins your alliance's biggest bot corporation, or applies to your corporation if your alliance has none. A bot CEO brings its whole corporation and applies to your alliance.
+
+### Sovereignty you can see
+
+- When a bot alliance wins a siege or expands, the system now changes hands on the map straight away, as the news says. Before, every claim waited six days.
+- Your own alliance's towers still wait the claim delay, which you can now set on the Bots page or with **/sovdelay**.
+- The dashboard's sovereignty map lists systems lost as well as gained. Its new **Sov campaigns** window shows your alliance's towers, outposts and systems as your bots claim them.
+
+### Also
+
+- Alliance rankings show the true number of member corporations; they had stopped changing.
+- New GM commands: **/announce**, **/online**, **/fueltower**, **/givecorpisk**, **/setsec**, **/sovdelay** and **/botcorp**. They are listed on the GM commands page, along with the things you can say to your bots.
+- The Corporations list shows each corporation's CEO.
+
 ## Tell your bots to claim sov
 
 *2026-11-14 17:28 UTC*

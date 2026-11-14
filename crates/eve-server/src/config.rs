@@ -526,21 +526,36 @@ pub fn bots_in_file() -> Result<usize, String> {
 /// Sets one `bots:` setting in the config file (for the dashboard), keeping
 /// every comment and other line as it is. A missing setting is added.
 pub fn set_bots_setting(key: &str, value: &str) -> Result<(), String> {
+    set_setting("bots", key, value)
+}
+
+/// Saves one `game:` setting to the config file.
+pub fn set_game_setting(key: &str, value: &str) -> Result<(), String> {
+    set_setting("game", key, value)
+}
+
+fn set_setting(section: &str, key: &str, value: &str) -> Result<(), String> {
     let path = file_path();
     let text = std::fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    let updated = with_bots_setting(&text, key, value);
+    let updated = with_setting(&text, section, key, value);
     parse(&updated).map_err(|e| format!("the updated {} would not be valid: {e}", path.display()))?;
     std::fs::write(&path, updated).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
+#[cfg(test)]
 fn with_bots_setting(text: &str, key: &str, value: &str) -> String {
+    with_setting(text, "bots", key, value)
+}
+
+fn with_setting(text: &str, section_name: &str, key: &str, value: &str) -> String {
     let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
     let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
-    let section = lines.iter().position(|l| l.trim_end() == "bots:");
+    let header = format!("{section_name}:");
+    let section = lines.iter().position(|l| l.trim_end() == header);
     let Some(start) = section else {
-        // No bots section: add one at the end.
+        // No such section: add one at the end.
         let mut out = text.trim_end().to_string();
-        out.push_str(&format!("{newline}{newline}bots:{newline}  {key}: {value}{newline}"));
+        out.push_str(&format!("{newline}{newline}{section_name}:{newline}  {key}: {value}{newline}"));
         return out;
     };
     // The section runs until the next top-level line that is not a comment.

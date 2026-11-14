@@ -32,6 +32,9 @@ pub enum Request {
     /// A player's word in alliance chat to the alliance's bot corporations
     /// (`talk`): claim null-sec for it, stop, or say how it goes (`claim`).
     ClaimSov { alliance: i32, by: i64, order: SovOrder },
+    /// A bot won over in Local by a player's invitation (`talk`): it comes
+    /// over to the player's side a while later (`relations::won_over`).
+    WinOver { bot: i64, player: i64, system: i32 },
 }
 
 /// What a player told their alliance's bots about sovereignty.

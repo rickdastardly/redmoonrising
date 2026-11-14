@@ -156,9 +156,9 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         world: world::World::default(),
         dump_dir: config.dump_dir.clone(),
         alliance_join_delay_secs: config.alliance_join_delay_secs,
-        sov_claim_delay_secs: config.sov_claim_delay_secs,
     });
     pos::set_speedup(config.starbase_speedup);
+    svc::starbase::set_claim_delay_secs(config.sov_claim_delay_secs);
     tokio::spawn(heartbeat::run(Arc::clone(&server)));
     tokio::spawn(health::run(server.db_url.clone(), std::time::Duration::from_millis(heartbeat::PULSE_MS)));
     bots::configure(config.bots_pirates_attack, config.bots_controls);

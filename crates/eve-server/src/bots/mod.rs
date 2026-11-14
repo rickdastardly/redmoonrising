@@ -34,6 +34,7 @@ mod population;
 mod presence;
 mod relations;
 mod schema;
+mod officers;
 mod ships;
 mod sov;
 pub mod talk;
@@ -609,6 +610,7 @@ pub fn request(words: &[&str]) -> Result<String, String> {
         control::Request::Unfollow(n) => format!("No longer following {n}."),
         control::Request::Meet { bots, .. } => format!("{} bots answering a fight call.", bots.len()),
         control::Request::ClaimSov { alliance, order, .. } => format!("Sovereignty order {order:?} for alliance {alliance}."),
+        control::Request::WinOver { bot, .. } => format!("Pilot {bot} won over in Local."),
         control::Request::Battle { place, stakes } => format!(
             "Asked for a {} with capital ships in {}. The server log and the dashboard say where it is and how it goes.",
             stakes.as_deref().unwrap_or("decisive"),
@@ -645,13 +647,16 @@ pub async fn run(server: Arc<Server>, target: usize, speed: f64, shown: usize, s
                 Ok(p) => p,
                 Err(e) => return error!("bots: politics: {}", crate::logging::chain(&e)),
             };
-            match sov::establish(&mut db, &atlas, &politics, &mut rng, server.sov_claim_delay_secs).await {
+            match sov::establish(&mut db, &atlas, &politics, &mut rng, crate::svc::starbase::claim_delay_secs()).await {
                 Ok(news) if !news.is_empty() => {
                     politics.tell(news);
-                    crate::svc::starbase::sovereignty(&mut db, server.sov_claim_delay_secs).await;
+                    crate::svc::starbase::sovereignty(&mut db, crate::svc::starbase::claim_delay_secs()).await;
                 }
                 Ok(_) => {}
                 Err(e) => error!("bots: settling null-sec: {}", crate::logging::chain(&e)),
+            }
+            if let Err(e) = officers::appoint(&db).await {
+                error!("bots: bot corporations' offices: {}", crate::logging::chain(&e));
             }
             let (yard, econ) = match markets(&db, &atlas, &mut bots, &mut ids, &politics).await {
                 Ok(v) => v,
@@ -820,6 +825,9 @@ struct Sim {
     tally: Tally,
     /// Player alliances whose bots claim space on their word (`claim`).
     claims: claim::Campaigns,
+    /// Bots won over in Local, coming over when the clock reaches the first:
+    /// (when, bot, player, system).
+    won_over: Vec<(u32, i64, i64, i32)>,
 }
 
 impl Sim {
@@ -881,6 +889,7 @@ impl Sim {
             applied_activity: activity_factor(),
             tally: Tally::default(),
             claims: claim::Campaigns::default(),
+            won_over: Vec::new(),
         }
     }
 
@@ -1133,6 +1142,22 @@ impl Sim {
     /// Every ten minutes of the bots' clock: politics, sovereignty, the
     /// economy's slower half, corporations' applications, and events.
     async fn politics_tick(&mut self, now: u32) {
+        // The alliances' stored member tallies, kept true for whatever reads them.
+        let tally = r#"UPDATE alliances a SET "memberCount" = n.c
+                         FROM (SELECT al."allianceID", (SELECT count(*)::int FROM "corporation" co
+                                                         WHERE co."allianceID" = al."allianceID" AND co."deleted" = 0) AS c
+                                 FROM alliances al) n
+                        WHERE a."allianceID" = n."allianceID" AND a."memberCount" IS DISTINCT FROM n.c"#;
+        if let Err(e) = self.db.execute(tally, &[]).await {
+            error!("bots: alliance member tallies: {}", crate::logging::chain(&e));
+        }
+        // The corporations' offices filled, and their accountants at work.
+        if let Err(e) = officers::appoint(&self.db).await {
+            error!("bots: bot corporations' offices: {}", crate::logging::chain(&e));
+        }
+        if let Err(e) = officers::pay_bills(&self.db).await {
+            error!("bots: bot corporations' bills: {}", crate::logging::chain(&e));
+        }
         if let Err(e) = politics::tick(&mut self.politics, &self.db, &self.bots, &mut self.ids, &mut self.rng, now, self.speed).await {
             error!("bots: politics: {}", crate::logging::chain(&e));
         }
@@ -1146,7 +1171,7 @@ impl Sim {
             &mut self.sieges,
             &mut self.rng,
             now,
-            self.server.sov_claim_delay_secs,
+            crate::svc::starbase::claim_delay_secs(),
             self.speed,
         )
         .await
@@ -1252,7 +1277,7 @@ impl Sim {
                     &mut self.politics,
                     &mut self.rng,
                     now,
-                    self.server.sov_claim_delay_secs,
+                    crate::svc::starbase::claim_delay_secs(),
                     self.speed,
                 )
                 .await;
@@ -1274,7 +1299,22 @@ impl Sim {
                 self.changes.push(presence::Change::Busy { bot: i });
             }
             self.requests(now).await;
-            claim::step(&mut self.claims, &mut self.db, &self.server.world, &self.atlas, &mut self.politics, &mut self.rng, self.server.sov_claim_delay_secs, self.speed).await;
+            let due: Vec<(u32, i64, i64, i32)> = {
+                let (due, later) = std::mem::take(&mut self.won_over).into_iter().partition(|w| w.0 <= now);
+                self.won_over = later;
+                due
+            };
+            for (_, bot, player, system) in due {
+                match relations::won_over(&self.db, &self.server.world, &self.atlas, &mut self.politics, &mut self.bots, &mut self.ids, &self.by_char, bot, player, system).await {
+                    Ok(Some(i)) => {
+                        self.touch(i);
+                        self.changes.push(presence::Change::Busy { bot: i });
+                    }
+                    Ok(None) => {}
+                    Err(e) => error!("bots: a pilot won over in Local: {}", crate::logging::chain(&e)),
+                }
+            }
+            claim::step(&mut self.claims, &mut self.db, &self.server.world, &self.atlas, &mut self.politics, &mut self.rng, crate::svc::starbase::claim_delay_secs(), self.speed).await;
             let hired = hire::run(
                 &mut self.hires,
                 &self.server.world,
@@ -1434,6 +1474,11 @@ impl Sim {
                         came += 1;
                     }
                     info!("bots: {came} bots answered a fight call in system {system}");
+                }
+                control::Request::WinOver { bot, player, system } => {
+                    // Not at once: they finish what they were doing first.
+                    let wait = 60 + self.rng.below(240) as u32;
+                    self.won_over.push((now + wait, bot, player, system));
                 }
                 control::Request::ClaimSov { alliance, by, order } => {
                     claim::order(&mut self.claims, &self.db, &mut self.politics, alliance, by, order).await;

@@ -19,6 +19,13 @@
 //! - /bots on|off|status: the bot population; /bots event <betrayal |
 //!   merger | collapse | coalition | raid>, /bots war <a> | <b>, /bots
 //!   density <region> <factor>, /bots follow <name>: steering it;
+//! - /announce <text>: a message on every player's screen;
+//! - /online: who is logged in, and where;
+//! - /fueltower [towerID]: 30 days of fuel into a control tower;
+//! - /givecorpisk <amount>: ISK into your corporation's wallet;
+//! - /setsec <status>: your security status;
+//! - /sovdelay [hours]: how long a tower's claim takes to count, shown or set;
+//! - /botcorp <name or ticker>: a bot corporation's officers;
 //! - /help.
 //! A type or a skill is its ID or its name.
 
@@ -48,7 +55,7 @@ const ATTR_SKILL_LEVEL: i32 = 280;
 const REF_GM: i32 = 25;
 const OWNER_SYSTEM: i64 = 1;
 
-const HELP: &str = "/create <type> [qty], /gmships, /giveisk <amount>, /giveskill <skill> [level], /giveallskills, /setstanding <ownerID> <standing>, /maxstandings, /clearspace, /spawn, /moveme [hub], /outpostmats [platformID], /rushanchor [structureID], /tr me <place or pilot>, /bots on|off|status|event <kind>|war <a> | <b>|density <region> <x>|follow <name>|battle [here|system] [skirmish|battle|decisive]";
+const HELP: &str = "/create <type> [qty], /gmships, /giveisk <amount>, /givecorpisk <amount>, /giveskill <skill> [level], /giveallskills, /setstanding <ownerID> <standing>, /maxstandings, /setsec <status>, /clearspace, /spawn, /moveme [hub], /outpostmats [platformID], /rushanchor [structureID], /fueltower [towerID], /sovdelay [hours], /announce <text>, /online, /botcorp <name>, /tr me <place or pilot>, /bots on|off|status|event <kind>|war <a> | <b>|density <region> <x>|follow <name>|battle [here|system] [skirmish|battle|decisive]";
 
 const JOVE_RACE: i32 = 16;
 // Jove Frigate, Jove Cruiser, Jove Industrial, Jove Battleship and Polaris.
@@ -118,6 +125,20 @@ pub async fn slash(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
             _ => Err("Usage: /outpostmats [platformID]".into()),
         },
         "tr" => teleport(ctx, &rest).await,
+        "announce" => announce(ctx, &rest),
+        "online" => online(ctx).await,
+        "fueltower" => match rest.as_slice() {
+            [] => fuel_tower(ctx, None).await,
+            [id] => match id.parse() {
+                Ok(id) => fuel_tower(ctx, Some(id)).await,
+                Err(_) => Err("Usage: /fueltower [towerID]".into()),
+            },
+            _ => Err("Usage: /fueltower [towerID]".into()),
+        },
+        "givecorpisk" => give_corp_isk(ctx, &rest).await,
+        "setsec" => set_security(ctx, &rest).await,
+        "sovdelay" => sov_delay(&rest),
+        "botcorp" => bot_corp(ctx, &rest).await,
         "bots" => match rest.first().copied() {
             Some("on") => {
                 crate::bots::set_running(true);
@@ -149,6 +170,193 @@ pub async fn slash(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         Ok(reply) => Outcome::Value(Value::text(reply)),
         Err(why) => Outcome::custom(why),
     })
+}
+
+/// /announce <text>: a message on every logged-in player's screen.
+fn announce(ctx: &Ctx<'_>, words: &[&str]) -> Result<String, String> {
+    let text = words.join(" ");
+    if text.trim().is_empty() {
+        return Err("Usage: /announce <text>".into());
+    }
+    let w = ctx.world.lock();
+    let clients = w.all_clients();
+    w.notify(&clients, "OnRemoteMessage", crate::pos::custom_notify(&text));
+    Ok(format!("Announced to {} client(s).", clients.len()))
+}
+
+/// /online: every logged-in pilot and where they are.
+async fn online(ctx: &Ctx<'_>) -> Result<String, String> {
+    let players = ctx.world.lock().players();
+    if players.is_empty() {
+        return Ok("Nobody is logged in.".into());
+    }
+    let ids: Vec<i32> = players.iter().map(|p| p.char_id as i32).collect();
+    let systems: Vec<i32> = players.iter().map(|p| p.solar_system_id as i32).collect();
+    let names: HashMap<i64, String> = ctx
+        .db
+        .query(r#"SELECT "characterID", "characterName" FROM "character_" WHERE "characterID" = ANY($1)"#, &[&ids])
+        .await
+        .map_err(|e| e.to_string())?
+        .iter()
+        .filter_map(|r| Some((int(r, 0)?, text(r, 1)?)))
+        .collect();
+    let places: HashMap<i64, String> = ctx
+        .db
+        .query(r#"SELECT "solarSystemID", "solarSystemName" FROM "mapSolarSystems" WHERE "solarSystemID" = ANY($1)"#, &[&systems])
+        .await
+        .map_err(|e| e.to_string())?
+        .iter()
+        .filter_map(|r| Some((int(r, 0)?, text(r, 1)?)))
+        .collect();
+    let lines: Vec<String> = players
+        .iter()
+        .map(|p| {
+            let name = names.get(&p.char_id).cloned().unwrap_or_else(|| p.char_id.to_string());
+            let place = places.get(&p.solar_system_id).cloned().unwrap_or_else(|| p.solar_system_id.to_string());
+            format!("{name} ({}, {place})", if p.docked { "docked" } else { "in space" })
+        })
+        .collect();
+    Ok(format!("{} online: {}", lines.len(), lines.join("; ")))
+}
+
+/// /fueltower [towerID]: 30 days of fuel and two days of strontium into a
+/// control tower in your system (the nearest, if no ID is given), with the
+/// charter it needs where the empire asks for one.
+async fn fuel_tower(ctx: &Ctx<'_>, wanted: Option<i64>) -> Result<String, String> {
+    let (Some(ship), Some(system)) = (ctx.session.ship_id, ctx.session.solar_system_id) else {
+        return Err("You must be in space beside the control tower.".into());
+    };
+    let (tower, type_id, owner, name) = {
+        let world = ctx.world.lock();
+        let park = world.parks.get(&system).ok_or("You are not in space.")?;
+        let found = match wanted {
+            Some(id) => park.structures.get(&id).filter(|s| s.is_tower()),
+            None => park.structures.values().filter(|s| s.is_tower()).min_by(|a, b| {
+                let d = |s: &crate::pos::Structure| park.surface_distance(ship, s.id).unwrap_or(f64::MAX);
+                d(a).total_cmp(&d(b))
+            }),
+        };
+        let s = found.ok_or("There is no control tower here.")?;
+        (s.id, s.type_id, s.owner_id, s.name.clone())
+    };
+    let needs = ctx
+        .db
+        .query(
+            r#"SELECT r."resourceTypeID", CASE WHEN r."purpose" = 4 THEN r."quantity" * 48 ELSE r."quantity" * 720 END
+                 FROM "invControlTowerResources" r, "mapSolarSystems" s
+                WHERE r."controlTowerTypeID" = $1 AND s."solarSystemID" = $2 AND r."purpose" IN (1, 4)
+                  AND (r."minSecurityLevel" IS NULL OR s."security" >= r."minSecurityLevel")
+                  AND (r."factionID" IS NULL OR r."factionID" = s."factionID")"#,
+            &[&(type_id as i32), &(system as i32)],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    if needs.is_empty() {
+        return Err(format!("{name} needs no fuel on this server."));
+    }
+    let mut client = crate::db::connect(ctx.db_url).await.map_err(|e| e.to_string())?;
+    let mut txn = ItemTxn::begin(&mut client).await.map_err(|e| e.to_string())?;
+    for r in &needs {
+        let (kind, quantity) = (int(r, 0).unwrap_or(0), int(r, 1).unwrap_or(0));
+        if kind > 0 && quantity > 0 {
+            txn.create(NewItem { type_id: kind, owner_id: owner, location_id: tower, flag: 0, quantity, singleton: false })
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    let events = txn.commit().await.map_err(|e| e.to_string())?;
+    crate::items::notify(ctx.world, ctx.client_id, events);
+    Ok(format!("Fuelled {name} ({tower}) for 30 days, with two days of strontium."))
+}
+
+/// /givecorpisk <amount>: ISK into your corporation's wallet.
+async fn give_corp_isk(ctx: &Ctx<'_>, words: &[&str]) -> Result<String, String> {
+    let amount: f64 = words.join("").replace(',', "").parse().map_err(|_| "Usage: /givecorpisk <amount>".to_string())?;
+    if !amount.is_finite() || amount <= 0.0 || amount > 1.0e15 {
+        return Err("Give an amount from 1 to 1,000,000,000,000,000 ISK.".into());
+    }
+    let corp = ctx.session.corp_id.ok_or("You are in no corporation.")? as i32;
+    let row = ctx
+        .db
+        .query_opt(
+            r#"UPDATE "corporation" SET "balance" = "balance" + $2 WHERE "corporationID" = $1
+                 AND NOT EXISTS (SELECT 1 FROM "crpNPCCorporations" n WHERE n."corporationID" = $1)
+               RETURNING "balance", "corporationName""#,
+            &[&corp, &amount],
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("NPC corporations have no wallet to fill. Join or found a player corporation first.")?;
+    Ok(format!("{} now has {:.2} ISK. Reopen its wallet to see it.", text(&row, 1).unwrap_or_default(), float(&row, 0).unwrap_or(0.0)))
+}
+
+/// /setsec <status>: your security status, from -10 to 10.
+async fn set_security(ctx: &Ctx<'_>, words: &[&str]) -> Result<String, String> {
+    let value: f64 = words.join("").parse().map_err(|_| "Usage: /setsec <status from -10 to 10>".to_string())?;
+    if !(-10.0..=10.0).contains(&value) {
+        return Err("Security status runs from -10 to 10.".into());
+    }
+    let me = ctx.session.char_id.ok_or("Select a character first.")? as i32;
+    ctx.db
+        .execute(r#"UPDATE "character_" SET "securityRating" = $2 WHERE "characterID" = $1"#, &[&me, &value])
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(format!("Your security status is now {value:.2}. Your character sheet shows it after you dock or jump."))
+}
+
+/// /sovdelay [hours]: how long a control tower's claim stands before it
+/// counts towards sovereignty; with hours, sets it (and saves it).
+fn sov_delay(words: &[&str]) -> Result<String, String> {
+    let now = crate::svc::starbase::claim_delay_secs();
+    let Some(word) = words.first() else {
+        return Ok(format!("A tower's claim counts towards sovereignty {:.1} hours after it comes online. /sovdelay <hours> changes it.", now as f64 / 3600.0));
+    };
+    let hours: f64 = word.parse().map_err(|_| "Usage: /sovdelay [hours]".to_string())?;
+    if !(0.0..=24.0 * 30.0).contains(&hours) {
+        return Err("Give a delay from 0 to 720 hours.".into());
+    }
+    let secs = (hours * 3600.0).round() as i64;
+    crate::svc::starbase::set_claim_delay_secs(secs);
+    let saved = crate::config::set_game_setting("sovClaimDelaySeconds", &secs.to_string());
+    Ok(match saved {
+        Ok(()) => format!("Claims now count {hours} hours after a tower comes online. Systems whose towers have stood that long change hands within a minute."),
+        Err(e) => format!("Claims now count {hours} hours after a tower comes online, until the server restarts ({e})."),
+    })
+}
+
+/// /botcorp <name or ticker>: who holds a bot corporation's offices.
+async fn bot_corp(ctx: &Ctx<'_>, words: &[&str]) -> Result<String, String> {
+    let key = words.join(" ");
+    if key.trim().is_empty() {
+        return Err("Usage: /botcorp <corporation name or ticker>".into());
+    }
+    let corp = ctx
+        .db
+        .query_opt(
+            r#"SELECT co."corporationID", co."corporationName", co."memberCount" FROM "corporation" co
+                WHERE (lower(co."corporationName") = lower($1) OR lower(co."tickerName") = lower($1) OR co."corporationID"::text = $1)
+                  AND co."deleted" = 0 LIMIT 1"#,
+            &[&key],
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or(format!("No corporation called {key}."))?;
+    let (id, name, members) = (int(&corp, 0).unwrap_or(0) as i32, text(&corp, 1).unwrap_or_default(), int(&corp, 2).unwrap_or(0));
+    let officers = ctx
+        .db
+        .query(
+            r#"SELECT c."title", c."characterName" FROM "character_" c
+                WHERE c."corporationID" = $1 AND c."title" <> ''
+                ORDER BY CASE c."title" WHEN 'CEO' THEN 0 WHEN 'Director' THEN 1 ELSE 2 END, c."title", c."characterName" LIMIT 20"#,
+            &[&id],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    if officers.is_empty() {
+        return Ok(format!("{name} ({members} members) has no officers on record."));
+    }
+    let list: Vec<String> = officers.iter().map(|r| format!("{}: {}", text(r, 0).unwrap_or_default(), text(r, 1).unwrap_or_default())).collect();
+    Ok(format!("{name} ({members} members): {}", list.join("; ")))
 }
 
 /// Remove cargo containers in solar-system space, including their contents,

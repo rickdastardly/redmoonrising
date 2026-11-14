@@ -191,7 +191,7 @@ pub async fn run(server: Arc<Server>) {
                 error!("updating starbase timers: {}", crate::logging::chain(&e));
             }
             crate::svc::starbase::burn_fuel(&server.world, &mut db).await;
-            crate::svc::starbase::sovereignty(&mut db, server.sov_claim_delay_secs).await;
+            crate::svc::starbase::sovereignty(&mut db, crate::svc::starbase::claim_delay_secs()).await;
             crate::svc::votes::close_votes(&server.world, &db).await;
             crate::guard::reload(&server.world, &db).await;
             crate::guard::refresh_standings(&db).await;

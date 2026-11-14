@@ -621,6 +621,7 @@ button:disabled { color: var(--faint); border-color: var(--edge); background: tr
 .sov-feed li:hover { color: var(--bright); }
 .sov-feed time { display: block; color: var(--faint); font-size: 10.5px; }
 .sov-feed .empty { cursor: default; }
+.sov-feed li.lost { color: #c98a7a; }
 
 /* ---- responsive ------------------------------------------------------------ */
 
@@ -727,6 +728,9 @@ button:disabled { color: var(--faint); border-color: var(--edge); background: tr
 .zp-week dt, .zp-week dd { margin: 0; padding: 4px 0; border-top: 1px solid #1d1d1d; font-size: 13.5px; }
 .zp-week dd { text-align: right; font-variant-numeric: tabular-nums; }
 .zp-ranked { list-style: none; margin: 0; padding: 0; }
+.zp-officers { list-style: none; margin: 0; padding: 0; }
+.zp-officers li { display: flex; gap: 8px; padding: 4px 10px; border-top: 1px solid #1d1d1d; font-size: 13px; }
+.zp-officers li .dim { min-width: 9.5em; }
 .zp-ranked li { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-top: 1px solid #1d1d1d; font-size: 13.5px; }
 .zp-ranked li > :first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .zp-ranked .count { font-variant-numeric: tabular-nums; color: #ddd; }

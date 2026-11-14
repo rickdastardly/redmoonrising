@@ -276,6 +276,7 @@ async fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
                 }
                 "/api/sovmap/static" => Some(sov_map_static(server).await),
                 "/api/sovmap" => Some(sov_map(server).await),
+                "/api/campaigns" => Some(campaigns(server).await),
                 "/api/dungeons" => Some(Ok(crate::dungeons::catalog_json())),
                 "/api/guides" => Some(Ok(crate::dungeons::guides_json())),
                 "/api/kill" => {
@@ -625,6 +626,7 @@ fn bot_settings() -> Json {
         "battleSizeRange": [crate::bots::BATTLE_SIZE_RANGE.0, crate::bots::BATTLE_SIZE_RANGE.1],
         "clientShips": crate::svc::space::client_ships(),
         "clientShipsRange": [crate::svc::space::CLIENT_SHIPS_RANGE.0, crate::svc::space::CLIENT_SHIPS_RANGE.1],
+        "sovClaimHours": (crate::svc::starbase::claim_delay_secs() as f64 / 360.0).round() / 10.0,
         "countOverridden": crate::config::overridden("RMR_BOTS"),
         "aggressionOverridden": crate::config::overridden("RMR_BOTS_AGGRESSION"),
         "restartAvailable": restart_available(),
@@ -711,6 +713,16 @@ async fn change_bots(server: &Server, body: &[u8]) -> EditResult {
         crate::svc::space::set_client_ships(n as usize);
         save_bots_setting("clientShips", &n.to_string())?;
         said.push(format!("Each player's client is sent up to {n} ships at once."));
+    }
+    if let Some(hours) = input["sovClaimHours"].as_f64() {
+        if !(0.0..=720.0).contains(&hours) {
+            return Err((400, "The sovereignty claim delay must be from 0 to 720 hours.".to_string()));
+        }
+        let secs = (hours * 3600.0).round() as i64;
+        crate::svc::starbase::set_claim_delay_secs(secs);
+        crate::config::set_game_setting("sovClaimDelaySeconds", &secs.to_string())
+            .map_err(|e| (500, format!("The claim delay changed for now, but was not saved: {e}")))?;
+        said.push(format!("A control tower's claim now counts towards sovereignty {hours} hours after it comes online."));
     }
     if let Some(on) = input["piratesAttackPlayers"].as_bool() {
         crate::bots::set_pirates_attack_players(on);
@@ -1139,9 +1151,11 @@ async fn alliances(server: &Server) -> Answer {
 async fn corporations(server: &Server) -> Answer {
     let sql = r#"SELECT co."corporationID" AS id, co."corporationName" AS name, co."tickerName" AS ticker, co."memberCount" AS members,
                         NULLIF(co."allianceID", 0) AS "allianceID",
-                        a."shortName" AS alliance, EXISTS (SELECT 1 FROM "botGroups" g WHERE g."ownerID" = co."corporationID") AS bots
+                        a."shortName" AS alliance, EXISTS (SELECT 1 FROM "botGroups" g WHERE g."ownerID" = co."corporationID") AS bots,
+                        co."ceoID" AS "ceoID", COALESCE(ceo."characterName", '') AS ceo
                    FROM "corporation" co
                    LEFT JOIN alliances a ON a."allianceID" = co."allianceID"
+                   LEFT JOIN "character_" ceo ON ceo."characterID" = co."ceoID"
                   WHERE co."deleted" = 0
                     AND NOT EXISTS (SELECT 1 FROM "crpNPCCorporations" n WHERE n."corporationID" = co."corporationID")
                   ORDER BY co."memberCount" DESC LIMIT 40"#;
@@ -1343,6 +1357,37 @@ async fn sov_map_static(server: &Server) -> Answer {
 /// Who holds what, refreshed as sovereignty resolves: each held system as
 /// [systemID, allianceID, held since (ms)], the holding alliances, the latest
 /// changes of hands and the sieges under way.
+/// Player alliances whose bots are claiming space on their word
+/// (bots::claim), and how far they have got.
+async fn campaigns(server: &Server) -> Answer {
+    let sql = format!(r#"SELECT c."allianceID" AS id, a."allianceName" AS name, a."shortName" AS ticker,
+            COALESCE(ch."characterName", '') AS "orderedBy", {since} AS since,
+            (SELECT count(*) FROM "posStructures" p JOIN entity e ON e."itemID" = p."itemID" JOIN "invTypes" t ON t."typeID" = e."typeID"
+               JOIN "corporation" co ON co."corporationID" = e."ownerID"
+              WHERE co."allianceID" = c."allianceID" AND t."groupID" = 365 AND p."state" = 1)::int AS anchoring,
+            (SELECT count(*) FROM "posStructures" p JOIN entity e ON e."itemID" = p."itemID" JOIN "invTypes" t ON t."typeID" = e."typeID"
+               JOIN "corporation" co ON co."corporationID" = e."ownerID"
+              WHERE co."allianceID" = c."allianceID" AND t."groupID" = 365 AND p."state" = 2)::int AS onlining,
+            (SELECT count(*) FROM "posStructures" p JOIN entity e ON e."itemID" = p."itemID" JOIN "invTypes" t ON t."typeID" = e."typeID"
+               JOIN "corporation" co ON co."corporationID" = e."ownerID"
+              WHERE co."allianceID" = c."allianceID" AND t."groupID" = 365 AND p."state" IN (3, 4, 5))::int AS online,
+            (SELECT count(*) FROM "posStructures" p JOIN entity e ON e."itemID" = p."itemID" JOIN "invTypes" t ON t."typeID" = e."typeID"
+               JOIN "corporation" co ON co."corporationID" = e."ownerID"
+              WHERE co."allianceID" = c."allianceID" AND t."groupID" = 307)::int AS platforms,
+            (SELECT count(*) FROM "mapSolarSystems" s WHERE s."allianceID" = c."allianceID")::int AS systems,
+            (SELECT count(*) FROM "staStations" st JOIN "corporation" co ON co."corporationID" = st."corporationID"
+              WHERE co."allianceID" = c."allianceID" AND st."stationID" BETWEEN 61000000 AND 63999999)::int AS outposts
+          FROM "rmrSovCampaigns" c JOIN alliances a ON a."allianceID" = c."allianceID"
+          LEFT JOIN "character_" ch ON ch."characterID" = c."orderedBy"
+         ORDER BY a."allianceName""#, since = ms(r#"c."since""#));
+    let list = match server.db.query(sql.as_str(), &[]).await {
+        Ok(r) => rows(&r),
+        // Before the bots have made the table, there are none.
+        Err(_) => json!([]),
+    };
+    Ok(json!({"campaigns": list, "claimHours": crate::svc::starbase::claim_delay_secs() as f64 / 3600.0}))
+}
+
 async fn sov_map(server: &Server) -> Answer {
     let since = ms(r#""sovereigntySince""#);
     let held = server.db.query(&format!(r#"SELECT "solarSystemID", "allianceID", {since}
@@ -1359,12 +1404,27 @@ async fn sov_map(server: &Server) -> Answer {
          WHERE s."regionID" < 11000000
          GROUP BY a."allianceID", a."allianceName", a."shortName"
          ORDER BY systems DESC, name"#, &[]).await?);
-    let recent = rows(&server.db.query(&format!(r#"SELECT s."solarSystemID" AS id, s."solarSystemName" AS system,
-            r."regionName" AS region, a."allianceName" AS alliance, a."shortName" AS ticker, {since} AS since
+    // Every change of hands, gains and losses alike (rmrSovHistory); before
+    // any is recorded, the systems held, newest first.
+    let changed_at = ms(r#"h."changedAt""#);
+    let history = server.db.query(&format!(r#"SELECT s."solarSystemID" AS id, s."solarSystemName" AS system,
+            r."regionName" AS region, COALESCE(a."allianceName", '') AS alliance, COALESCE(a."shortName", '') AS ticker,
+            COALESCE(f."allianceName", '') AS "from", {changed_at} AS since
+          FROM "rmrSovHistory" h JOIN "mapSolarSystems" s ON s."solarSystemID" = h."solarSystemID"
+          JOIN "mapRegions" r ON r."regionID" = s."regionID"
+          LEFT JOIN alliances a ON a."allianceID" = h."toAllianceID"
+          LEFT JOIN alliances f ON f."allianceID" = h."fromAllianceID"
+         WHERE s."regionID" < 11000000
+         ORDER BY h."changeID" DESC LIMIT 15"#), &[]).await;
+    let recent = match history {
+        Ok(r) if !r.is_empty() => rows(&r),
+        _ => rows(&server.db.query(&format!(r#"SELECT s."solarSystemID" AS id, s."solarSystemName" AS system,
+            r."regionName" AS region, a."allianceName" AS alliance, a."shortName" AS ticker, '' AS "from", {since} AS since
           FROM "mapSolarSystems" s JOIN alliances a ON a."allianceID" = s."allianceID"
           JOIN "mapRegions" r ON r."regionID" = s."regionID"
          WHERE s."sovereigntySince" IS NOT NULL
-         ORDER BY s."sovereigntySince" DESC, s."solarSystemName" LIMIT 15"#), &[]).await?);
+         ORDER BY s."sovereigntySince" DESC, s."solarSystemName" LIMIT 15"#), &[]).await?),
+    };
     let sieges = server.world.lock().bot_stats.sieges.clone();
     let sieges: Vec<Json> = sieges.iter().map(|s| json!({
         "system": s.system, "attacker": s.attacker, "defender": s.defender,
@@ -1699,6 +1759,16 @@ async fn group_profile(server: &Server, kind: Group, id: i64) -> Answer {
             WHERE c."allianceID" = $1 AND c."deleted" = 0 ORDER BY c."memberCount" DESC LIMIT 12"#, &[&gid]).await?),
         Group::Corporation => json!([]),
     };
+    // A bot corporation's officers (bots::officers), most senior office first.
+    let officers = match kind {
+        Group::Corporation => rows(&server.db.query(r#"SELECT c."characterID" AS id, c."characterName" AS name, c."title" AS title
+            FROM "character_" c WHERE c."corporationID" = $1 AND c."title" <> ''
+              AND EXISTS (SELECT 1 FROM "botGroups" g WHERE g."ownerID" = c."corporationID")
+            ORDER BY CASE c."title" WHEN 'CEO' THEN 0 WHEN 'Director' THEN 1 WHEN 'Personnel Manager' THEN 2 WHEN 'Accountant' THEN 3
+                     WHEN 'Head of Security' THEN 4 WHEN 'Starbase Manager' THEN 5 WHEN 'Station Manager' THEN 6 ELSE 7 END, c."characterName"
+            LIMIT 20"#, &[&gid]).await?),
+        Group::Alliance => json!([]),
+    };
     Ok(json!({"info": rows(&[info]).as_array().and_then(|a| a.first()).cloned(),
         "kind": if kind == Group::Alliance { "alliance" } else { "corporation" },
         "destroyed": st.get::<_, i64>(0), "lost": st.get::<_, i64>(1),
@@ -1707,7 +1777,7 @@ async fn group_profile(server: &Server, kind: Group, id: i64) -> Answer {
         "topKills": top, "activity": activity,
         "week": {"ships": week.get::<_, i64>(0), "systems": week.get::<_, i64>(1), "regions": week.get::<_, i64>(2),
                  "kills": week.get::<_, i64>(3), "pilots": week.get::<_, i64>(4)},
-        "pilots": pilots, "ships": ships, "systems": systems, "corporations": corporations}))
+        "pilots": pilots, "ships": ships, "systems": systems, "corporations": corporations, "officers": officers}))
 }
 
 #[cfg(test)]

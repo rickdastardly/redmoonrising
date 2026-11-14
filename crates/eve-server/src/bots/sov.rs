@@ -10,9 +10,10 @@
 //!   fuel and some strontium. Neighbours at war plan sieges of each other's
 //!   border systems, announced in the news `SIEGE_NOTICE` ahead
 //!   (`battle` fights them). A siege that succeeds (`conclude`) destroys the
-//!   defender's towers there and anchors the attacker's, whose claim then
-//!   stands its delay (scaled by the bots' clock) before the system changes
-//!   hands. An alliance short of systems at home anchors in unclaimed ones.
+//!   defender's towers there and anchors the attacker's, whose claim stands
+//!   at once: the system changes hands on the map. An alliance short of
+//!   systems at home anchors in unclaimed ones, its claim also standing at
+//!   once.
 //!
 //! - Player alliances: an alliance that has taken bot corporations in has
 //!   those bots claim space for it when a player tells them to in alliance
@@ -400,10 +401,19 @@ pub async fn upkeep(
     .await?;
     refuel(db).await?;
     let now = crate::bulkdata::filetime_now();
-    // A new claim waits out the delay, run at the bots' speed.
-    let delay = claim_delay_secs as f64;
-    let claim_since = now - ((delay - delay / speed.max(1.0)) as i64) * SECOND_FT;
+    // The bot alliances' claims stand at once, so the map follows the news;
+    // a player alliance's own wait out the delay (`claim`).
+    let claim_since = now - (claim_delay_secs + 60) * SECOND_FT;
     let mut news = Vec::new();
+    // Bot alliances' towers still waiting out an older, longer delay stand now.
+    let bot_alliances: Vec<i32> = p.alliances.keys().copied().collect();
+    db.execute(
+        r#"UPDATE "posStructures" p SET "claimSince" = $2
+             FROM entity e JOIN "corporation" co ON co."corporationID" = e."ownerID"
+            WHERE e."itemID" = p."itemID" AND p."claim" = 1 AND p."claimSince" > $2 AND co."allianceID" = ANY($1)"#,
+        &[&bot_alliances, &claim_since],
+    )
+    .await?;
     let mut claimants = claimants(db, p).await?;
     let players = player_claimants(db, p).await?;
     let player_ids: HashSet<i32> = players.iter().map(|c| c.0).collect();
@@ -589,8 +599,8 @@ pub async fn upkeep(
 
 /// How a siege ended: `won` by the attacker or not, with `lost` ships on
 /// each side. A won siege destroys the defender's towers in the system and
-/// anchors the attacker's, its claim to stand the delay (scaled by the bots'
-/// clock). Returns the news.
+/// anchors the attacker's, its claim standing at once: the system changes
+/// hands on the map. Returns the news.
 #[allow(clippy::too_many_arguments)]
 pub async fn conclude(
     db: &mut Client,
@@ -600,7 +610,7 @@ pub async fn conclude(
     lost: (u32, u32),
     rng: &mut Rng,
     claim_delay_secs: i64,
-    speed: f64,
+    _speed: f64,
 ) -> Result<News, tokio_postgres::Error> {
     let now = crate::bulkdata::filetime_now();
     if let Some(w) = p.wars.iter_mut().find(|w| w.id == s.war) {
@@ -615,8 +625,8 @@ pub async fn conclude(
     let gone = destroy_towers(db, s.system, s.defender).await?;
     // The victors buy their tower with what is left in their executor's wallet.
     db.execute(r#"UPDATE "corporation" SET "balance" = "balance" - LEAST(GREATEST("balance", 0), $2) WHERE "corporationID" = $1"#, &[&s.attacker_exec, &TOWER_COST]).await?;
-    let delay = claim_delay_secs as f64;
-    let claim_since = now - ((delay - delay / speed.max(1.0)) as i64) * SECOND_FT;
+    // Won in battle, the system is theirs at once: the map shows it.
+    let claim_since = now - (claim_delay_secs + 60) * SECOND_FT;
     let tower_type = TOWERS.iter().find(|(r, _)| *r == s.attacker_race).map_or(TOWERS[2].1, |(_, t)| *t);
     let anchored = match spot(db, s.system, rng).await? {
         Some(place) => anchor(db, s.attacker_exec, tower_type, &place, claim_since).await?,

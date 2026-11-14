@@ -625,10 +625,18 @@ pub async fn tell_balance(db: &Client, world: &crate::world::World, player: i32)
 
 /// An EVE mail to a player.
 pub async fn mail(db: &Client, world: &crate::world::World, from: Sender, player: i32, kind: Letter) {
-    let sender = match from {
-        Sender::Pilot(c) => c,
+    // A side's letters come from the officer whose work it is: its Head of
+    // Security for threats, bounties and wars, its Accountant for contracts,
+    // its Personnel Manager for invitations; signed.
+    let office = match &kind {
+        Letter::Contract { .. } => super::officers::Office::Accountant,
+        Letter::Invite { .. } => super::officers::Office::Recruiter,
+        _ => super::officers::Office::Security,
+    };
+    let (sender, signed) = match from {
+        Sender::Pilot(c) => (c, String::new()),
         Sender::Leader(side) => match leader(db, side).await {
-            Some((_, ceo)) => ceo,
+            Some((executor, ceo)) => super::officers::signature(db, executor, office).await.unwrap_or((ceo, String::new())),
             None => return,
         },
     };
@@ -671,7 +679,7 @@ pub async fn mail(db: &Client, world: &crate::world::World, from: Sender, player
             ("An invitation".to_string(), format!("{name},\n\nYou have done more for {who} than most of our members. If you want to fly with us, apply to any of our corporations; you will be accepted.\n"))
         }
     };
-    let body = body.replace('\n', "<br>");
+    let body = body.trim_end().replace('\n', "<br>") + &signed;
     if let Err(e) = crate::svc::chat::deliver(db, world, sender as i64, &[player as i64], &subject, &body).await {
         error!("bots: mailing {player}: {}", crate::logging::chain(&e));
     }
@@ -719,8 +727,18 @@ pub async fn answer_applications(r: &Relations, db: &Client, world: &crate::worl
         let when = int(&row, 3).unwrap_or(0);
         let line = |s: i16| vec![Value::Int(corp as i64), Value::Int(char_id as i64), Value::text(text(&row, 2).unwrap_or_default()), Value::Long(when), Value::Int(s as i64)];
         let change = crate::svc::rows::change(APPLICATION_HEADER, Some(&line(APPLIED_BY_CHARACTER)), Some(&line(status)));
-        let w = world.lock();
-        w.notify(&w.clients_of(char_id as i64), "OnCorporationApplicationChanged", Value::Tuple(vec![Value::Int(char_id as i64), Value::Int(corp as i64), change]));
+        {
+            let w = world.lock();
+            w.notify(&w.clients_of(char_id as i64), "OnCorporationApplicationChanged", Value::Tuple(vec![Value::Int(char_id as i64), Value::Int(corp as i64), change]));
+        }
+        // The Personnel Manager writes to say so.
+        if let Some((manager, signed)) = super::officers::signature(db, corp, super::officers::Office::Recruiter).await {
+            let corp_name = owner_name(db, corp).await;
+            let subject = if accept { format!("Your application to {corp_name}") } else { format!("{corp_name}: application declined") };
+            if let Err(e) = crate::svc::chat::deliver(db, world, manager as i64, &[char_id as i64], &subject, &format!("{note}{signed}")).await {
+                error!("bots: mailing applicant {char_id}: {}", crate::logging::chain(&e));
+            }
+        }
         info!("bots: corporation {corp} {} {char_id}'s application", if accept { "accepted" } else { "turned down" });
     }
     Ok(())
@@ -774,8 +792,11 @@ pub async fn answer_alliance_applications(r: &Relations, db: &Client, world: &cr
             if let Some((executor, executor_ceo)) = leader(db, alliance).await {
                 let name = owner_name(db, alliance).await;
                 let subject = if accept { format!("Your application to {name}") } else { format!("{name}: application declined") };
-                let body = format!("{note}<br><br>The directors of {}", owner_name(db, executor).await);
-                if let Err(e) = crate::svc::chat::deliver(db, world, executor_ceo as i64, &[ceo as i64], &subject, &body).await {
+                let (sender, signed) = super::officers::signature(db, executor, super::officers::Office::Recruiter)
+                    .await
+                    .unwrap_or((executor_ceo, format!("<br><br>The directors of {}", owner_name(db, executor).await)));
+                let body = format!("{note}{signed}");
+                if let Err(e) = crate::svc::chat::deliver(db, world, sender as i64, &[ceo as i64], &subject, &body).await {
                     error!("bots: mailing corporation {corp}'s CEO: {}", crate::logging::chain(&e));
                 }
             }
@@ -864,6 +885,105 @@ fn pitch(role: Role, rng: &mut Rng) -> String {
     };
     let close = ["Looking for a home.", "Would love to fly with you.", "Active most evenings EU time.", "Active in US time zones.", "Not looking for drama, just good people.", "Can contribute to corp ops."];
     format!("{} {} {}", opening[rng.below(opening.len())], about[rng.below(about.len())], close[rng.below(close.len())])
+}
+
+/// A bot a player won over in Local (`talk::answer_invitation`) comes over
+/// to the player's side: a bot CEO brings its whole corporation (it applies
+/// to the player's alliance); else the pilot joins the alliance's biggest bot
+/// corporation, whose Personnel Manager welcomes it in alliance chat; else
+/// it applies to the player's own corporation. The bot whose corporation
+/// changed, if one did.
+#[allow(clippy::too_many_arguments)]
+pub async fn won_over(
+    db: &Client,
+    world: &crate::world::World,
+    atlas: &Atlas,
+    p: &mut Politics,
+    bots: &mut [Bot],
+    ids: &mut [Identity],
+    by_char: &HashMap<i64, u32>,
+    bot: i64,
+    player: i64,
+    system: i32,
+) -> Result<Option<u32>, tokio_postgres::Error> {
+    let Some(&i) = by_char.get(&bot) else { return Ok(None) };
+    let sql = r#"SELECT c."corporationID", COALESCE(co."allianceID", 0), c."characterName" FROM "character_" c
+                   JOIN "corporation" co ON co."corporationID" = c."corporationID" WHERE c."characterID" = $1"#;
+    let Some(row) = db.query_opt(sql, &[&(player as i32)]).await? else { return Ok(None) };
+    let (player_corp, alliance, player_name) = (int(&row, 0).unwrap_or(0) as i32, int(&row, 1).unwrap_or(0) as i32, text(&row, 2).unwrap_or_default());
+    let (name, corp) = (ids[i as usize].name.clone(), ids[i as usize].corp);
+    if corp == player_corp || (alliance != 0 && ids[i as usize].alliance == Some(alliance)) {
+        return Ok(None);
+    }
+    let place = owner_name(db, system).await;
+    if alliance != 0 {
+        // A CEO of a bot corporation outside any alliance brings it along.
+        let ceo = db
+            .query_opt(r#"SELECT 1 FROM "corporation" WHERE "corporationID" = $1 AND "ceoID" = $2"#, &[&corp, &(bot as i32)])
+            .await?
+            .is_some();
+        if ceo && p.corps.get(&corp).is_some_and(|c| c.alliance.is_none()) {
+            let note = format!("{player_name} talked me round in {place} Local. Our whole corporation would like to join you.");
+            if crate::svc::alliance::apply_for_bots(db, world, alliance as i64, corp as i64, &note).await {
+                info!("bots: {name}, CEO of {corp}, applied with the corporation to {player_name}'s alliance {alliance}");
+            }
+            return Ok(None);
+        }
+        // Into the alliance's biggest bot corporation.
+        let target = p.corps.iter().filter(|(_, c)| c.alliance == Some(alliance) && c.members > 0).max_by_key(|(id, c)| (c.members, -**id)).map(|(id, _)| *id);
+        if let Some(to) = target {
+            let mut client = crate::db::connect(&crate::bots::db_url()).await?;
+            let tx = client.transaction().await?;
+            let now = crate::bulkdata::filetime_now();
+            let Ok(left) = crate::svc::membership::change_corporation(&tx, bot, to as i64, 0, now).await else { return Ok(None) };
+            tx.commit().await?;
+            crate::svc::membership::member_moved(world, bot, left, to as i64);
+            if let Some(c) = p.corps.get_mut(&(left as i32)) {
+                c.members = c.members.saturating_sub(1);
+            }
+            if let Some(c) = p.corps.get_mut(&to) {
+                c.members += 1;
+            }
+            ids[i as usize].corp = to;
+            ids[i as usize].alliance = Some(alliance);
+            let hq = db
+                .query_opt(r#"SELECT "stationID" FROM "corporation" WHERE "corporationID" = $1"#, &[&to])
+                .await?
+                .and_then(|r| int(&r, 0))
+                .unwrap_or(0) as i32;
+            let b = &mut bots[i as usize];
+            if atlas.station_system.contains_key(&hq) && atlas.route(atlas.system_of(b.home), atlas.system_of(hq)).is_some() {
+                b.home = hq;
+                b.turf = 0;
+            }
+            let manager = super::officers::holder(db, to, super::officers::Office::Recruiter).await;
+            let corp_name = owner_name(db, to).await;
+            super::talk::alliance_report(
+                alliance as i64,
+                Some(to as i64),
+                manager.map(|(id, ..)| id as i64),
+                format!("Welcome aboard {name}! Joined {corp_name}: {player_name} won them over in {place} Local. o7"),
+            );
+            info!("bots: {name} won over by {player_name} in {place}: joined {corp_name} in alliance {alliance}");
+            return Ok(Some(i));
+        }
+    }
+    // Else an application to the player's own corporation.
+    let pitch = format!("We talked in {place} Local. You made it sound a lot better than where I am. Still want me?");
+    let now = crate::bulkdata::filetime_now();
+    db.execute(
+        r#"INSERT INTO "crpApplications" ("corporationID","characterID","applicationText","applicationDateTime","status","deleted")
+           VALUES ($1,$2,$3,$4,$5,0)
+           ON CONFLICT ("corporationID","characterID") DO UPDATE SET "applicationText" = $3, "applicationDateTime" = $4, "status" = $5, "corporationText" = '', "deleted" = 0"#,
+        &[&player_corp, &(bot as i32), &pitch, &now, &APPLIED_BY_CHARACTER],
+    )
+    .await?;
+    let line = vec![Value::Int(player_corp as i64), Value::Int(bot), Value::text(pitch.as_str()), Value::Long(now), Value::Int(APPLIED_BY_CHARACTER as i64)];
+    let change = crate::svc::rows::change(APPLICATION_HEADER, None, Some(&line));
+    let w = world.lock();
+    w.notify(&w.corp_members(player_corp as i64), "OnCorporationApplicationChanged", Value::Tuple(vec![Value::Int(bot), Value::Int(player_corp as i64), change]));
+    info!("bots: {name} won over by {player_name} in {place}: applied to corporation {player_corp}");
+    Ok(None)
 }
 
 /// Bots in NPC corporations apply to player corporations now and then;

@@ -30,6 +30,7 @@ use tracing::{error, info, warn};
 
 use super::behaviour::Atlas;
 use super::control::SovOrder;
+use super::officers::Office;
 use super::politics::Politics;
 use super::sov;
 use super::talk::alliance_report;
@@ -120,7 +121,7 @@ pub async fn order(c: &mut Campaigns, db: &Client, p: &mut Politics, alliance: i
     }
     let who = character_name(db, by).await;
     let first = who.split_whitespace().next().unwrap_or("mate").to_string();
-    let say = |text: String| alliance_report(alliance as i64, None, text);
+    let say = |text: String| alliance_report(alliance as i64, None, None, text);
     match order {
         SovOrder::Start => {
             let claimant = match sov::player_claimants(db, p).await {
@@ -152,14 +153,18 @@ pub async fn order(c: &mut Campaigns, db: &Client, p: &mut Politics, alliance: i
             let (region_name, holder) = (sov::region_name(db, region).await, holder(db, alliance).await);
             let holder_name = holder.map_or_else(|| "the alliance".to_string(), |(_, n)| n);
             info!("bots: {who} ordered alliance {alliance}'s bots to claim sovereignty in {region_name}");
+            let ceo = super::officers::holder(db, executor, Office::Ceo).await;
+            let name_of = |h: Option<(i32, String, String)>| h.map_or_else(|| "one of ours".to_string(), |(_, n, _)| n);
             let text = if again {
                 format!("Already on it, {first}: still claiming {region_name}.")
             } else {
+                let towers = name_of(super::officers::holder(db, executor, Office::Starbase).await);
+                let stations = name_of(super::officers::holder(db, executor, Office::Stations).await);
                 format!(
-                    "o7 {first}, on it. We'll take {region_name} for the alliance: control towers at the moons first, fuelled and onlined, then outposts, handed over to {holder_name} once they're up. {pilots} of us are in."
+                    "o7 {first}, on it. We'll take {region_name} for the alliance. {towers}, our Starbase Manager, will get control towers up at the moons, fuelled and online; {stations}, our Station Manager, will build outposts and hand them to {holder_name}. {pilots} of us are in."
                 )
             };
-            alliance_report(alliance as i64, Some(executor as i64), text);
+            alliance_report(alliance as i64, Some(executor as i64), ceo.map(|(id, ..)| id as i64), text);
         }
         SovOrder::Stop => {
             if let Err(e) = db.execute(r#"DELETE FROM "rmrSovCampaigns" WHERE "allianceID" = $1"#, &[&alliance]).await {
@@ -260,8 +265,10 @@ struct Campaign {
 }
 
 impl Campaign {
-    fn say(&self, text: String) {
-        alliance_report(self.alliance as i64, Some(self.executor as i64), text);
+    /// Says `text` in alliance chat as the officer whose work it is.
+    async fn say(&self, db: &Client, office: Office, text: String) {
+        let speaker = super::officers::holder(db, self.executor, office).await.map(|(id, ..)| id as i64);
+        alliance_report(self.alliance as i64, Some(self.executor as i64), speaker, text);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -279,7 +286,7 @@ impl Campaign {
             }
             if crate::svc::outpost::transfer(db, world, station, holder as i64).await? {
                 info!("bots: outpost {name} ({station}) handed to corporation {holder}");
-                self.say(format!("{name} now belongs to {holder_name}. She's all yours. o7"));
+                self.say(db, Office::Ceo, format!("{name} now belongs to {holder_name}. She's all yours. o7")).await;
             }
         }
         c.handover = kept;
@@ -313,7 +320,7 @@ impl Campaign {
                 c.onlining.insert(t.id);
                 let (tower, moon) = (type_name(db, t.type_id).await, moon_name(db, t.moon).await);
                 info!("bots: alliance {}'s {tower} at {moon} is fuelled and onlining", self.alliance);
-                self.say(format!("{tower} at {moon} has anchored. Fuel and strontium are in, putting it online: {} to go.", left_text(stamp, delay(t, 1), now)));
+                self.say(db, Office::Starbase, format!("{tower} at {moon} has anchored. Fuel and strontium are in, putting it online: {} to go.", left_text(stamp, delay(t, 1), now))).await;
             } else if matches!(t.state, state::ONLINE | state::OPERATING) && c.onlining.remove(&t.id) {
                 self.went_online(db, t).await?;
             }
@@ -341,19 +348,19 @@ impl Campaign {
                 }
             }
             if anchored == 0 && busy == 0 && order.is_empty() && c.full.insert(self.alliance) {
-                self.say(format!(
+                self.say(db, Office::Director, format!(
                     "There's no free moon left for us in {} that nobody else holds. We hold {} system(s) there.",
                     sov::region_name(db, self.region).await,
                     mine.len()
-                ));
+                )).await;
             }
         } else if mine.len() >= want && busy == 0 && c.full.insert(self.alliance) {
-            self.say(format!(
+            self.say(db, Office::Director, format!(
                 "That's as much of {} as {} of us can hold: {} system(s). We'll take more as the alliance grows.",
                 sov::region_name(db, self.region).await,
                 self.pilots,
                 mine.len()
-            ));
+            )).await;
         } else if mine.len() < want {
             c.full.remove(&self.alliance);
         }
@@ -367,13 +374,13 @@ impl Campaign {
                 Ok((station, name)) => {
                     info!("bots: alliance {} built outpost {name} ({station})", self.alliance);
                     self.politics_news(p, format!("{} raised an outpost: {name}", sov::alliance_name(db, self.alliance).await));
-                    self.say(format!("{name} is up and online! Handing it over to {holder_name}."));
+                    self.say(db, Office::Stations, format!("{name} is up and online! Handing it over to {holder_name}.")).await;
                     c.handover.push((station, self.alliance, name));
                     c.next = Some(Instant::now() + Duration::from_secs(5));
                 }
                 Err(why) => {
                     warn!("bots: alliance {}'s platform {} could not build: {why}", self.alliance, x.id);
-                    self.say(format!("The outpost platform in {} won't build: {why}.", sov::system_name(db, x.system).await));
+                    self.say(db, Office::Stations, format!("The outpost platform in {} won't build: {why}.", sov::system_name(db, x.system).await)).await;
                 }
             }
         }
@@ -431,7 +438,7 @@ impl Campaign {
         let left = (delay / self.speed.max(1.0)) as i64;
         let (tower, moon) = (type_name(db, t.type_id).await, moon_name(db, t.moon).await);
         let when = if left <= 0 { "straight away".to_string() } else { format!("in {}", crate::pos::duration_text(left)) };
-        self.say(format!("{tower} at {moon} is online. Our claim on {} stands {when}.", sov::system_name(db, t.system).await));
+        self.say(db, Office::Starbase, format!("{tower} at {moon} is online. Our claim on {} stands {when}.", sov::system_name(db, t.system).await)).await;
         Ok(())
     }
 
@@ -482,7 +489,7 @@ impl Campaign {
         sov::show_towers(db, world, system).await;
         let (tower, moon) = (type_name(db, tower_type).await, moon_name(db, Some(place.moon)).await);
         info!("bots: alliance {} anchoring a {tower} at {moon}", self.alliance);
-        self.say(format!("Anchoring a {tower} at {moon} ({}): anchored in {}.", sov::region_name(db, self.region).await, left_text(stamp, delay, now)));
+        self.say(db, Office::Starbase, format!("Anchoring a {tower} at {moon} ({}): anchored in {}.", sov::region_name(db, self.region).await, left_text(stamp, delay, now))).await;
         Ok(true)
     }
 
@@ -523,7 +530,7 @@ impl Campaign {
         let name = type_name(db, platform).await;
         let place = sov::system_name(db, system).await;
         info!("bots: alliance {} anchoring a {name} in {place}", self.alliance);
-        self.say(format!("Anchoring an {name} in {place}. Once it's anchored ({}) we'll haul the materials in and build.", left_text(stamp, delay, now)));
+        self.say(db, Office::Stations, format!("Anchoring an {name} in {place}. Once it's anchored ({}) we'll haul the materials in and build.", left_text(stamp, delay, now))).await;
         Ok(())
     }
 
@@ -546,7 +553,7 @@ impl Campaign {
             c.broke.remove(&self.alliance);
         } else if c.broke.get(&self.alliance).is_none_or(|at| at.elapsed() >= BROKE_EVERY) {
             c.broke.insert(self.alliance, Instant::now());
-            self.say(format!("We're short of ISK for {what} ({:.0}M ISK). We'll carry on when our wallets can stand it.", cost / 1.0e6));
+            self.say(db, Office::Accountant, format!("We're short of ISK for {what} ({:.0}M ISK). We'll carry on when our wallets can stand it.", cost / 1.0e6)).await;
         }
         Ok(paid)
     }

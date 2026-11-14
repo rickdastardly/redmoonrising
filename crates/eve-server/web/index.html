@@ -143,6 +143,14 @@
       </div>
     </section>
 
+    <section class="window wide" id="w-campaigns">
+      <header class="caption"><span class="glyph"></span><h2>Your Alliance's Sov Campaigns</h2><span class="caption-meta" id="campaigns-delay"></span></header>
+      <div class="body">
+        <p class="note">Alliances whose bot corporations were told in alliance chat to <b>start claiming sov</b>: their towers going up, outposts being built and handed over, and the systems they hold. <b>stop claiming sov</b> and <b>sov status</b> work in alliance chat too.</p>
+        <table id="campaigns"></table>
+      </div>
+    </section>
+
     <section class="window wide" id="w-articles">
       <header class="caption"><span class="glyph"></span><h2>Server news</h2></header>
       <div class="body">
@@ -443,6 +451,12 @@
               <button type="submit">Apply</button>
             </form>
             <p class="note">The most bot ships in space in one system where a player is, up to 20,000 (a 2,000 against 2,000 battle needs 4,000 or more). A capital battle you start from the Capital battle window or with /bots battle is not held to this: all its ships come. Ships arrive in waves of 25 a side every few seconds, so your client loads them as they come rather than all at once. More means bigger fights and far more work for the server and your client.</p>
+            <form id="bots-sovclaim-form" class="toolbar">
+              <label class="bot-label" for="bots-sovclaim">Hours before a tower's claim counts</label>
+              <input id="bots-sovclaim" type="number" min="0" max="720" step="0.5" required>
+              <button type="submit">Apply</button>
+            </form>
+            <p class="note">How long a control tower must stand online before its system becomes its alliance's sovereignty on the map (the game says up to six days: 144). This counts for your own alliance's towers, the ones your bots put up when you tell them to claim sov. Bot alliances' sieges and expansions count at once, so the sovereignty map follows the news. Also <code>/sovdelay &lt;hours&gt;</code> in game.</p>
             <form id="bots-client-form" class="toolbar">
               <label class="bot-label" for="bots-client">Ships your client is sent</label>
               <input id="bots-client" type="number" min="50" max="20000" step="10" required>
@@ -578,8 +592,11 @@
             <tr><td><code class="gm-cmd">/gmships</code></td><td>One of every staff, Jovian and test hull, in your station hangar.</td><td><code class="gm-example">/gmships</code></td></tr>
             <tr><td><code class="gm-cmd">/outpostmats [platformID]</code></td><td>Puts the materials an outpost platform needs into it (the nearest one if no ID is given).</td><td><code class="gm-example">/outpostmats</code></td></tr>
             <tr><td><code class="gm-cmd">/rushanchor [structureID]</code></td><td>Finishes anchoring or onlining a starbase structure straight away.</td><td><code class="gm-example">/rushanchor</code></td></tr>
+            <tr><td><code class="gm-cmd">/fueltower [towerID]</code></td><td>Puts 30 days of fuel, two days of strontium and any charter the empire asks for into a control tower in your system (the nearest if no ID is given).</td><td><code class="gm-example">/fueltower</code></td></tr>
             <tr class="gm-group"><th colspan="3">Character</th></tr>
             <tr><td><code class="gm-cmd">/giveisk &lt;amount&gt;</code></td><td>Adds ISK to your wallet. Also <code>/givemoney</code>.</td><td><code class="gm-example">/giveisk 1000000000</code></td></tr>
+            <tr><td><code class="gm-cmd">/givecorpisk &lt;amount&gt;</code></td><td>Adds ISK to your corporation's wallet (a player corporation's).</td><td><code class="gm-example">/givecorpisk 10000000000</code></td></tr>
+            <tr><td><code class="gm-cmd">/setsec &lt;status&gt;</code></td><td>Sets your security status, from -10 to 10. Your character sheet shows it after you dock or jump.</td><td><code class="gm-example">/setsec 5</code></td></tr>
             <tr><td><code class="gm-cmd">/giveskill &lt;skill&gt; [level]</code></td><td>Trains one skill straight into your character (level 5 if no level is given).</td><td><code class="gm-example">/giveskill Caldari Battleship 5</code></td></tr>
             <tr><td><code class="gm-cmd">/giveallskills</code></td><td>Every skill at level 5.</td><td><code class="gm-example">/giveallskills</code></td></tr>
             <tr><td><code class="gm-cmd">/setstanding &lt;ownerID&gt; &lt;standing&gt;</code></td><td>Sets an agent's, NPC corporation's or faction's standing towards you (-10 to 10).</td><td><code class="gm-example">/setstanding 500001 10</code></td></tr>
@@ -587,6 +604,10 @@
             <tr class="gm-group"><th colspan="3">Travel</th></tr>
             <tr><td><code class="gm-cmd">/tr me &lt;place or pilot&gt;</code></td><td>Teleports you to a station, solar system, celestial or another pilot.</td><td><code class="gm-example">/tr me Jita</code></td></tr>
             <tr><td><code class="gm-cmd">/moveme [hub]</code></td><td>Moves you to a trade hub (Jita, Amarr, Rens, Dodixie, Hek) or a named null-sec station. With no hub, shows a picker.</td><td><code class="gm-example">/moveme jita</code></td></tr>
+            <tr class="gm-group"><th colspan="3">Server</th></tr>
+            <tr><td><code class="gm-cmd">/announce &lt;text&gt;</code></td><td>Puts a message on every logged-in player's screen.</td><td><code class="gm-example">/announce Downtime in 10 minutes</code></td></tr>
+            <tr><td><code class="gm-cmd">/online</code></td><td>Who is logged in, docked or in space, and where.</td><td><code class="gm-example">/online</code></td></tr>
+            <tr><td><code class="gm-cmd">/sovdelay [hours]</code></td><td>Shows, or sets, how long a control tower must stand online before its system becomes its alliance's sovereignty. Saved for the next start. Also on the Bots page.</td><td><code class="gm-example">/sovdelay 1</code></td></tr>
             <tr class="gm-group"><th colspan="3">Space</th></tr>
             <tr><td><code class="gm-cmd">/spawn</code></td><td>Spawns a group of the system's rats around your ship.</td><td><code class="gm-example">/spawn</code></td></tr>
             <tr><td><code class="gm-cmd">/clearspace</code></td><td>Removes every jettisoned can and cargo container in space, with its contents.</td><td><code class="gm-example">/clearspace</code></td></tr>
@@ -600,6 +621,11 @@
             <tr><td><code class="gm-cmd">/bots density &lt;region&gt; &lt;factor&gt;</code></td><td>Sets how busy a region is with bots.</td><td><code class="gm-example">/bots density Delve 2</code></td></tr>
             <tr><td><code class="gm-cmd">/bots battle [here | system] [skirmish | battle | decisive]</code></td><td>Starts a battle at once, with every kind of capital ship on both sides: a titan, dreadnoughts, carriers, logistics and a cyno ship. <code>here</code> is your own system. Where a bot alliance has a claiming tower it is a siege round it; anywhere else the fleets meet in open space by you (be in space to see it). With no system, a siege wherever a bot alliance holds a tower. Each side brings 200-280, 250-400 or 350-500 ships (skirmish, battle, decisive); a minute in, one side cynos its capitals in and the other answers. Decisive unless you say otherwise. Also on the Bots page, in the Capital battle window.</td><td><code class="gm-example">/bots battle here</code></td></tr>
             <tr><td><code class="gm-cmd">/bots follow &lt;name&gt;</code></td><td>Follows a pilot on the dashboard's Pilot tracking page. <code>/bots unfollow &lt;characterID&gt;</code> stops.</td><td><code class="gm-example">/bots follow Rick</code></td></tr>
+            <tr><td><code class="gm-cmd">/botcorp &lt;name or ticker&gt;</code></td><td>Who holds a bot corporation's offices: its CEO, directors, Personnel Manager, Accountant, Head of Security, Starbase Manager, Station Manager and the rest. Also on each corporation's page on the killboard.</td><td><code class="gm-example">/botcorp Ancient Assembly</code></td></tr>
+            <tr class="gm-group"><th colspan="3">Talking to the bots (no GM role needed)</th></tr>
+            <tr><td><code class="gm-cmd">start claiming sov for our alliance</code></td><td>Said in alliance chat: your alliance's bot corporations anchor, fuel and online control towers in its home region, build outposts and hand them to your alliance's executor corporation, reporting each step in alliance chat. Their Starbase Manager does the towers, their Station Manager the outposts.</td><td><code class="gm-example">start claiming sov for our alliance</code></td></tr>
+            <tr><td><code class="gm-cmd">stop claiming sov</code> · <code class="gm-cmd">sov status</code></td><td>In alliance chat: stops new towers and outposts (what is up stays fuelled), or has them say how it stands. Progress is also on the Sovereignty map page.</td><td><code class="gm-example">sov status</code></td></tr>
+            <tr><td><code class="gm-cmd">come join &lt;your alliance&gt;…</code></td><td>Said in Local after a bot there has complained about the system ("I hate this system"): some come over a few minutes later. A pilot joins your alliance's biggest bot corporation, or applies to your corporation; a bot CEO applies with its whole corporation to your alliance.</td><td><code class="gm-example">come join CCP Alliance and rat and mine in our space safely</code></td></tr>
             <tr class="gm-group"><th colspan="3">Help</th></tr>
             <tr><td><code class="gm-cmd">/help</code></td><td>Lists these commands in game.</td><td><code class="gm-example">/help</code></td></tr>
           </tbody>

@@ -456,6 +456,8 @@ struct Report {
     alliance: i64,
     /// The corporation doing the work, whose pilots speak first.
     corp: Option<i64>,
+    /// The pilot who says it (the officer whose work it is), if known.
+    speaker: Option<i64>,
     text: String,
     due: Instant,
     since: Instant,
@@ -484,6 +486,9 @@ struct Talk {
     /// answered by the whole corporation.
     group_answered: HashMap<(bool, i64), Instant>,
     systems: HashMap<i64, SystemTalk>,
+    /// Bots who complained in Local lately, and where: a player's invitation
+    /// may win them over.
+    disgruntled: HashMap<i64, (i64, Instant)>,
     /// Players in conversation with a bot: (system, player) -> bot.
     partners: HashMap<(i64, i64), Partner>,
     /// Names of players who spoke, for bots to address them.
@@ -510,6 +515,7 @@ fn with_talk<R>(f: impl FnOnce(&mut Talk) -> R) -> Option<R> {
         group_next: HashMap::new(),
         group_answered: HashMap::new(),
         systems: HashMap::new(),
+        disgruntled: HashMap::new(),
         partners: HashMap::new(),
         names: HashMap::new(),
         ships: HashMap::new(),
@@ -722,6 +728,85 @@ fn answer_fight_call(t: &mut Talk, w: &WorldState, system: i64, player: i64, nam
     true
 }
 
+// ---- winning over the disgruntled ------------------------------------------------------------
+
+/// How long a bot's grumbling in Local leaves it open to an offer.
+const DISGRUNTLED_FOR: Duration = Duration::from_secs(20 * 60);
+
+/// A bot fed up with where it is: (complaint, what others say to it).
+const GRUMBLES: &[(&str, &[&str])] = &[
+    ("I hate this system", &["then leave lol", "same", "it's not that bad"]),
+    ("this system is dead, nothing to do here", &["yeah it's quiet", "go somewhere else then", "true"]),
+    ("sick of getting ganked every time I undock here", &["fit a tank", "welcome to eve", "rough"]),
+    ("my corp never does anything, nobody even logs on", &["find a new one", "same here", "lol"]),
+    ("can't rat here without some pirate showing up", &["that's eve", "try another system", "yep"]),
+    ("mining here is awful, belts are always stripped", &["get up earlier", "true", "move to null"]),
+    ("thinking of moving out of this dump", &["where to?", "do it", "same"]),
+    ("I'm so bored of this place", &["same", "go roam", "lol"]),
+];
+
+/// A player asking pilots to join them: "come join our alliance", "join us",
+/// "we're recruiting, come mine in our space".
+pub(super) fn invitation(text: &str) -> bool {
+    let t: String = text.to_lowercase().chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect();
+    let words: Vec<&str> = t.split_whitespace().collect();
+    let any = |ws: &[&str]| words.iter().any(|w| ws.contains(w));
+    let asks = any(&["join", "joining", "recruiting", "recruit", "recruitment"]) || (any(&["come", "move"]) && any(&["us", "our", "we"]));
+    asks && any(&["alliance", "corp", "corporation", "us", "our", "we", "space", "home"])
+}
+
+/// How readily a bot of this persona takes an offer.
+fn won_over_chance(p: Persona) -> f64 {
+    match p {
+        Persona::Carebear | Persona::Newbie | Persona::Grumpy => 0.8,
+        Persona::Friendly | Persona::Trader => 0.65,
+        Persona::Veteran | Persona::Roleplayer => 0.5,
+        Persona::Pirate => 0.35,
+        Persona::Troll => 0.25,
+    }
+}
+
+/// A player invited pilots in Local: those who complained lately answer, and
+/// some come over (`relations::won_over`), after a while. True if any did.
+fn answer_invitation(t: &mut Talk, system: i64, player: i64, name: &str, text: &str, bots: &[LocalBot]) -> bool {
+    if !invitation(text) {
+        return false;
+    }
+    let now = Instant::now();
+    t.disgruntled.retain(|_, (_, at)| now.duration_since(*at) < DISGRUNTLED_FOR);
+    let mut unhappy: Vec<&LocalBot> = bots.iter().filter(|b| t.disgruntled.get(&b.char_id).is_some_and(|(s, _)| *s == system)).collect();
+    unhappy.sort_by_key(|b| b.char_id);
+    if unhappy.is_empty() {
+        return false;
+    }
+    let mut delay = Duration::from_millis(800);
+    let mut won = 0;
+    for b in unhappy.into_iter().take(4) {
+        t.disgruntled.remove(&b.char_id);
+        let p = persona(b.char_id, b.role);
+        let yes = t.rng.unit() < won_over_chance(p);
+        let line = if yes {
+            pick(&mut t.rng, &[
+                "really? somewhere I can actually rat in peace? I'm in",
+                "honestly anything's better than here. sending an application",
+                "safe mining? ok you've got me {p}, I'll come over",
+                "x me {p}, I'll think about it... ok yeah, I'm coming",
+                "you know what, sure. give me a bit to pack up",
+            ])
+        } else {
+            pick(&mut t.rng, &["nah, I'll stick it out", "lol no thanks", "what's in it for me?", "I've heard that before", "maybe some other time"])
+        };
+        t.say(system, b.char_id, p, line, delay, Some(name), "");
+        delay += Duration::from_secs(3);
+        if yes {
+            won += 1;
+            super::control::ask(super::control::Request::WinOver { bot: b.char_id, player, system: system as i32 });
+        }
+    }
+    tracing::info!("local: {name} invited the disgruntled in {system}: {won} coming over");
+    true
+}
+
 // ---- what the rest of the server calls ---------------------------------------------------------
 
 /// A player spoke in a system's Local: bots answer, after a moment. A call
@@ -739,7 +824,7 @@ pub fn player_said(w: &WorldState, system: i64, player: i64, name: &str, text: &
     with_talk(|t| {
         t.heard += 1;
         t.names.insert(player, name.to_string());
-        if answer_fight_call(t, w, system, player, name, text, &bots) || chatter == Chatter::Off {
+        if answer_fight_call(t, w, system, player, name, text, &bots) || answer_invitation(t, system, player, name, text, &bots) || chatter == Chatter::Off {
             return;
         }
         let now = Instant::now();
@@ -913,7 +998,10 @@ pub(super) fn sov_order(text: &str) -> Option<super::control::SovOrder> {
 /// The bot who speaks for an alliance: an online pilot of `corp` (the one
 /// doing the work), else any online pilot of the alliance, else any of its
 /// pilots.
-fn alliance_speaker(w: &WorldState, alliance: i64, corp: Option<i64>) -> Option<LocalBot> {
+fn alliance_speaker(w: &WorldState, alliance: i64, corp: Option<i64>, speaker: Option<i64>) -> Option<LocalBot> {
+    if let Some(b) = speaker.and_then(|id| w.bot_roster.iter().find(|b| b.char_id == id)) {
+        return Some(b.clone());
+    }
     let mut online = w.online_bots(|b| b.alliance_id == Some(alliance));
     online.sort_by_key(|b| (corp != Some(b.corp_id), b.char_id));
     if let Some(b) = online.into_iter().next() {
@@ -924,7 +1012,7 @@ fn alliance_speaker(w: &WorldState, alliance: i64, corp: Option<i64>) -> Option<
 
 /// A bot of `alliance` tells it `text` in alliance chat, after the reports
 /// already waiting.
-pub fn alliance_report(alliance: i64, corp: Option<i64>, text: String) {
+pub fn alliance_report(alliance: i64, corp: Option<i64>, speaker: Option<i64>, text: String) {
     with_talk(|t| {
         let now = Instant::now();
         let after = t.reports.iter().filter(|r| r.alliance == alliance).map(|r| r.due).max().unwrap_or(now).max(now);
@@ -932,7 +1020,7 @@ pub fn alliance_report(alliance: i64, corp: Option<i64>, text: String) {
         if t.reports.iter().filter(|r| r.alliance == alliance).count() >= REPORTS_HELD {
             return;
         }
-        t.reports.push(Report { alliance, corp, text, due, since: now });
+        t.reports.push(Report { alliance, corp, speaker, text, due, since: now });
     });
 }
 
@@ -947,7 +1035,7 @@ pub fn player_said_to_group(w: &WorldState, channel: &Value, char_id: i64, name:
                 tracing::info!("bots: {name} told alliance {id}'s bots in alliance chat: {order:?}");
                 super::control::ask(super::control::Request::ClaimSov { alliance: id as i32, by: char_id, order });
                 if !super::is_running() {
-                    alliance_report(id, None, format!("o7 {}, will do, but we're all docked up just now (the bots are paused). We'll get on it as soon as we're back.", first_name(name)));
+                    alliance_report(id, None, None, format!("o7 {}, will do, but we're all docked up just now (the bots are paused). We'll get on it as soon as we're back.", first_name(name)));
                 }
                 return;
             }
@@ -1010,7 +1098,7 @@ fn group_tick(w: &WorldState, now: Instant, chatter: Chatter) {
     .unwrap_or_default();
     for r in ready {
         let Some((_, channel)) = open.iter().find(|(id, _)| *id == r.alliance) else { continue };
-        let Some(bot) = alliance_speaker(w, r.alliance, r.corp) else { continue };
+        let Some(bot) = alliance_speaker(w, r.alliance, r.corp, r.speaker) else { continue };
         let members = w.channel_members(channel);
         let count = chat::channel_population(w, channel, members.len());
         chat::announce_counted(w, &members, count, channel, "SendMessage", &chat::bot_who(&bot), vec![Value::text(r.text)]);
@@ -1174,6 +1262,20 @@ fn tick(world: &World) {
             }
             let a = bots[t.rng.below(bots.len())].clone();
             let pa = persona(a.char_id, a.role);
+            // Now and then someone is fed up with the place, and says so.
+            if t.rng.unit() < 0.2 {
+                let (line, answers) = GRUMBLES[t.rng.below(GRUMBLES.len())];
+                t.say(*system, a.char_id, pa, line, Duration::ZERO, None, "");
+                t.disgruntled.insert(a.char_id, (*system, now));
+                if t.rng.unit() < 0.5 {
+                    let b = bots[t.rng.below(bots.len())].clone();
+                    if b.char_id != a.char_id {
+                        let line = pick(&mut t.rng, answers);
+                        t.say(*system, b.char_id, persona(b.char_id, b.role), line, Duration::from_secs(4), Some(&a.name), "");
+                    }
+                }
+                return;
+            }
             let (mut opener, mut answers) = ambient(pa, &mut t.rng);
             for _ in 0..3 {
                 if !t.systems.get(system).is_some_and(|s| s.recent.iter().any(|r| r.eq_ignore_ascii_case(opener))) {
@@ -1238,6 +1340,15 @@ mod tests {
         assert_eq!(named(&bots, "ana vey you there?").map(|b| b.char_id), Some(2));
         // "Ana" is too short to match on its own; "banana" is not a name.
         assert!(named(&bots, "banana").is_none());
+    }
+
+    #[test]
+    fn invitations_are_told_from_chatter() {
+        assert!(invitation("come join CCP Alliance and rat and mine in our space safely"));
+        assert!(invitation("we're recruiting, join us"));
+        assert!(invitation("come to our space, it's safe"));
+        assert!(!invitation("I hate this system"));
+        assert!(!invitation("anyone want to join a fleet"));
     }
 
     #[test]
