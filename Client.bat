@@ -2258,7 +2258,8 @@ def _rmr_install_local_roster():
                     if getattr(node, 'corpID', None) and node.corpID == eve.session.corpid:
                         flag_id = getattr(state, 'flagSameCorp', None)
                     elif getattr(node, 'allianceID', None) and node.allianceID == eve.session.allianceid:
-                        flag_id = getattr(state, 'flagSameAlliance', None)
+                        # This client calls it flagAlliance (states.py).
+                        flag_id = getattr(state, 'flagAlliance', None) or getattr(state, 'flagSameAlliance', None)
                 if badge is not None and not badge.destroyed and getattr(self.sr, 'rmrBadgeFlag', None) != flag_id:
                     badge.Close()
                     badge = None
