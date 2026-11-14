@@ -100,6 +100,13 @@ pub async fn alliance_registry(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         "DeclareExecutorSupport" => declare_support(ctx, subject.unwrap_or(0), call.arg_id(0)).await,
         "DeleteMember" => delete_member(ctx, subject.unwrap_or(0), call.arg_id(0)).await,
         "UpdateAlliance" => update_alliance(ctx, subject.unwrap_or(0), &text_arg(0), &text_arg(1), call.arg_text(2).as_deref()).await,
+        // Our own call (the client hook's alliance Show Info and Home): the
+        // member corporations of any alliance, each (corporationID, pilots),
+        // the most pilots first.
+        "RmrAllianceMembers" => {
+            let id = call.arg_i64(0).or(subject).unwrap_or(0);
+            Ok(alliance_member_counts(ctx, id).await)
+        }
         "GetAllianceLogoUrl" => logo_url(ctx, subject.unwrap_or(0)).await,
         "GetAllianceLogoImage" => logo_image(ctx, call.arg_id(0)).await,
         "GetRelationships" => Ok(keyed(ctx, RELATIONSHIP_HEADER, RELATIONSHIP_SELECT, "fromID", subject.unwrap_or(0), 1).await),
@@ -117,6 +124,25 @@ pub async fn alliance_registry(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         method => return Some(Outcome::Unknown(format!("{ALLIANCE}::{method}"))),
     };
     Some(result.map_or_else(|refusal| refusal, Outcome::Value))
+}
+
+async fn alliance_member_counts(ctx: &Ctx<'_>, alliance_id: i64) -> Value {
+    let sql = r#"SELECT co."corporationID", co."memberCount"
+                   FROM "allianceMembers" m
+                   JOIN "corporation" co ON co."corporationID" = m."corporationID"
+                  WHERE m."allianceID" = $1 AND co."deleted" = 0
+                  ORDER BY co."memberCount" DESC, co."corporationID""#;
+    match ctx.db.query(sql, &[&(alliance_id as i32)]).await {
+        Ok(rows) => Value::List(
+            rows.iter()
+                .map(|r| Value::Tuple(vec![Value::Int(r.get::<_, i32>(0) as i64), Value::Int(r.get::<_, i32>(1) as i64)]))
+                .collect(),
+        ),
+        Err(e) => {
+            error!("RmrAllianceMembers({alliance_id}): {}", crate::logging::chain(&e));
+            Value::List(Vec::new())
+        }
+    }
 }
 
 async fn alliance_row(ctx: &Ctx<'_>, alliance_id: i64) -> Option<Value> {

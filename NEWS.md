@@ -2,6 +2,26 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Selling works, and alliances show their members
+
+*2026-11-14 16:47 UTC*
+
+### Selling
+
+**The sell window opens properly.** When the window opens, the game looks for the best buy order for your item. It put the market's buy orders into a list that accepts only one kind of database row, and refused the rows the server sends, so the window stayed blank. `Client.bat` now sets the game to accept them; they have the same columns, so the window reads them just the same.
+
+### Alliance Show Info
+
+- **Members tab:** every member corporation with its pilot count, biggest first. Click one to open its Show Info.
+- **Description tab:** always there, with the alliance's description, or a note when it has none. The description no longer sits in the middle of Attributes.
+- **Attributes:** now show **Member Corporations** and **Members** (pilots).
+
+### Corporation window, Alliances, Home
+
+- Now shows **Member Corporations** and **Members** under your alliance's name.
+
+Run `Client.bat` again with the game closed, and restart the server, to pick these up.
+
 ## The sell window works again
 
 *2026-11-14 16:21 UTC*

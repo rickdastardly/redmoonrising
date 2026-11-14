@@ -1241,16 +1241,20 @@ def _rmr_install_session_guards():
         except:
             _rmr_log('Session guard for %s.%s failed: %s' % (service, method, ''.join(traceback.format_exception(*sys.exc_info()))))
             sys.exc_clear()
-    # The sell window copies the market's buy orders into a database rowset
-    # (marketsvc.GetBestMatchableBid), which takes only blue.DBRow rows and
-    # raised "Not DBRow" for the util.Row lines the server sends: the window
-    # came up blank. The rows have the same columns, so they are let in.
+    # The sell window copies the market's buy orders into a dbutil.RowList
+    # (marketsvc.py:568-578, GetBestMatchableBid), whose append takes only
+    # blue.DBRow rows (rowset.py:1198) and raised "Not DBRow" for the rows
+    # the server sends: the window came up blank. The rows have the same
+    # columns, so they are let in. CRowset checks the same way.
     try:
         patched = []
+        classes = []
         for name, module in sys.modules.items():
-            cls = getattr(module, 'CRowset', None)
-            if cls is None or not isinstance(cls, (type, types.ClassType)):
-                continue
+            for kind in ('RowList', 'CRowset'):
+                cls = getattr(module, kind, None)
+                if cls is not None and isinstance(cls, (type, types.ClassType)) and cls not in [c for c, n in classes]:
+                    classes.append((cls, '%s.%s' % (name, kind)))
+        for cls, label in classes:
             for method in ('append', 'insert', 'extend'):
                 original = cls.__dict__.get(method)
                 if original is None or getattr(original, '_rmr_guarded', False):
@@ -1272,7 +1276,7 @@ def _rmr_install_session_guards():
                     guarded._rmr_guarded = True
                     return guarded
                 setattr(cls, method, make(original, method))
-                patched.append('%s.CRowset.%s' % (name, method))
+                patched.append('%s.%s' % (label, method))
         if patched:
             done.append(', '.join(patched))
         else:
@@ -1318,6 +1322,152 @@ def _rmr_install_session_guards():
     _rmr_log('Session guards installed: ' + ', '.join(done))
 
 uthread.new(_rmr_install_session_guards)
+
+
+# ---- alliances: member counts and tabs -------------------------------------
+# The alliance Show Info lists only Executor, Short Name, URL, Description,
+# Created By and Dictatorial (infosvc.py:1373-1420): no member count, no
+# list of member corporations, and a Description tab only when there is a
+# description (infosvc.py:753, 879). The corporation window's Alliances >
+# Home (all_ui_home.py:72-150) has no member count either. These add them,
+# from the server's allianceRegistry.RmrAllianceMembers: (corporationID,
+# pilots) for each member corporation, the most pilots first.
+
+def _rmr_alliance_members(allianceID):
+    try:
+        rows = eve.RemoteSvc('allianceRegistry').RmrAllianceMembers(allianceID)
+        rows = [(int(r[0]), int(r[1])) for r in rows]
+    except:
+        _rmr_log('Alliance members: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+        return None
+    try:
+        if rows:
+            cfg.eveowners.Prime([r[0] for r in rows])
+    except:
+        sys.exc_clear()
+    return rows
+
+
+def _rmr_alliance_count_lines(rows):
+    import listentry
+    pilots = 0
+    for corpID, n in rows:
+        pilots += n
+    return [listentry.Get('LabelTextTop', {'line': 1, 'label': 'Member Corporations', 'text': str(len(rows))}),
+            listentry.Get('LabelTextTop', {'line': 1, 'label': 'Members', 'text': '%d pilots' % pilots})]
+
+
+def _rmr_alliance_info_tabs(wnd, allianceID):
+    import listentry
+    data = wnd.sr.data
+    rows = _rmr_alliance_members(allianceID)
+    attributes = data.get('Attributes')
+    if attributes is not None:
+        items = attributes['items']
+        # The description gets a tab of its own.
+        items[:] = [e for e in items if getattr(e, 'label', None) != 'Description']
+        if rows is not None:
+            items.extend(_rmr_alliance_count_lines(rows))
+    members = data.get('Member Corps')
+    if members is not None and rows:
+        members['name'] = 'Members'
+        entries = []
+        for corpID, n in rows:
+            try:
+                name = cfg.eveowners.Get(corpID).ownerName
+            except:
+                sys.exc_clear()
+                name = str(corpID)
+            entries.append(listentry.Get('Text', {'line': 1, 'typeID': const.typeCorporation, 'itemID': corpID,
+                                                  'text': '%s (%d pilot%s)' % (name, n, ['s', ''][n == 1])}))
+        members['items'][:] = entries
+    # With a description the client makes the tab itself; without one it
+    # makes none, so this one says so.
+    info = getattr(wnd.sr, 'allianceinfo', None)
+    description = ''
+    if info is not None:
+        description = getattr(info, 'description', '') or ''
+    if not description.strip() and 'Description' not in data:
+        data['Description'] = {'name': 'Description', 'subtabs': [], 'inited': 0, 'headers': [],
+                               'items': [listentry.Get('Text', {'line': 1, 'text': 'This alliance has no description.'})]}
+        tabs = getattr(wnd.sr, 'dynamicTabs', None)
+        if tabs is not None and 'Description' not in tabs:
+            tabs.insert(0, 'Description')
+
+
+def _rmr_install_alliance_info():
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    done = []
+    try:
+        cls = sm.GetService('info').__class__
+        original = cls.__dict__.get('GetWndData')
+        if original is not None and not getattr(original, '_rmr_guarded', False):
+            def get_wnd_data(self, wnd, typeID, itemID, *args, **kwargs):
+                result = original(self, wnd, typeID, itemID, *args, **kwargs)
+                try:
+                    if itemID and getattr(wnd.sr, 'isAlliance', 0):
+                        _rmr_alliance_info_tabs(wnd, itemID)
+                except:
+                    _rmr_log('Alliance info tabs: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+                    sys.exc_clear()
+                return result
+            get_wnd_data._rmr_guarded = True
+            cls.GetWndData = get_wnd_data
+            done.append('info.GetWndData')
+    except:
+        _rmr_log('Alliance info patch failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+    try:
+        # The corporation window's classes may register a little after login.
+        cls = None
+        for i in range(120):
+            cls = getattr(form, 'AlliancesHome', None)
+            if cls is not None:
+                break
+            blue.pyos.synchro.Sleep(1000)
+        original_details = cls is not None and cls.__dict__.get('ShowDetails')
+        if original_details and not getattr(original_details, '_rmr_guarded', False):
+            def show_details(self, *args, **kwargs):
+                scroll = getattr(self.sr, 'scroll', None)
+                allianceID = getattr(eve.session, 'allianceid', None)
+                if scroll is None or not allianceID:
+                    return original_details(self, *args, **kwargs)
+                load = scroll.Load
+
+                def load_with_counts(*largs, **lkwargs):
+                    try:
+                        if len(largs) > 1:
+                            content = largs[1]
+                        else:
+                            content = lkwargs.get('contentList')
+                        rows = _rmr_alliance_members(allianceID)
+                        if content and rows is not None:
+                            # After the alliance's name.
+                            content[1:1] = _rmr_alliance_count_lines(rows)
+                    except:
+                        _rmr_log('Alliance home counts: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+                        sys.exc_clear()
+                    return load(*largs, **lkwargs)
+                scroll.Load = load_with_counts
+                try:
+                    return original_details(self, *args, **kwargs)
+                finally:
+                    try:
+                        del scroll.Load
+                    except:
+                        sys.exc_clear()
+                        scroll.Load = load
+            show_details._rmr_guarded = True
+            cls.ShowDetails = show_details
+            done.append('AlliancesHome.ShowDetails')
+    except:
+        _rmr_log('Alliance home patch failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+    _rmr_log('Alliance patches installed: ' + ', '.join(done))
+
+uthread.new(_rmr_install_alliance_info)
 
 def _rmr_install_html_table_guard():
     # The client's HTML tables fail (KeyError 'spacing-right') when a cell's
