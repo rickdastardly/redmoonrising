@@ -1249,7 +1249,17 @@ def _rmr_install_session_guards():
     try:
         patched = []
         classes = []
-        for name, module in sys.modules.items():
+        # The client's own modules come from its importer, not sys.modules:
+        # dbutil (rowset.py) is imported the way the market code has it.
+        sources = []
+        try:
+            import dbutil
+            sources.append(('dbutil', dbutil))
+        except:
+            _rmr_log('Rowset guard: import dbutil failed: ' + str(sys.exc_info()[1]))
+            sys.exc_clear()
+        sources.extend(sys.modules.items())
+        for name, module in sources:
             for kind in ('RowList', 'CRowset'):
                 cls = getattr(module, kind, None)
                 if cls is not None and isinstance(cls, (type, types.ClassType)) and cls not in [c for c, n in classes]:
@@ -1280,7 +1290,12 @@ def _rmr_install_session_guards():
         if patched:
             done.append(', '.join(patched))
         else:
-            _rmr_log('Rowset guard: no CRowset class found.')
+            _rmr_log('Rowset guard: no RowList or CRowset class found.')
+        # Said to the server log too, so it can be seen whether it took.
+        try:
+            _rmr_report('rowset guard: ' + (', '.join(patched) or 'nothing patched'))
+        except:
+            sys.exc_clear()
     except:
         _rmr_log('Rowset guard failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
         sys.exc_clear()
@@ -1401,7 +1416,8 @@ def _rmr_install_alliance_info():
         blue.pyos.synchro.Sleep(1000)
     done = []
     try:
-        cls = sm.GetService('info').__class__
+        # This client's service manager has StartService, not GetService.
+        cls = sm.StartService('info').__class__
         original = cls.__dict__.get('GetWndData')
         if original is not None and not getattr(original, '_rmr_guarded', False):
             def get_wnd_data(self, wnd, typeID, itemID, *args, **kwargs):
@@ -1466,6 +1482,10 @@ def _rmr_install_alliance_info():
         _rmr_log('Alliance home patch failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
         sys.exc_clear()
     _rmr_log('Alliance patches installed: ' + ', '.join(done))
+    try:
+        _rmr_report('alliance patches: ' + (', '.join(done) or 'none installed'))
+    except:
+        sys.exc_clear()
 
 uthread.new(_rmr_install_alliance_info)
 
