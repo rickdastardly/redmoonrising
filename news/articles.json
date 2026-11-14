@@ -478,5 +478,11 @@
     "publishedMs": 1794607534431,
     "title": "The real cause of the battle desyncs",
     "body": "<p>Found why your game kept losing sync in big battles even when it had only 60 ships.</p>\n<h3>The cause</h3>\n<p>A ship that orbits or chases something is sent with what it is following. Since your game began getting only some of the ships, it was often sent a ship orbiting one it had never been sent. It couldn't follow a ship it didn't have, so it lost sync and asked for the whole grid again, every few seconds. That made fewer ships no help, and it was worse than before the ship limit.</p>\n<h3>Fixed</h3>\n<ul>\n<li><b>Your game is never sent a ship without the ship it orbits or follows.</b> They come together, even past \"Ships your client is sent\".</li>\n<li>When a ship turns to orbit or chase one your game doesn't have, that ship is sent first. This covers bots, NPCs, drones, ships landing from warp, and players.</li>\n<li><b>Titans' doomsdays now show.</b> The effect is sent with the titan's own doomsday (Judgement, Aurora Ominae, Oblivion or Gjallarhorn). Before, the game couldn't draw it and logged an error each time.</li>\n</ul>"
+  },
+  {
+    "published": "2026-11-14 16:21 UTC",
+    "publishedMs": 1794673304075,
+    "title": "The sell window works again",
+    "body": "<p><b>The sell window works again.</b> Right-clicking an item and choosing Sell opened an empty box.</p>\n<p>When the window opens, the game looks for the best buy order for the item. It copies the market's buy orders into a kind of list that accepts only one particular format of database row, and refused the server's rows (\"Not DBRow\"), so the window never finished drawing.</p>\n<ul>\n<li><code>Client.bat</code> now sets up the game to accept the server's rows there. They have the same columns (price, quantity, range, station), so the window reads them just the same.</li>\n<li>Run <code>Client.bat</code> again, with the game closed, to pick this up.</li>\n</ul>"
   }
 ]

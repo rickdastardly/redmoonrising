@@ -1241,6 +1241,45 @@ def _rmr_install_session_guards():
         except:
             _rmr_log('Session guard for %s.%s failed: %s' % (service, method, ''.join(traceback.format_exception(*sys.exc_info()))))
             sys.exc_clear()
+    # The sell window copies the market's buy orders into a database rowset
+    # (marketsvc.GetBestMatchableBid), which takes only blue.DBRow rows and
+    # raised "Not DBRow" for the util.Row lines the server sends: the window
+    # came up blank. The rows have the same columns, so they are let in.
+    try:
+        patched = []
+        for name, module in sys.modules.items():
+            cls = getattr(module, 'CRowset', None)
+            if cls is None or not isinstance(cls, (type, types.ClassType)):
+                continue
+            for method in ('append', 'insert', 'extend'):
+                original = cls.__dict__.get(method)
+                if original is None or getattr(original, '_rmr_guarded', False):
+                    continue
+
+                def make(original, method):
+                    def guarded(self, *args):
+                        try:
+                            return original(self, *args)
+                        except ValueError:
+                            if str(sys.exc_info()[1]) != 'Not DBRow' or not isinstance(self, list):
+                                raise
+                            sys.exc_clear()
+                            if method == 'extend':
+                                for row in args[0]:
+                                    list.append(self, row)
+                                return None
+                            return getattr(list, method)(self, *args)
+                    guarded._rmr_guarded = True
+                    return guarded
+                setattr(cls, method, make(original, method))
+                patched.append('%s.CRowset.%s' % (name, method))
+        if patched:
+            done.append(', '.join(patched))
+        else:
+            _rmr_log('Rowset guard: no CRowset class found.')
+    except:
+        _rmr_log('Rowset guard failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
     # The market window asks for the station's sell orders even in space,
     # and the client then fails with "Must be in station".
     try:

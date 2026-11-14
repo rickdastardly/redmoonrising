@@ -2,6 +2,17 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## The sell window works again
+
+*2026-11-14 16:21 UTC*
+
+**The sell window works again.** Right-clicking an item and choosing Sell opened an empty box.
+
+When the window opens, the game looks for the best buy order for the item. It copies the market's buy orders into a kind of list that accepts only one particular format of database row, and refused the server's rows ("Not DBRow"), so the window never finished drawing.
+
+- `Client.bat` now sets up the game to accept the server's rows there. They have the same columns (price, quantity, range, station), so the window reads them just the same.
+- Run `Client.bat` again, with the game closed, to pick this up.
+
 ## The real cause of the battle desyncs
 
 *2026-11-13 22:05 UTC*
