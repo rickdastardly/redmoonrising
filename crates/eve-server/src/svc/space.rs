@@ -848,6 +848,43 @@ pub fn notify_targeted_updates(world: &WorldState, updates: Vec<(i64, Value)>) {
     }
 }
 
+/// A pilot's corporation or alliance changed while the ship is in space: the
+/// ship carries the new ones, and every client that has it is told
+/// (OnSlimItemChange, michelle.py:810), so its overview and brackets show
+/// the right star: green for the corporation, blue for the alliance.
+pub fn repilot(park: &mut Park, ship_id: i64, corp_id: i64, alliance_id: Option<i64>) -> Vec<(i64, Value)> {
+    let tick = park.tick;
+    let Some(ship) = park.ships.get_mut(&ship_id) else { return Vec::new() };
+    if ship.is_npc() || ship.drone.is_some() || (ship.pilot.corp_id == corp_id && ship.pilot.alliance_id == alliance_id) {
+        return Vec::new();
+    }
+    ship.pilot.corp_id = corp_id;
+    ship.pilot.alliance_id = alliance_id;
+    let change = entry(tick, "OnSlimItemChange", vec![Value::Int(ship_id), ship_slim(ship)]);
+    let mut viewers = ship_viewers(park, ship_id);
+    if let Some(owner) = park.ships.get(&ship_id).filter(|s| s.is_player()).map(|s| s.client_id) {
+        if !viewers.contains(&owner) {
+            viewers.push(owner);
+        }
+    }
+    viewers.into_iter().map(|c| (c, change.clone())).collect()
+}
+
+/// A corporation joined or left an alliance: its pilots' ships in space,
+/// players' and bots' alike, carry the new alliance.
+pub fn set_corp_alliance(world: &mut WorldState, corp_id: i64, alliance_id: Option<i64>) {
+    let mut updates = Vec::new();
+    for park in world.parks.values_mut() {
+        let ships: Vec<i64> = park.ships.values().filter(|s| s.pilot.corp_id == corp_id && !s.is_npc() && s.drone.is_none()).map(|s| s.id).collect();
+        for id in ships {
+            updates.extend(repilot(park, id, corp_id, alliance_id));
+        }
+    }
+    if !updates.is_empty() {
+        notify_targeted_updates(world, updates);
+    }
+}
+
 pub fn ship_viewers(park: &Park, ship_id: i64) -> Vec<i64> {
     park.visible_ships
         .iter()

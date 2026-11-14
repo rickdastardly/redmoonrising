@@ -490,5 +490,11 @@
     "publishedMs": 1794674832741,
     "title": "Selling works, and alliances show their members",
     "body": "<h3>Selling</h3>\n<p><b>The sell window opens properly.</b> When the window opens, the game looks for the best buy order for your item. It put the market's buy orders into a list that accepts only one kind of database row, and refused the rows the server sends, so the window stayed blank. <code>Client.bat</code> now sets the game to accept them; they have the same columns, so the window reads them just the same.</p>\n<h3>Alliance Show Info</h3>\n<ul>\n<li><b>Members tab:</b> every member corporation with its pilot count, biggest first. Click one to open its Show Info.</li>\n<li><b>Description tab:</b> always there, with the alliance's description, or a note when it has none. The description no longer sits in the middle of Attributes.</li>\n<li><b>Attributes:</b> now show <b>Member Corporations</b> and <b>Members</b> (pilots).</li>\n</ul>\n<h3>Corporation window, Alliances, Home</h3>\n<ul><li>Now shows <b>Member Corporations</b> and <b>Members</b> under your alliance's name.</li></ul>\n<p>Run <code>Client.bat</code> again with the game closed, and restart the server, to pick these up.</p>"
+  },
+  {
+    "published": "2026-11-14 16:54 UTC",
+    "publishedMs": 1794675246670,
+    "title": "Blue stars for alliance members",
+    "body": "<p><b>Alliance members now get their blue star</b> in the overview and on their brackets in space, the same way corporation members get the green one and war targets the red one.</p>\n<p>Your game shows the blue star when a pilot's ship carries your alliance. Ships already in space kept whatever alliance they had when they appeared. So when a corporation joined your alliance, as a dozen bot corporations did today, or when a bot was recruited into a new corporation, their ships kept the old details until they docked or jumped.</p>\n<ul>\n<li>When a corporation joins or leaves an alliance, every one of its ships in space, players' and bots' alike, is updated straight away, and everyone who can see them is told.</li>\n<li>Bots that change corporation or alliance in any other way are caught within seconds.</li>\n</ul>"
   }
 ]

@@ -370,6 +370,24 @@ impl Presence {
         let mut observed: HashSet<i32> = w.parks.iter().filter(|(_, p)| p.players().next().is_some()).map(|(id, _)| *id as i32).collect();
         observed.extend(self.battles.iter().copied().filter(|s| w.parks.contains_key(&(*s as i64))));
 
+        // A bot whose corporation or alliance changed while its ship is in
+        // space (recruited, its corporation joined or left an alliance): the
+        // ship carries the new ones, and players' overviews show it (the
+        // blue alliance star, the green corporation one).
+        let mut repiloted = Vec::new();
+        for (&i, &(system, ship_id)) in &self.shown {
+            let Some(id) = ids.get(i as usize) else { continue };
+            let Some(park) = w.parks.get_mut(&(system as i64)) else { continue };
+            let Some(ship) = park.ships.get(&ship_id) else { continue };
+            let (corp, alliance) = (id.corp as i64, id.alliance.map(i64::from));
+            if ship.pilot.corp_id != corp || ship.pilot.alliance_id != alliance {
+                repiloted.extend(crate::svc::space::repilot(park, ship_id, corp, alliance));
+            }
+        }
+        if !repiloted.is_empty() {
+            crate::svc::space::notify_targeted_updates(&w, repiloted);
+        }
+
         // Lost ships leave their pilots in capsules, heading home; lost
         // capsules leave them at home.
         let mut lost = Vec::new();

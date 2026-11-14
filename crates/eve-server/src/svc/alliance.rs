@@ -754,6 +754,9 @@ fn tell_corporation_alliance(world: &World, corp_id: i64, was: Option<i64>, now:
     let c = Value::Dict(vec![(Value::bytes("allianceID"), Value::Tuple(vec![Value::int_or_none(was), Value::int_or_none(now)]))]);
     tell(world, &[corp_id], "OnCorporationChanged", Value::Tuple(vec![Value::Int(corp_id), c]));
     world.lock().reaffiliate(&[corp_id], &[]);
+    // Its pilots' ships in space carry the new alliance (the overview's
+    // alliance star).
+    crate::svc::space::set_corp_alliance(&mut world.lock(), corp_id, now);
 }
 
 // ---- relationships, wars and bills ----------------------------------------------------

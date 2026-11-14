@@ -2,6 +2,17 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Blue stars for alliance members
+
+*2026-11-14 16:54 UTC*
+
+**Alliance members now get their blue star** in the overview and on their brackets in space, the same way corporation members get the green one and war targets the red one.
+
+Your game shows the blue star when a pilot's ship carries your alliance. Ships already in space kept whatever alliance they had when they appeared. So when a corporation joined your alliance, as a dozen bot corporations did today, or when a bot was recruited into a new corporation, their ships kept the old details until they docked or jumped.
+
+- When a corporation joins or leaves an alliance, every one of its ships in space, players' and bots' alike, is updated straight away, and everyone who can see them is told.
+- Bots that change corporation or alliance in any other way are caught within seconds.
+
 ## Selling works, and alliances show their members
 
 *2026-11-14 16:47 UTC*
