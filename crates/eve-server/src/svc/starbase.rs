@@ -764,6 +764,16 @@ async fn set_state(ctx: &Ctx<'_>, system: i64, id: i64, new: i16, stamp: Option<
     Ok(())
 }
 
+/// Shows a structure's new state (already saved) to its system, as the bots
+/// set their towers and platforms going.
+pub fn show_state(world: &World, system: i64, id: i64, new: i16, stamp: Option<i64>) {
+    update(world, system, id, |s, _| {
+        s.state = new;
+        s.stamp = stamp;
+        Vec::new()
+    });
+}
+
 /// Changes a structure in its park and broadcasts `f`'s destiny entries,
 /// then its new slim item.
 fn update(world: &World, system: i64, id: i64, f: impl FnOnce(&mut Structure, i64) -> Vec<Value>) {

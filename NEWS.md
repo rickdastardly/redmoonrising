@@ -2,6 +2,20 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Tell your bots to claim sov
+
+*2026-11-14 17:28 UTC*
+
+**Your alliance's bot corporations now claim null-sec for you when you tell them to.** Say **start claiming sov for our alliance** in alliance chat and they get to work, reporting each step back in alliance chat.
+
+- **Control towers:** they anchor large control towers of their race at moons in the alliance's home region, three at a time, spreading out from the space you already hold. Once a tower has anchored they put fuel and strontium in it and bring it online. When it is online, its claim starts counting towards sovereignty.
+- **Outposts:** in a system where one of their towers is online and there is no station, they anchor an outpost construction platform by a planet. Once it has anchored they haul in the materials and build the outpost, named for your corporation, and then hand it over to the alliance's executor corporation.
+- The towers and platforms use their real anchoring and onlining timers (30 minutes and 30 minutes for a tower, an hour for a platform), and you can fly out and watch them. The bots pay for everything from their own corporation wallets and tell you when they are short of ISK.
+- How much space they take depends on how many pilots they have: about one system for every 25, at least three.
+- **stop claiming sov** stops new work; what is already up stays up and fuelled. **sov status** gets you a report. The order is remembered across restarts.
+
+Your alliance's bots no longer claim space for you on their own. They wait until you ask them to.
+
 ## Blue stars for alliance members
 
 *2026-11-14 16:54 UTC*

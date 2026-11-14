@@ -15,10 +15,12 @@
 //!   hands. An alliance short of systems at home anchors in unclaimed ones.
 //!
 //! - Player alliances: an alliance that has taken bot corporations in has
-//!   those bots claim space for it the same way (`player_claimants`): a home
-//!   region of its own (where its towers already stand, or free null-sec),
-//!   towers anchored and fuelled by its bot corporations, defended by all its
-//!   bots (`defense`), and wars and sieges with its bot neighbours.
+//!   those bots claim space for it when a player tells them to in alliance
+//!   chat (`claim`): a home region of its own (where its towers already
+//!   stand, or free null-sec, `player_claimants`), towers anchored, fuelled
+//!   and onlined by its bot corporations, outposts built and handed to the
+//!   alliance's executor, defended by all its bots (`defense`), and wars and
+//!   sieges with its bot neighbours.
 //! - Growth: alliances holding more space draw more corporations
 //!   (recruiting in `politics`, applications in `relations`, and free bot
 //!   corporations joining here), and an alliance with enough settled
@@ -37,12 +39,12 @@ use crate::combat::Rng;
 use crate::svc::rows::{float, int, text};
 
 /// One system for this many pilots, at least `MIN_SYSTEMS`.
-const PILOTS_PER_SYSTEM: u32 = 25;
-const MIN_SYSTEMS: usize = 3;
+pub(super) const PILOTS_PER_SYSTEM: u32 = 25;
+pub(super) const MIN_SYSTEMS: usize = 3;
 /// At most this share of a region's systems goes to its alliance.
-const MAX_SHARE: f64 = 0.6;
+pub(super) const MAX_SHARE: f64 = 0.6;
 /// Large control towers by race (Caldari, Minmatar, Amarr, Gallente).
-const TOWERS: [(i64, i32); 4] = [(1, 16213), (2, 16214), (4, 12235), (8, 12236)];
+pub(super) const TOWERS: [(i64, i32); 4] = [(1, 16213), (2, 16214), (4, 12235), (8, 12236)];
 const GROUP_MOON: i32 = 8;
 /// A tower stands this far off its moon's surface (the moon rule is 100 km).
 const OFF_MOON: f64 = 30_000.0;
@@ -69,7 +71,7 @@ const RICH: f64 = 5_000_000_000.0;
 /// founds an outpost, and its chance each tick to found one where it has none.
 const OUTPOST_AFTER: usize = 4;
 const OUTPOST_CHANCE: f64 = 0.02;
-const OUTPOST_COST: f64 = 1_000_000_000.0;
+pub(super) const OUTPOST_COST: f64 = 1_000_000_000.0;
 /// A free bot corporation's chance, each tick, to join a bot alliance; the
 /// alliances holding more space are likelier.
 const JOIN_CHANCE: f64 = 0.05;
@@ -112,10 +114,10 @@ pub struct SiegeNames {
     pub security: f64,
 }
 
-struct Place {
-    system: i32,
-    moon: i32,
-    pos: (f64, f64, f64),
+pub(super) struct Place {
+    pub system: i32,
+    pub moon: i32,
+    pub pos: (f64, f64, f64),
 }
 
 /// The bot alliances' null-sec alliances, with their home region (only those
@@ -137,7 +139,7 @@ async fn claimants(db: &Client, p: &Politics) -> Result<Vec<(i32, i32, i32, i64,
 }
 
 /// A moon in the system to put a tower beside, and where.
-async fn spot(db: &Client, system: i32, rng: &mut Rng) -> Result<Option<Place>, tokio_postgres::Error> {
+pub(super) async fn spot(db: &Client, system: i32, rng: &mut Rng) -> Result<Option<Place>, tokio_postgres::Error> {
     let sql = r#"SELECT m."itemID", m."x", m."y", m."z", COALESCE(m."radius", 1000)
                    FROM "mapDenormalize" m WHERE m."solarSystemID" = $1 AND m."groupID" = $2
                     AND NOT EXISTS (SELECT 1 FROM "posStructures" p WHERE p."moonID" = m."itemID"
@@ -154,6 +156,21 @@ async fn spot(db: &Client, system: i32, rng: &mut Rng) -> Result<Option<Place>, 
 
 /// Anchors and onlines a claiming tower; its claim counts from `claim_since`.
 async fn anchor(db: &mut Client, owner: i32, tower_type: i32, place: &Place, claim_since: i64) -> Result<bool, tokio_postgres::Error> {
+    let now = crate::bulkdata::filetime_now();
+    place_tower(db, owner, tower_type, place, crate::pos::state::ONLINE, now, Some(claim_since)).await
+}
+
+/// Puts a claiming tower at its moon in `state`, its step begun at `stamp`;
+/// its claim counting from `claim_since`, if given. False if the moon was taken.
+pub(super) async fn place_tower(
+    db: &mut Client,
+    owner: i32,
+    tower_type: i32,
+    place: &Place,
+    state: i16,
+    stamp: i64,
+    claim_since: Option<i64>,
+) -> Result<bool, tokio_postgres::Error> {
     let tx = db.transaction().await?;
     if !crate::svc::starbase::reserve_moon(&tx, place.moon).await? {
         return Ok(false);
@@ -164,8 +181,8 @@ async fn anchor(db: &mut Client, owner: i32, tower_type: i32, place: &Place, cla
             r#"WITH t AS (INSERT INTO entity ("itemID","itemName","typeID","ownerID","locationID","flag","contraband","singleton","quantity","x","y","z")
                           VALUES (nextval('dyn_id_seq'), '', $1, $2, $3, 0, 0, 1, 1, $4, $5, $6) RETURNING "itemID")
                INSERT INTO "posStructures" ("itemID","state","stateTimestamp","moonID","lastFuel","claim","claimSince","allowCorp","allowAlliance")
-               SELECT "itemID", 4, $7, $8, $7, 1, $9, 1, 1 FROM t"#,
-            &[&tower_type, &owner, &place.system, &place.pos.0, &place.pos.1, &place.pos.2, &now, &place.moon, &claim_since],
+               SELECT "itemID", $10, $11, $8, $7, 1, $9, 1, 1 FROM t"#,
+            &[&tower_type, &owner, &place.system, &place.pos.0, &place.pos.1, &place.pos.2, &now, &place.moon, &claim_since, &state, &stamp],
         )
         .await?;
     tx.commit().await?;
@@ -225,7 +242,7 @@ async fn settle(
 /// home region, the bot corporation that anchors for it, its race, its bot
 /// pilots). The home is where its towers stand, else a free null-sec region
 /// no NPC faction or other alliance calls home, kept in `p.player_sov`.
-async fn player_claimants(db: &Client, p: &mut Politics) -> Result<Vec<(i32, i32, i32, i64, u32)>, tokio_postgres::Error> {
+pub(super) async fn player_claimants(db: &Client, p: &mut Politics) -> Result<Vec<(i32, i32, i32, i64, u32)>, tokio_postgres::Error> {
     let mut by_alliance: HashMap<i32, Vec<(i32, u32)>> = HashMap::new();
     for (id, c) in &p.corps {
         if let Some(a) = c.alliance.filter(|a| !p.alliances.contains_key(a)) {
@@ -327,12 +344,19 @@ pub async fn establish(db: &mut Client, atlas: &Atlas, p: &Politics, rng: &mut R
 /// Keeps every bot tower in fuel: a top-up whenever one runs below a quarter
 /// of 30 days' worth.
 pub async fn refuel(db: &Client) -> Result<u64, tokio_postgres::Error> {
+    refuel_tower(db, None).await
+}
+
+/// Tops up every bot tower in use, or just `only` (whatever its state: a
+/// tower fuelled to go online).
+pub(super) async fn refuel_tower(db: &Client, only: Option<i32>) -> Result<u64, tokio_postgres::Error> {
     let sql = r#"WITH towers AS (
                      SELECT p."itemID", e."typeID", e."ownerID" FROM "posStructures" p
                        JOIN entity e ON e."itemID" = p."itemID"
                        JOIN "botGroups" g ON g."ownerID" = e."ownerID"
                        JOIN "corporation" co ON co."corporationID" = e."ownerID"
-                      WHERE p."controlTowerID" IS NULL AND p."state" IN (2, 3, 4, 5) AND co."balance" > 0),
+                      WHERE p."controlTowerID" IS NULL AND co."balance" > 0
+                        AND (($5::int IS NULL AND p."state" IN (2, 3, 4, 5)) OR p."itemID" = $5::int)),
                  needs AS (
                      SELECT t."itemID", t."ownerID", r."resourceTypeID" AS kind,
                             CASE WHEN r."purpose" = $2 THEN $4::bigint ELSE r."quantity"::bigint * $3 END AS target
@@ -345,7 +369,7 @@ pub async fn refuel(db: &Client) -> Result<u64, tokio_postgres::Error> {
                SELECT nextval('dyn_id_seq'), '', n.kind, n."ownerID", n."itemID", 0, 0, 0, (n.target - COALESCE(h.q, 0))::int
                  FROM needs n LEFT JOIN held h ON h."locationID" = n."itemID" AND h."typeID" = n.kind
                 WHERE COALESCE(h.q, 0) * 4 < n.target"#;
-    db.execute(sql, &[&PURPOSE_ONLINE, &PURPOSE_REINFORCE, &FUEL_PERIODS, &STRONTIUM]).await
+    db.execute(sql, &[&PURPOSE_ONLINE, &PURPOSE_REINFORCE, &FUEL_PERIODS, &STRONTIUM, &only]).await
 }
 
 /// Every politics tick: fuel, sieges planned between warring neighbours
@@ -406,31 +430,11 @@ pub async fn upkeep(
     }
     p.held = held;
 
-    // A player alliance's bots with no space yet claim a first block of
-    // its home region.
-    for (alliance, region, executor, race, _) in claimants.iter().filter(|c| player_ids.contains(&c.0)) {
-        if p.held.get(alliance).copied().unwrap_or(0) > 0 {
-            continue;
-        }
-        let mut claimed: HashSet<i32> = towers.iter().filter(|(_, t)| !t.is_empty()).map(|(s, _)| *s).collect();
-        claimed.extend(watched.iter().copied());
-        let tower_type = TOWERS.iter().find(|(r, _)| r == race).map_or(TOWERS[2].1, |(_, t)| *t);
-        let before = claimed.clone();
-        let got = settle(db, atlas, rng, *region, *executor, tower_type, MIN_SYSTEMS, &mut claimed, claim_since).await?;
-        if got > 0 {
-            refuel(db).await?;
-            p.held.insert(*alliance, got as u32);
-            for system in claimed.difference(&before) {
-                towers.entry(*system).or_default().insert(*alliance);
-            }
-            news.push((now, format!("{}'s corporations anchor control towers in {got} systems of {} to claim it for {}",
-                alliance_name(db, *alliance).await, region_name(db, *region).await, alliance_name(db, *alliance).await)));
-        }
-    }
-
+    // A player alliance's bots claim space only on its word, in alliance
+    // chat (`claim`), which also founds its outposts.
     // Outposts: an alliance holding enough settled space founds one where it
     // has none.
-    for (alliance, _, executor, race, _) in &claimants {
+    for (alliance, _, executor, race, _) in claimants.iter().filter(|c| !player_ids.contains(&c.0)) {
         if rng.unit() >= OUTPOST_CHANCE * super::sov_warfare().expand_rate() {
             continue;
         }
@@ -548,7 +552,7 @@ pub async fn upkeep(
     }
 
     // Expansion into empty home systems.
-    for (alliance, region, executor, race, pilots) in &claimants {
+    for (alliance, region, executor, race, pilots) in claimants.iter().filter(|c| !player_ids.contains(&c.0)) {
         if rng.unit() >= EXPAND_CHANCE * warfare.expand_rate() {
             continue;
         }
@@ -834,7 +838,7 @@ pub async fn system_name(db: &Client, id: i32) -> String {
     db.query_opt(sql, &[&id]).await.ok().flatten().and_then(|r| text(&r, 0)).unwrap_or_else(|| id.to_string())
 }
 
-async fn region_name(db: &Client, id: i32) -> String {
+pub(super) async fn region_name(db: &Client, id: i32) -> String {
     let sql = r#"SELECT "regionName" FROM "mapRegions" WHERE "regionID" = $1"#;
     db.query_opt(sql, &[&id]).await.ok().flatten().and_then(|r| text(&r, 0)).unwrap_or_else(|| id.to_string())
 }

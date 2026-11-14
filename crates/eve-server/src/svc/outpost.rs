@@ -110,7 +110,7 @@ pub async fn build(ctx: &Ctx<'_>, platform: i64) -> Outcome {
     }
     let result = async {
         let mut client = crate::db::connect(ctx.db_url).await?;
-        create(&mut client, system, &s).await
+        create(&mut client, system, &s, None).await
     }.await;
     match result {
         Ok(Ok((outpost, events))) => {
@@ -139,7 +139,8 @@ struct Outpost {
 
 type Built = Result<(Outpost, Vec<Value>), String>;
 
-async fn create(client: &mut tokio_postgres::Client, system: i64, s: &Structure) -> Result<Built, tokio_postgres::Error> {
+/// `name_as`: the corporation the outpost is named for, if not the platform's.
+async fn create(client: &mut tokio_postgres::Client, system: i64, s: &Structure, name_as: Option<&str>) -> Result<Built, tokio_postgres::Error> {
     let mut txn = ItemTxn::begin(client).await?;
     // One outpost at a time: the new ID and the one-outpost rule hold.
     txn.tx().query_one("SELECT pg_advisory_xact_lock($1, $2)", &[&307i32, &0i32]).await?;
@@ -159,7 +160,7 @@ async fn create(client: &mut tokio_postgres::Client, system: i64, s: &Structure)
         return Ok(Err("This platform does not name the outpost it builds.".into()));
     };
     let pos = Vec3::new(float(&p, 0).unwrap_or(0.0), float(&p, 1).unwrap_or(0.0), float(&p, 2).unwrap_or(0.0));
-    let corp_name = text(&p, 3).unwrap_or_default();
+    let corp_name = name_as.map_or_else(|| text(&p, 3).unwrap_or_default(), str::to_string);
     let corp = s.corp_id;
 
     if let Some(row) = txn.tx().query_opt(
@@ -361,6 +362,64 @@ pub async fn found_for_bots(client: &mut tokio_postgres::Client, world: &World, 
     info!("outpost {} ({}) founded by bots in {system} for corporation {corp}", found.1, found.0);
     show_new(world, system, None, outpost);
     Ok(Some(found))
+}
+
+/// A player alliance's bots build the outpost on an anchored platform of
+/// theirs (`bots::claim`): they bring in what Show Info lists, as a player
+/// would, and press Build. Named for `name_as`, the corporation it is for.
+/// The outpost's ID and name, or why it could not be built.
+pub async fn build_for_bots(
+    client: &mut tokio_postgres::Client,
+    world: &World,
+    system: i64,
+    platform: i64,
+    name_as: &str,
+) -> Result<Result<(i64, String), String>, tokio_postgres::Error> {
+    let structures = crate::pos::load(&*client, system).await?;
+    let Some(s) = structures.into_iter().find(|s| s.id == platform && s.is_platform()) else {
+        return Ok(Err("the platform is no longer there".into()));
+    };
+    let mut txn = ItemTxn::begin(client).await?;
+    let needed = requirements(txn.tx(), s.type_id).await?;
+    let held = contents(txn.tx(), s.id).await?;
+    for (type_id, quantity, _) in &needed {
+        let have: i64 = held.iter().filter(|(_, t, _)| t == type_id).map(|(_, _, q)| q).sum();
+        if have < *quantity {
+            txn.create(NewItem { type_id: *type_id, owner_id: s.owner_id, location_id: s.id, flag: 0, quantity: quantity - have, singleton: false }).await?;
+        }
+    }
+    txn.commit().await?;
+    match create(client, system, &s, Some(name_as)).await? {
+        Ok((outpost, _)) => {
+            let found = (outpost.id, outpost.name.clone());
+            info!("outpost {} ({}) built by bots from platform {} in {system} for corporation {}", found.1, found.0, s.id, outpost.corp);
+            show(world, system, s.id, outpost);
+            Ok(Ok(found))
+        }
+        Err(why) => Ok(Err(why)),
+    }
+}
+
+/// Hands an outpost to another corporation: the station, its item and its
+/// assembly lines, and its owner as the system sees it. False if there is
+/// no such station.
+pub async fn transfer(db: &tokio_postgres::Client, world: &World, station: i64, corp: i64) -> Result<bool, tokio_postgres::Error> {
+    let (id, to) = (station as i32, corp as i32);
+    let Some(row) = db
+        .query_opt(r#"UPDATE "staStations" SET "corporationID" = $2 WHERE "stationID" = $1 RETURNING "solarSystemID""#, &[&id, &to])
+        .await?
+    else {
+        return Ok(false);
+    };
+    let system = int(&row, 0).unwrap_or(0);
+    db.execute(r#"UPDATE entity SET "ownerID" = $2 WHERE "itemID" = $1"#, &[&id, &to]).await?;
+    db.execute(r#"UPDATE "ramAssemblyLines" SET "ownerID" = $2 WHERE "containerID" = $1"#, &[&id, &to]).await?;
+    db.execute(r#"UPDATE "ramAssemblyLineStations" SET "ownerID" = $2 WHERE "stationID" = $1"#, &[&id, &to]).await?;
+    let w = world.lock();
+    if let Some(entry) = w.parks.get(&system).and_then(|p| space::celestial_owner_entry(p, station, corp)) {
+        space::broadcast(&w, system, None, vec![entry]);
+    }
+    Ok(true)
 }
 
 /// The platform goes and the outpost appears, for everyone in the system.

@@ -22,6 +22,7 @@
 pub mod behaviour;
 mod battle;
 mod capitals;
+mod claim;
 mod control;
 mod defense;
 mod economy;
@@ -607,6 +608,7 @@ pub fn request(words: &[&str]) -> Result<String, String> {
         control::Request::Follow(n) => format!("Following {n}."),
         control::Request::Unfollow(n) => format!("No longer following {n}."),
         control::Request::Meet { bots, .. } => format!("{} bots answering a fight call.", bots.len()),
+        control::Request::ClaimSov { alliance, order, .. } => format!("Sovereignty order {order:?} for alliance {alliance}."),
         control::Request::Battle { place, stakes } => format!(
             "Asked for a {} with capital ships in {}. The server log and the dashboard say where it is and how it goes.",
             stakes.as_deref().unwrap_or("decisive"),
@@ -816,6 +818,8 @@ struct Sim {
     applied_settings: usize,
     applied_activity: f64,
     tally: Tally,
+    /// Player alliances whose bots claim space on their word (`claim`).
+    claims: claim::Campaigns,
 }
 
 impl Sim {
@@ -876,6 +880,7 @@ impl Sim {
             applied_settings: usize::MAX,
             applied_activity: activity_factor(),
             tally: Tally::default(),
+            claims: claim::Campaigns::default(),
         }
     }
 
@@ -1269,6 +1274,7 @@ impl Sim {
                 self.changes.push(presence::Change::Busy { bot: i });
             }
             self.requests(now).await;
+            claim::step(&mut self.claims, &mut self.db, &self.server.world, &self.atlas, &mut self.politics, &mut self.rng, self.server.sov_claim_delay_secs, self.speed).await;
             let hired = hire::run(
                 &mut self.hires,
                 &self.server.world,
@@ -1428,6 +1434,9 @@ impl Sim {
                         came += 1;
                     }
                     info!("bots: {came} bots answered a fight call in system {system}");
+                }
+                control::Request::ClaimSov { alliance, by, order } => {
+                    claim::order(&mut self.claims, &self.db, &mut self.politics, alliance, by, order).await;
                 }
             }
         }

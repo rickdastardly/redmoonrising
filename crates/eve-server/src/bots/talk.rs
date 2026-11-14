@@ -450,6 +450,21 @@ struct SystemTalk {
     last_battle: Option<Instant>,
 }
 
+/// What an alliance's bots tell it about their work (`claim`), said in its
+/// alliance chat by one of them once someone has the channel open.
+struct Report {
+    alliance: i64,
+    /// The corporation doing the work, whose pilots speak first.
+    corp: Option<i64>,
+    text: String,
+    due: Instant,
+    since: Instant,
+}
+
+/// How long a report waits for someone to open the alliance channel.
+const REPORT_KEPT: Duration = Duration::from_secs(30 * 60);
+const REPORTS_HELD: usize = 40;
+
 /// A line for a corporation or alliance channel.
 struct GroupLine {
     due: Instant,
@@ -462,6 +477,7 @@ struct Talk {
     rng: Rng,
     queue: Vec<Line>,
     group_queue: Vec<GroupLine>,
+    reports: Vec<Report>,
     /// When each corporation or alliance channel next hears its members talk.
     group_next: HashMap<(bool, i64), Instant>,
     /// When a group channel last answered a player, so one hello is not
@@ -490,6 +506,7 @@ fn with_talk<R>(f: impl FnOnce(&mut Talk) -> R) -> Option<R> {
         rng: Rng::seeded(crate::bulkdata::filetime_now() as u64 ^ 0x7a1c),
         queue: Vec::new(),
         group_queue: Vec::new(),
+        reports: Vec::new(),
         group_next: HashMap::new(),
         group_answered: HashMap::new(),
         systems: HashMap::new(),
@@ -869,13 +886,76 @@ const ALLIANCE_TALK: &[&[&str]] = &[
     &["war targets roaming nearby, keep an eye out", "thanks for the heads up", "we'll watch our side"],
 ];
 
-/// A player said something in their corporation or alliance channel: now and
+/// What a player's line in alliance chat tells the alliance's bots about
+/// sovereignty: "start claiming sov for our alliance", "stop claiming sov",
+/// "sov status".
+pub(super) fn sov_order(text: &str) -> Option<super::control::SovOrder> {
+    use super::control::SovOrder;
+    let t: String = text.to_lowercase().chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect();
+    let words: Vec<&str> = t.split_whitespace().collect();
+    let any = |ws: &[&str]| words.iter().any(|w| ws.contains(w));
+    let sov = any(&["sov", "sovereignty", "sovereign"]);
+    let claim = any(&["claim", "claiming", "claims"]);
+    if !sov && !(claim && any(&["space", "systems", "null", "nullsec", "0.0"])) {
+        return None;
+    }
+    if any(&["stop", "halt", "cancel", "pause", "quit"]) || t.contains("stand down") {
+        Some(SovOrder::Stop)
+    } else if any(&["status", "progress", "report", "update", "how"]) {
+        Some(SovOrder::Status)
+    } else if claim || any(&["start", "begin", "take", "grab", "anchor"]) {
+        Some(SovOrder::Start)
+    } else {
+        None
+    }
+}
+
+/// The bot who speaks for an alliance: an online pilot of `corp` (the one
+/// doing the work), else any online pilot of the alliance, else any of its
+/// pilots.
+fn alliance_speaker(w: &WorldState, alliance: i64, corp: Option<i64>) -> Option<LocalBot> {
+    let mut online = w.online_bots(|b| b.alliance_id == Some(alliance));
+    online.sort_by_key(|b| (corp != Some(b.corp_id), b.char_id));
+    if let Some(b) = online.into_iter().next() {
+        return Some(b);
+    }
+    w.bot_roster.iter().filter(|b| b.alliance_id == Some(alliance)).min_by_key(|b| (corp != Some(b.corp_id), b.char_id)).cloned()
+}
+
+/// A bot of `alliance` tells it `text` in alliance chat, after the reports
+/// already waiting.
+pub fn alliance_report(alliance: i64, corp: Option<i64>, text: String) {
+    with_talk(|t| {
+        let now = Instant::now();
+        let after = t.reports.iter().filter(|r| r.alliance == alliance).map(|r| r.due).max().unwrap_or(now).max(now);
+        let due = after + Duration::from_secs_f64(t.rng.range(1.0, 2.5)) + typing(&text, &mut t.rng);
+        if t.reports.iter().filter(|r| r.alliance == alliance).count() >= REPORTS_HELD {
+            return;
+        }
+        t.reports.push(Report { alliance, corp, text, due, since: now });
+    });
+}
+
+/// A player said something in their corporation or alliance channel: an
+/// order about sovereignty goes to the alliance's bots; otherwise now and
 /// then a corp mate answers, kindly.
-pub fn player_said_to_group(w: &WorldState, channel: &Value, name: &str) {
+pub fn player_said_to_group(w: &WorldState, channel: &Value, char_id: i64, name: &str, text: &str) {
+    let Some((kind, id)) = crate::world::group_channel(channel) else { return };
+    if kind == GroupChannel::Alliance {
+        if let Some(order) = sov_order(text) {
+            if w.bot_roster.iter().any(|b| b.alliance_id == Some(id)) {
+                tracing::info!("bots: {name} told alliance {id}'s bots in alliance chat: {order:?}");
+                super::control::ask(super::control::Request::ClaimSov { alliance: id as i32, by: char_id, order });
+                if !super::is_running() {
+                    alliance_report(id, None, format!("o7 {}, will do, but we're all docked up just now (the bots are paused). We'll get on it as soon as we're back.", first_name(name)));
+                }
+                return;
+            }
+        }
+    }
     if super::chatter() == Chatter::Off || !super::is_running() {
         return;
     }
-    let Some((kind, id)) = crate::world::group_channel(channel) else { return };
     let corp = kind == GroupChannel::Corporation;
     let bots = w.online_bots(|b| if corp { b.corp_id == id } else { b.alliance_id == Some(id) });
     if bots.is_empty() {
@@ -916,6 +996,24 @@ fn group_tick(w: &WorldState, now: Instant, chatter: Chatter) {
         }
         let count = chat::channel_population(w, &line.channel, members.len());
         chat::announce_counted(w, &members, count, &line.channel, "SendMessage", &chat::bot_who(&line.bot), vec![Value::text(line.text.clone())]);
+    }
+    // Reports from the alliances' bots, said where the alliance channel is open.
+    let open: Vec<(i64, Value)> = w.group_channels().into_iter().filter(|(k, ..)| *k == GroupChannel::Alliance).map(|(_, id, channel, _)| (id, channel)).collect();
+    let ready: Vec<Report> = with_talk(|t| {
+        let (ready, later): (Vec<Report>, Vec<Report>) = std::mem::take(&mut t.reports)
+            .into_iter()
+            .filter(|r| now.duration_since(r.since) < REPORT_KEPT)
+            .partition(|r| r.due <= now && open.iter().any(|(id, _)| *id == r.alliance));
+        t.reports = later;
+        ready
+    })
+    .unwrap_or_default();
+    for r in ready {
+        let Some((_, channel)) = open.iter().find(|(id, _)| *id == r.alliance) else { continue };
+        let Some(bot) = alliance_speaker(w, r.alliance, r.corp) else { continue };
+        let members = w.channel_members(channel);
+        let count = chat::channel_population(w, channel, members.len());
+        chat::announce_counted(w, &members, count, channel, "SendMessage", &chat::bot_who(&bot), vec![Value::text(r.text)]);
     }
     for (kind, id, channel, _) in w.group_channels() {
         let corp = kind == GroupChannel::Corporation;
@@ -1140,6 +1238,19 @@ mod tests {
         assert_eq!(named(&bots, "ana vey you there?").map(|b| b.char_id), Some(2));
         // "Ana" is too short to match on its own; "banana" is not a name.
         assert!(named(&bots, "banana").is_none());
+    }
+
+    #[test]
+    fn sovereignty_orders_are_read_from_alliance_chat() {
+        use super::super::control::SovOrder;
+        assert_eq!(sov_order("Start claiming sov for our alliance"), Some(SovOrder::Start));
+        assert_eq!(sov_order("start claiming sov for our alliance!"), Some(SovOrder::Start));
+        assert_eq!(sov_order("claim some null sec space for us"), Some(SovOrder::Start));
+        assert_eq!(sov_order("Stop claiming sov"), Some(SovOrder::Stop));
+        assert_eq!(sov_order("sov status?"), Some(SovOrder::Status));
+        assert_eq!(sov_order("how's the sov going"), Some(SovOrder::Status));
+        assert_eq!(sov_order("o7 alliance"), None);
+        assert_eq!(sov_order("who holds sov in Delve"), None);
     }
 
     #[test]

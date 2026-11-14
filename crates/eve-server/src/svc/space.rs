@@ -934,6 +934,12 @@ pub fn celestial_add_entry(park: &Park, id: i64, owner: i64) -> Option<Value> {
     Some(entry(park.tick, "AddBalls", vec![chunk]))
 }
 
+/// A station's new owner, for everyone who sees it: OnSlimItemChange.
+pub fn celestial_owner_entry(park: &Park, id: i64, owner: i64) -> Option<Value> {
+    let c = park.celestials.iter().find(|c| c.id == id)?;
+    Some(entry(park.tick, "OnSlimItemChange", vec![Value::Int(id), celestial_slim(c, &[(id, owner)])]))
+}
+
 pub fn remove_ball_entries(tick: i64, ship_id: i64) -> Vec<Value> {
     vec![entry(tick, "RemoveBalls", vec![Value::List(vec![Value::Int(ship_id)])])]
 }

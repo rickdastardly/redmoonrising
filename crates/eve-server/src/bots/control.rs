@@ -29,6 +29,17 @@ pub enum Request {
     /// Bots (by character) answering a fight call in a system's Local: they
     /// go to `point` and stay around `anchor`, ready to fight.
     Meet { system: i32, anchor: i64, point: (f64, f64, f64), bots: Vec<i64> },
+    /// A player's word in alliance chat to the alliance's bot corporations
+    /// (`talk`): claim null-sec for it, stop, or say how it goes (`claim`).
+    ClaimSov { alliance: i32, by: i64, order: SovOrder },
+}
+
+/// What a player told their alliance's bots about sovereignty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SovOrder {
+    Start,
+    Stop,
+    Status,
 }
 
 static QUEUE: Mutex<Vec<Request>> = Mutex::new(Vec::new());

@@ -24,6 +24,12 @@ const STATEMENTS: &[&str] = &[
            "updatedAt" bigint NOT NULL DEFAULT 0,
            PRIMARY KEY ("sideID", "charID"))"#,
     r#"COMMENT ON TABLE "botRelations" IS 'MADE: what each bot alliance (or corporation outside one) holds against or for each player: heat from losses, favor from help, and what it has done about it (bots::relations).'"#,
+    // Player alliances whose bots claim null-sec on their word (`claim`).
+    r#"CREATE TABLE IF NOT EXISTS "rmrSovCampaigns" (
+           "allianceID" integer PRIMARY KEY,
+           "orderedBy" integer NOT NULL,
+           "since" bigint NOT NULL)"#,
+    r#"COMMENT ON TABLE "rmrSovCampaigns" IS 'MADE: player alliances whose bot corporations were told in alliance chat to claim null-sec sovereignty, who said so and when (bots::claim).'"#,
     // How busy each region is, against the usual (`control`).
     r#"CREATE TABLE IF NOT EXISTS "botRegionDensity" (
            "regionID" integer PRIMARY KEY,

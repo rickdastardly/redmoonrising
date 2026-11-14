@@ -66,7 +66,8 @@ pub async fn lsc(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
                         let said = message.as_string().unwrap_or_default();
                         crate::bots::talk::player_said(&world, system, ctx.session.char_id.unwrap_or(0), &ctx.session.char_name, &said);
                     } else if group_channel(channel).is_some() {
-                        crate::bots::talk::player_said_to_group(&world, channel, &ctx.session.char_name);
+                        let said = message.as_string().unwrap_or_default();
+                        crate::bots::talk::player_said_to_group(&world, channel, ctx.session.char_id.unwrap_or(0), &ctx.session.char_name, &said);
                     }
                 } else {
                     warn!("SendMessage to a channel the speaker has not joined");
