@@ -2,6 +2,14 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Stop and Restart server shut down cleanly every time
+
+*2026-11-15 18:10 UTC*
+
+Pressing **Stop** or **Restart server** in the launcher could stop it with **Needs attention** ("The process cannot access the file stop.request"). That happened when the launcher window wrote the stop request at the very moment the server's launcher was checking for one. Your universe was still saved and the database shut down properly, but a restart didn't come back up.
+
+Now both sides wait a moment and try again. Start the server with Start.bat as usual.
+
 ## Fleets on command, home defence, and capitals that die with their fits
 
 *2026-11-15 18:01 UTC*
