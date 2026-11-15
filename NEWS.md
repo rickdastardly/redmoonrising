@@ -2,6 +2,19 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Recruiting in Local always gets an answer
+
+*2026-11-15 20:07 UTC*
+
+Asking pilots in Local to join you (for example "come join CCP Alliance and rat and mine in our space safely") only worked when someone there had complained in the last 20 minutes. Otherwise nobody said a word.
+
+- Those who complained lately still answer first and are the most likely to come over.
+- With nobody unhappy, three other pilots in Local answer. A few of them come over, about a third as readily: a corporation without an alliance applies to yours, and anyone else applies to your corporation.
+- Your own corporation and alliance mates never answer.
+- The same invitation in the same Local within 90 seconds is heard only by pilots who have complained since, so repeating it doesn't fill your corporation in a minute. The server log says how many are coming over each time.
+
+Restart the server to get it.
+
 ## No more warping off and being dragged back
 
 *2026-11-15 19:16 UTC*

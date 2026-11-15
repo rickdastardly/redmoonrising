@@ -492,6 +492,8 @@ struct Talk {
     /// Bots who complained in Local lately, and where: a player's invitation
     /// may win them over.
     disgruntled: HashMap<i64, (i64, Instant)>,
+    /// When each player last recruited in each Local: (system, player).
+    invited: HashMap<(i64, i64), Instant>,
     /// Players in conversation with a bot: (system, player) -> bot.
     partners: HashMap<(i64, i64), Partner>,
     /// Names of players who spoke, for bots to address them.
@@ -520,6 +522,7 @@ fn with_talk<R>(f: impl FnOnce(&mut Talk) -> R) -> Option<R> {
         group_answered: HashMap::new(),
         systems: HashMap::new(),
         disgruntled: HashMap::new(),
+        invited: HashMap::new(),
         partners: HashMap::new(),
         names: HashMap::new(),
         ships: HashMap::new(),
@@ -770,25 +773,59 @@ fn won_over_chance(p: Persona) -> f64 {
     }
 }
 
-/// A player invited pilots in Local: those who complained lately answer, and
-/// some come over (`relations::won_over`), after a while. True if any did.
-fn answer_invitation(t: &mut Talk, system: i64, player: i64, name: &str, text: &str, bots: &[LocalBot]) -> bool {
+/// How long after recruiting in a Local a player's next invitation there is
+/// heard only by those who have complained since.
+const INVITE_EVERY: Duration = Duration::from_secs(90);
+/// Pilots who have not complained take an offer this much less readily, and
+/// this many of them answer.
+const CONTENT_CHANCE: f64 = 0.3;
+const CONTENT_ANSWER: usize = 3;
+
+/// A player invited pilots in Local: those who complained lately answer,
+/// and some come over (`relations::won_over`), after a while. With nobody
+/// unhappy there, a few of the rest answer, and fewer of them come. Never
+/// the player's own corporation or alliance. True if it was an invitation.
+fn answer_invitation(t: &mut Talk, w: &WorldState, system: i64, player: i64, name: &str, text: &str, bots: &[LocalBot]) -> bool {
     if !invitation(text) {
         return false;
     }
     let now = Instant::now();
     t.disgruntled.retain(|_, (_, at)| now.duration_since(*at) < DISGRUNTLED_FOR);
-    let mut unhappy: Vec<&LocalBot> = bots.iter().filter(|b| t.disgruntled.get(&b.char_id).is_some_and(|(s, _)| *s == system)).collect();
+    t.invited.retain(|_, at| now.duration_since(*at) < INVITE_EVERY);
+    let corp = w.presence_of(player).map(|p| p.corp_id);
+    let alliance = w
+        .group_channels()
+        .into_iter()
+        .find(|(kind, _, _, members)| *kind == GroupChannel::Alliance && members.contains(&player))
+        .map(|(_, id, _, _)| id);
+    let outsider = |b: &&LocalBot| Some(b.corp_id) != corp && (alliance.is_none() || b.alliance_id != alliance);
+    let mut unhappy: Vec<&LocalBot> = bots.iter().filter(|b| t.disgruntled.get(&b.char_id).is_some_and(|(s, _)| *s == system)).filter(outsider).collect();
     unhappy.sort_by_key(|b| b.char_id);
-    if unhappy.is_empty() {
-        return false;
+    let content = unhappy.is_empty();
+    if content {
+        if t.invited.contains_key(&(system, player)) {
+            tracing::info!("local: {name} recruited in {system} again within {}s: nobody new answers", INVITE_EVERY.as_secs());
+            return true;
+        }
+        let mut rest: Vec<&LocalBot> = bots.iter().filter(outsider).collect();
+        for n in 0..rest.len().min(CONTENT_ANSWER) {
+            let k = n + t.rng.below(rest.len() - n);
+            rest.swap(n, k);
+        }
+        rest.truncate(CONTENT_ANSWER);
+        unhappy = rest;
+        if unhappy.is_empty() {
+            tracing::info!("local: {name} recruited in {system}, but every bot there is already theirs");
+            return true;
+        }
     }
+    t.invited.insert((system, player), now);
     let mut delay = Duration::from_millis(800);
     let mut won = 0;
     for b in unhappy.into_iter().take(4) {
         t.disgruntled.remove(&b.char_id);
         let p = persona(b.char_id, b.role);
-        let yes = t.rng.unit() < won_over_chance(p);
+        let yes = t.rng.unit() < won_over_chance(p) * if content { CONTENT_CHANCE } else { 1.0 };
         let line = if yes {
             pick(&mut t.rng, &[
                 "really? somewhere I can actually rat in peace? I'm in",
@@ -807,7 +844,8 @@ fn answer_invitation(t: &mut Talk, system: i64, player: i64, name: &str, text: &
             super::control::ask(super::control::Request::WinOver { bot: b.char_id, player, system: system as i32 });
         }
     }
-    tracing::info!("local: {name} invited the disgruntled in {system}: {won} coming over");
+    let who = if content { "the pilots" } else { "the disgruntled" };
+    tracing::info!("local: {name} invited {who} in {system}: {won} coming over");
     true
 }
 
@@ -828,7 +866,7 @@ pub fn player_said(w: &WorldState, system: i64, player: i64, name: &str, text: &
     with_talk(|t| {
         t.heard += 1;
         t.names.insert(player, name.to_string());
-        if answer_fight_call(t, w, system, player, name, text, &bots) || answer_invitation(t, system, player, name, text, &bots) || chatter == Chatter::Off {
+        if answer_fight_call(t, w, system, player, name, text, &bots) || answer_invitation(t, w, system, player, name, text, &bots) || chatter == Chatter::Off {
             return;
         }
         let now = Instant::now();
