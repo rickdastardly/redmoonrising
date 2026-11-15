@@ -2,6 +2,20 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Player alliances grow fastest
+
+*2026-11-15 20:11 UTC*
+
+Player alliances already had a head start in recruiting, but with thousands of bot corporations to share pilots with, CCP Alliance was still 24th by size. Now:
+
+- **Four in ten new recruits** (pilots leaving NPC corporations) go straight to a player alliance's corporations, one of their own kind (combat or industry) where it has one. The rest pick a corporation as before, with player alliances' corporations still three times as likely.
+- **Corporations apply to player alliances about four times as often** as they first did, with up to four applications waiting at once.
+- In sov battles, a player alliance's side still fights a quarter better and is always the ally of choice.
+
+Bot alliances still recruit the other six in ten, still win their share of fights, and stay worth fighting.
+
+Restart the server to get it.
+
 ## Recruiting in Local always gets an answer
 
 *2026-11-15 20:07 UTC*

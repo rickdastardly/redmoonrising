@@ -49,6 +49,10 @@ const DAY: u32 = 86_400;
 const WAR_DAYS: (u32, u32) = (3, 14);
 /// The share of bots still in NPC corporations that join a bot one each day.
 const RECRUIT_PER_DAY: f64 = 0.01;
+/// The share of new recruits that go to player alliances' corporations
+/// whatever else draws them: a player alliance grows fastest, and the bot
+/// alliances still take the rest.
+const PLAYER_SHARE: f64 = 0.4;
 const TICKS_PER_DAY: f64 = (DAY / (10 * MINUTE)) as f64;
 const SECOND_FT: i64 = 10_000_000;
 const NEWS_KEPT: usize = 60;
@@ -678,10 +682,30 @@ pub async fn tick(p: &mut Politics, db: &Client, bots: &[Bot], ids: &mut [Identi
     let n = expected.floor() as usize + usize::from(rng.unit() < expected.fract());
     if n > 0 && !p.corps.is_empty() {
         let corps: Vec<(i32, i16)> = p.corps.iter().map(|(id, c)| (*id, c.kind)).collect();
+        let players: Vec<(i32, i16)> = corps
+            .iter()
+            .filter(|(id, _)| p.corps.get(id).and_then(|c| c.alliance).is_some_and(|a| !p.alliances.contains_key(&a)))
+            .copied()
+            .collect();
         let (mut who, mut into) = (Vec::new(), Vec::new());
         for _ in 0..n {
             let i = free[rng.below(free.len())];
             let want = if combat(bots[i].role) { KIND_COMBAT_CORP } else { KIND_INDUSTRIAL_CORP };
+            // A share go straight to a player alliance's corporation, one of
+            // the pilot's kind if it has one.
+            if !players.is_empty() && rng.unit() < PLAYER_SHARE {
+                let kind: Vec<i32> = players.iter().filter(|(_, k)| *k == want).map(|(id, _)| *id).collect();
+                let pool: Vec<i32> = if kind.is_empty() { players.iter().map(|(id, _)| *id).collect() } else { kind };
+                let corp = pool[rng.below(pool.len())];
+                who.push(bots[i].id);
+                into.push(corp);
+                ids[i].corp = corp;
+                ids[i].alliance = p.corps.get(&corp).and_then(|c| c.alliance);
+                if let Some(c) = p.corps.get_mut(&corp) {
+                    c.members += 1;
+                }
+                continue;
+            }
             let fitting: Vec<i32> = corps.iter().filter(|(_, k)| *k == want).map(|(id, _)| *id).collect();
             // The more space a corporation's alliance holds, the more it
             // draws; a player alliance's corporations three times as much.

@@ -568,5 +568,11 @@
     "publishedMs": 1794773227161,
     "title": "Recruiting in Local always gets an answer",
     "body": "<p>Asking pilots in Local to join you (for example \"come join CCP Alliance and rat and mine in our space safely\") only worked when someone there had complained in the last 20 minutes. Otherwise nobody said a word.</p>\n<ul>\n<li>Those who complained lately still answer first and are the most likely to come over.</li>\n<li>With nobody unhappy, three other pilots in Local answer. A few of them come over, about a third as readily: a corporation without an alliance applies to yours, and anyone else applies to your corporation.</li>\n<li>Your own corporation and alliance mates never answer.</li>\n<li>The same invitation in the same Local within 90 seconds is heard only by pilots who have complained since, so repeating it doesn't fill your corporation in a minute. The server log says how many are coming over each time.</li>\n</ul>\n<p>Restart the server to get it.</p>"
+  },
+  {
+    "published": "2026-11-15 20:11 UTC",
+    "publishedMs": 1794773507506,
+    "title": "Player alliances grow fastest",
+    "body": "<p>Player alliances already had a head start in recruiting, but with thousands of bot corporations to share pilots with, CCP Alliance was still 24th by size. Now:</p>\n<ul>\n<li><b>Four in ten new recruits</b> (pilots leaving NPC corporations) go straight to a player alliance's corporations, one of their own kind (combat or industry) where it has one. The rest pick a corporation as before, with player alliances' corporations still three times as likely.</li>\n<li><b>Corporations apply to player alliances about four times as often</b> as they first did, with up to four applications waiting at once.</li>\n<li>In sov battles, a player alliance's side still fights a quarter better and is always the ally of choice.</li>\n</ul>\n<p>Bot alliances still recruit the other six in ten, still win their share of fights, and stay worth fighting.</p>\n<p>Restart the server to get it.</p>"
   }
 ]
