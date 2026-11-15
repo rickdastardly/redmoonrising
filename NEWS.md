@@ -2,6 +2,19 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## The jump drive flash, drawn by the game itself
+
+*2026-11-15 19:04 UTC*
+
+Capitals landing on a cyno, and ships coming through a titan's bridge, still showed no flash in big battles. The game hands that effect to its effects system, which gives up if the ship isn't fully built yet or measures it as nothing.
+
+Now the game draws the jump drive flash itself:
+
+- It waits up to eight seconds for the arriving ship to be built, then plays the flash and its sound, sized to the hull.
+- Every 20 seconds of a busy grid, the "battle graphics" line in the server log says how many flashes were drawn and how many were missed. The first few also log a line of their own.
+
+Restart the game to get it. The server doesn't need restarting.
+
 ## Capital brawls: hot drops, counter drops and focus fire
 
 *2026-11-15 18:33 UTC*

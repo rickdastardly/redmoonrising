@@ -3670,7 +3670,72 @@ _rmr_battle = {
     'booms': [], 'booms_skipped': 0, 'batches': 0, 'batch_ms': 0.0, 'batch_max': 0.0,
     'balls_added': 0, 'load_ms': 0.0, 'failed': 0,
     'late': 0, 'resets': 0, 'brackets_skipped': 0, 'capitals_fitted': 0,
+    'jump_flashes': 0, 'jump_flash_missed': 0,
 }
+
+
+def _rmr_jump_flash(shipID):
+    # A capital landing on a cyno, or a ship through a titan's bridge: the
+    # jump drive's flash, drawn here once the ship's model is in, the size
+    # of its hull. The game's own effect was lost in big battles (the ship
+    # not yet built, or sized to nothing on a shared hull).
+    import trinity
+    try:
+        waited = 0
+        ball = None
+        while waited < 8000:
+            ball = eve.LocalSvc('michelle').GetBall(shipID)
+            if ball is not None and getattr(ball, 'model', None) is not None:
+                break
+            blue.pyos.synchro.Sleep(100)
+            waited = waited + 100
+        if ball is None or getattr(ball, 'model', None) is None:
+            _rmr_battle['jump_flash_missed'] = _rmr_battle['jump_flash_missed'] + 1
+            return
+        radius = 0.0
+        try:
+            radius = ball.model.children[0].GetBoundingSphereRadius()
+        except:
+            sys.exc_clear()
+        if not radius or radius < 50.0:
+            radius = max(getattr(ball, 'radius', 0.0) or 0.0, 500.0)
+        gfx = eve.rot.GetCopy('res:\\Model\\Effect\\JumpDrive_in.blue')
+        if gfx is None:
+            _rmr_battle['jump_flash_missed'] = _rmr_battle['jump_flash_missed'] + 1
+            return
+        gfx.scaling.SetXYZ(1.0, 1.0, 1.0)
+        holder = trinity.TriTransform()
+        holder.name = 'rmr_jump_flash'
+        holder.scaling.Scale(radius)
+        holder.children.append(gfx)
+        holder.translationCurve = ball
+        holder.rotationCurve = ball
+        holder.useCurves = 1
+        scene = eve.triapp.tridev.scene
+        scene.models.append(holder)
+        now = blue.os.GetTime()
+        for node in gfx.Find(['audio.Node', 'audio.SoundNode']):
+            try:
+                node.Stop()
+                node.Play()
+            except:
+                sys.exc_clear()
+        for curve in gfx.Find(['trinity.TriScalarCurve', 'trinity.TriVectorCurve', 'trinity.TriRotationCurve', 'trinity.TriColorCurve']):
+            curve.start = now
+        _rmr_battle['jump_flashes'] = _rmr_battle['jump_flashes'] + 1
+        if _rmr_battle['jump_flashes'] <= 3:
+            _rmr_report('battle graphics: jump drive flash on ship %s (model in after %dms, radius %dm)' % (shipID, waited, int(radius)))
+        blue.pyos.synchro.Sleep(15000)
+        try:
+            scene.models.remove(holder)
+        except:
+            sys.exc_clear()
+    except:
+        _rmr_battle['jump_flash_missed'] = _rmr_battle['jump_flash_missed'] + 1
+        if _rmr_battle['jump_flash_missed'] <= 3:
+            _rmr_report('battle graphics: jump drive flash failed: ' +
+                        ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
 
 # Titans, dreadnoughts, carriers and motherships.
 _RMR_CAPITAL_GROUPS = (30, 485, 547, 659)
@@ -3994,6 +4059,9 @@ def _rmr_install_battle_graphics():
             except:
                 sys.exc_clear()
                 return original_fx(self, *args, **kwargs)
+            if start and guid == 'effects.JumpDriveIn' and shipID != getattr(eve.session, 'shipid', None):
+                uthread.new(_rmr_jump_flash, shipID)
+                return None
             key = (shipID, moduleID, guid)
             if not start and skipped.has_key(key):
                 # The end of an effect never started here.
@@ -4068,12 +4136,13 @@ def _rmr_battle_reporter():
                 continue
             avg_load = _rmr_battle['ships'] and _rmr_battle['load_ms'] / _rmr_battle['ships'] or 0.0
             avg_batch = _rmr_battle['batches'] and _rmr_battle['batch_ms'] / _rmr_battle['batches'] or 0.0
-            _rmr_report('battle graphics (%s, %d ships on grid): %d ships built, %d on %d shared hulls (%.2fms each); %d stripped; %d effects and %d explosions skipped; %d balls arrived in %d batches (avg %dms, max %dms); %d failed; %d late updates applied now, %d whole-grid reloads asked for; %d brackets skipped' % (
+            _rmr_report('battle graphics (%s, %d ships on grid): %d ships built, %d on %d shared hulls (%.2fms each); %d stripped; %d effects and %d explosions skipped; %d balls arrived in %d batches (avg %dms, max %dms); %d failed; %d late updates applied now, %d whole-grid reloads asked for; %d brackets skipped; jump drive flashes so far %d (%d missed)' % (
                 _rmr_battle_mode(), _rmr_battle['crowded'], _rmr_battle['ships'], _rmr_battle['shared'],
                 len(_rmr_battle['hulls']), avg_load, _rmr_battle['stripped'], _rmr_battle['fx_skipped'],
                 _rmr_battle['booms_skipped'], _rmr_battle['balls_added'], _rmr_battle['batches'],
                 avg_batch, _rmr_battle['batch_max'], _rmr_battle['failed'], _rmr_battle['late'],
-                _rmr_battle['resets'], _rmr_battle['brackets_skipped']))
+                _rmr_battle['resets'], _rmr_battle['brackets_skipped'],
+                _rmr_battle['jump_flashes'], _rmr_battle['jump_flash_missed']))
             for key in keys:
                 _rmr_battle[key] = 0
         except:
