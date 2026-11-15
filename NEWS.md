@@ -2,6 +2,29 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Capital brawls: hot drops, counter drops and focus fire
+
+*2026-11-15 18:33 UTC*
+
+**Capitals show their jump-in.** A capital landing on a cyno, or a ship coming through a titan's bridge, now shows the jump drive flash. The server always sent it. But with the battle graphics' shared hulls, effects measured the ship from its set of locators instead of its hull, and drew nothing. The same fix lets explosions and trails size themselves to the hull again. Guns on shared hulls go on that ship's own mounts.
+
+**Dread brawls.** Capitals now go for each other:
+
+- **Hot drop:** about six minutes in, one side's cyno goes up in the middle of the enemy fleet. Its dreadnoughts and carriers jump in on top of them, six at a time.
+- **Counter drop:** thirty seconds after they land, the other side lights its cyno on top of those capitals and drops its own.
+- **Titans** follow a minute and a half after their side's first drop.
+- A side whose ships on the grid are all dead no longer leaves its capitals waiting: a cloaked recon lights the cyno on the enemy.
+- A side with capitals in the fight (on the grid or waiting to jump) never retreats. They fight to the death, titans included.
+
+**Focus fire.** Each side calls primaries, as a fleet commander would:
+
+- Its subcapitals fight in squads of about 15. Each squad shoots one enemy ship, the most hurt first, until it dies, and then the next is called.
+- Its capitals, sieged dreadnoughts included, shoot one enemy capital at a time.
+- Ships die one after another rather than everyone shooting someone different. The server and your game have far fewer targets to track.
+- The server log's battle line every 30 seconds now says how many squads each side has, which capital each side is primarying, and how many target switches there were.
+
+Restart the server and the game to get it all.
+
 ## Stop and Restart server shut down cleanly every time
 
 *2026-11-15 18:10 UTC*

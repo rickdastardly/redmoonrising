@@ -341,6 +341,17 @@ impl Brain {
         self.passive = passive;
     }
 
+    /// Its fleet's primary: it switches to it, whatever it was shooting.
+    /// True if that is a change.
+    pub fn focus(&mut self, target: i64) -> bool {
+        if self.target == Some(target) {
+            return false;
+        }
+        self.target = Some(target);
+        self.next_think_ms = 0;
+        true
+    }
+
     /// In a fight.
     pub fn engaged(&self) -> bool {
         self.target.is_some()

@@ -69,8 +69,22 @@ const JUMP_WAVE_MOST: usize = 6;
 /// this long before the first side lights its cyno and its capitals jump
 /// in, dreadnoughts and carriers first, titans last ...
 const CYNO_FIRST: Duration = Duration::from_secs(360);
-/// ... and the other side lights its own this long after they land.
-const CYNO_ANSWER: Duration = Duration::from_secs(90);
+/// ... and the other side counter-drops this long after they land, its
+/// cyno lit on top of their capitals ...
+const CYNO_ANSWER: Duration = Duration::from_secs(30);
+/// ... and each side's titans follow its first drop this much later.
+const TITANS_AFTER: Duration = Duration::from_secs(90);
+/// A side's first capitals land this far from the middle of the enemy's
+/// fleet (a hot drop); the answer, as far from their capitals.
+const HOT_DROP_OFF: f64 = 7_000.0;
+/// Subcapitals in squads of about this many share a primary target, at
+/// most this many squads a side.
+const SQUAD: usize = 15;
+const SQUADS_MOST: usize = 8;
+/// A primary is called no further than this from the middle of its side's
+/// fleet.
+const FOCUS_RANGE: f64 = 90_000.0;
+const GROUP_CAPSULE: i64 = 29;
 /// Should the first side never get its capitals in, the other lights its
 /// cyno anyway this much later.
 const CYNO_LATE: Duration = Duration::from_secs(120);
@@ -210,6 +224,8 @@ impl Stakes {
 /// What a seen fight's capitals did lately, for the server log.
 #[derive(Default)]
 struct Tally {
+    /// Ships told to switch to their squad's primary.
+    switched: u32,
     bombard: u32,
     volleys: u32,
     repairs: u32,
@@ -250,6 +266,10 @@ pub struct Side {
     doomsday: HashMap<u32, Instant>,
     /// Capitals (and logistics) lost, by class.
     pub caps_lost: HashMap<Class, u32>,
+    /// The enemy ships its subcapital squads are shooting, and the enemy
+    /// capital its capitals are.
+    primaries: Vec<i64>,
+    cap_primary: Option<i64>,
 }
 
 impl Side {
@@ -277,6 +297,8 @@ impl Side {
             sieged: HashSet::new(),
             doomsday: HashMap::new(),
             caps_lost: HashMap::new(),
+            primaries: Vec::new(),
+            cap_primary: None,
         }
     }
 
@@ -745,6 +767,10 @@ fn reinforce(f: &mut Fight, system: i32, world: &World, bots: &mut [Bot], presen
     // cyno and its capitals jump in; the other answers with its own.
     let landed = [f.attack.landed, f.defend.landed];
     let first = f.first_cyno;
+    // Where each side's cyno goes up: the first on top of the enemy's fleet
+    // (a hot drop), the answer on top of the capitals that just landed (a
+    // counter drop).
+    let spots = [drop_spot(&f.defend, first != 0, system, world, presence), drop_spot(&f.attack, first != 1, system, world, presence)];
     let may_cyno = |me: usize| {
         if me == first {
             fighting >= CYNO_FIRST
@@ -788,9 +814,9 @@ fn reinforce(f: &mut Fight, system: i32, world: &World, bots: &mut [Bot], presen
             continue;
         }
         if side.cyno.is_none() {
-            light_cyno(side, system, world, presence);
+            light_cyno(side, system, world, presence, spots[me]);
             if side.cyno.is_some() {
-                let order = if me == first { "first" } else { "in answer" };
+                let order = if me == first { "first: a hot drop on the enemy fleet" } else { "in answer: a counter drop on the enemy's capitals" };
                 info!("bots: alliance {} lit its cyno {order} in {system}, {:.0}s into the fight: {} capital(s) jump in", side.alliances[0], fighting.as_secs_f64(), side.waiting.len());
             }
         }
@@ -800,6 +826,11 @@ fn reinforce(f: &mut Fight, system: i32, world: &World, bots: &mut [Bot], presen
         }
         let mut jumped: Vec<&'static str> = Vec::new();
         while side.on_grid.len() < room && jumped.len() < JUMP_WAVE_MOST {
+            // Titans (last in line) follow once the first drop has held a while.
+            let titan_next = side.waiting.last().is_some_and(|i| side.assigned(*i).is_some_and(|a| a.class == Class::Titan));
+            if titan_next && side.landed.is_some_and(|t| t.elapsed() < TITANS_AFTER) {
+                break;
+            }
             let Some(i) = side.waiting.pop() else { break };
             if bots[i as usize].pod.is_some() || bots[i as usize].activity == Activity::Sieging {
                 continue;
@@ -845,9 +876,39 @@ fn titan_on_grid(side: &Side, system: i32, world: &World, presence: &Presence) -
     titan
 }
 
+/// Where a side drops its capitals on `enemy`: beside the middle of its
+/// capitals on the grid (`capitals_first`, a counter drop), or of its whole
+/// fleet there.
+fn drop_spot(enemy: &Side, capitals_first: bool, system: i32, world: &World, presence: &Presence) -> Option<Vec3> {
+    let w = world.lock();
+    let park = w.parks.get(&(system as i64))?;
+    let at = |capitals: bool| -> Vec<Vec3> {
+        enemy
+            .on_grid
+            .iter()
+            .filter(|i| !capitals || enemy.assigned(**i).is_some_and(|a| a.class.jumps()))
+            .filter_map(|i| presence.shown_at(*i))
+            .filter_map(|(_, ship)| park.ships.get(&ship))
+            .filter(|s| !s.warping())
+            .map(|s| s.pos)
+            .collect()
+    };
+    let mut points = if capitals_first { at(true) } else { Vec::new() };
+    if points.is_empty() {
+        points = at(false);
+    }
+    if points.is_empty() {
+        return None;
+    }
+    let centre = points.iter().fold(Vec3::ZERO, |a, p| a + *p) * (1.0 / points.len() as f64);
+    Some(centre + scatter(points.len() as u32 ^ 0x51ab, HOT_DROP_OFF))
+}
+
 /// A cyno ship of the side on the grid lights a cynosural field: a beacon
-/// the capitals jump to. With none there for a while, any of its ships does.
-fn light_cyno(side: &mut Side, system: i32, world: &World, presence: &Presence) {
+/// the capitals jump to, at `spot` (on the enemy) if there is one. With
+/// none there for a while, any of its ships does; with none of its ships
+/// on the grid at all, a cloaked recon lights it on the enemy.
+fn light_cyno(side: &mut Side, system: i32, world: &World, presence: &Presence, spot: Option<Vec3>) {
     let since = *side.waiting_since.get_or_insert_with(Instant::now);
     let mut w = world.lock();
     let Some(park) = w.parks.get_mut(&(system as i64)) else { return };
@@ -861,6 +922,7 @@ fn light_cyno(side: &mut Side, system: i32, world: &World, presence: &Presence) 
         .filter_map(|(_, ship)| park.ships.get(&ship))
         .find(|s| !s.warping())
         .map(|s| (s.id, s.pos));
+    let lighter = lighter.or_else(|| spot.filter(|_| anyone).map(|at| (0, at)));
     let Some((ship, at)) = lighter else {
         // Said once a minute while the capitals wait for want of a cyno.
         let waited = since.elapsed().as_secs();
@@ -876,7 +938,7 @@ fn light_cyno(side: &mut Side, system: i32, world: &World, presence: &Presence) 
         return;
     };
     let id = crate::npc::next_id();
-    let pos = at + Vec3::new(0.0, 600.0, 0.0);
+    let pos = spot.unwrap_or(at) + Vec3::new(0.0, 600.0, 0.0);
     park.sites.insert(
         id,
         crate::sites::Site {
@@ -900,7 +962,13 @@ fn light_cyno(side: &mut Side, system: i32, world: &World, presence: &Presence) 
     for (client, entry) in entries {
         w.notify(&[client], "DoDestinyUpdate", eve_marshal::Value::Tuple(vec![eve_marshal::Value::List(vec![entry]), eve_marshal::Value::Int(0)]));
     }
-    let by = if cyno_pilots.iter().any(|i| presence.shown_at(*i).is_some_and(|(_, s)| s == ship)) { "cyno ship" } else { "ship (no cyno ship came)" };
+    let by = if ship == 0 {
+        "cloaked recon (none of its ships on the grid)"
+    } else if cyno_pilots.iter().any(|i| presence.shown_at(*i).is_some_and(|(_, s)| s == ship)) {
+        "cyno ship"
+    } else {
+        "ship (no cyno ship came)"
+    };
     info!("bots: {by} {ship} of alliance {} lit cynosural field {id} in {system} after {:.0}s; {} capital(s) waiting", side.alliances[0], since.elapsed().as_secs_f64(), side.waiting.len());
     side.cyno = Some((id, pos));
 }
@@ -963,8 +1031,88 @@ fn fight_seen(f: &mut Fight, system: &i32, world: &World, bots: &mut [Bot], pres
     }
     rout(f);
     reinforce(f, *system, world, bots, presence, clock, report);
+    focus_fire(f, *system, world, presence);
     capital_orders(f, *system, world, presence);
     verdict(f, true)
+}
+
+/// Each side calls primaries, as a fleet commander would: its subcapitals
+/// in squads of about `SQUAD`, each squad on one enemy ship (the most hurt,
+/// then the nearest), its capitals on one enemy capital. A primary is kept
+/// until it dies; then the next is called. Few targets locked at once
+/// rather than one each, and ships die one after another.
+fn focus_fire(f: &mut Fight, system: i32, world: &World, presence: &Presence) {
+    let hostile_to_attack: Vec<i64> = f.defend.alliances.iter().map(|a| i64::from(*a)).collect();
+    let hostile_to_defend: Vec<i64> = f.attack.alliances.iter().map(|a| i64::from(*a)).collect();
+    let mut w = world.lock();
+    let Some(park) = w.parks.get_mut(&(system as i64)) else { return };
+    let now_ms = crate::combat::now_ms();
+    let mut switched = 0;
+    for (side, hostile) in [(&mut f.attack, &hostile_to_attack), (&mut f.defend, &hostile_to_defend)] {
+        // Its ships on the grid: (bot, ship, where, a capital?).
+        let mine: Vec<(u32, i64, Vec3, bool)> = side
+            .on_grid
+            .iter()
+            .filter_map(|i| {
+                let (_, ship) = presence.shown_at(*i)?;
+                let s = park.ships.get(&ship)?;
+                if s.warping() || s.npc.is_none() {
+                    return None;
+                }
+                let capital = side.assigned(*i).is_some_and(|a| a.class.jumps());
+                Some((*i, ship, s.pos, capital))
+            })
+            .collect();
+        if mine.is_empty() {
+            side.primaries.clear();
+            side.cap_primary = None;
+            continue;
+        }
+        let centre = mine.iter().fold(Vec3::ZERO, |a, m| a + m.2) * (1.0 / mine.len() as f64);
+        // The enemy within reach: (ship, where, a capital?, how much of it is left).
+        let enemies: Vec<(i64, Vec3, bool, f64)> = park
+            .ships
+            .values()
+            .filter(|s| s.fight.is_some() && !s.in_warp() && s.pilot.group_id != GROUP_CAPSULE && s.pilot.alliance_id.is_some_and(|a| hostile.contains(&a)))
+            .filter(|s| (s.pos - centre).len() <= FOCUS_RANGE)
+            .filter_map(|s| {
+                let v = &s.fight.as_ref()?.vitals;
+                let part = |damage: f64, max: f64| if max > 0.0 { 1.0 - damage / max } else { 1.0 };
+                let left = (v.shield.fraction(now_ms) + part(v.armor_damage, v.armor_max) + part(v.hull_damage, v.hull_max)) / 3.0;
+                Some((s.id, s.pos, CAPITAL_GROUPS.contains(&s.pilot.group_id), left))
+            })
+            .collect();
+        let alive = |id: i64, capital: bool| enemies.iter().any(|e| e.0 == id && e.2 == capital);
+        let worst_first = |a: &&(i64, Vec3, bool, f64), b: &&(i64, Vec3, bool, f64)| a.3.total_cmp(&b.3).then((a.1 - centre).len().total_cmp(&(b.1 - centre).len()));
+        if !side.cap_primary.is_some_and(|t| alive(t, true)) {
+            side.cap_primary = enemies.iter().filter(|e| e.2).min_by(worst_first).map(|e| e.0);
+        }
+        let subcaps = mine.iter().filter(|m| !m.3).count();
+        let squads = subcaps.div_ceil(SQUAD).clamp(1, SQUADS_MOST);
+        side.primaries.retain(|t| alive(*t, false));
+        side.primaries.truncate(squads);
+        let mut called: Vec<&(i64, Vec3, bool, f64)> = enemies.iter().filter(|e| !e.2 && !side.primaries.contains(&e.0)).collect();
+        called.sort_by(worst_first);
+        for e in called {
+            if side.primaries.len() >= squads {
+                break;
+            }
+            side.primaries.push(e.0);
+        }
+        // Capitals on the capital primary, subcapitals on their squad's;
+        // either on the other's when theirs is gone.
+        for &(i, ship, _, capital) in &mine {
+            let squad = side.primaries.get(i as usize % side.primaries.len().max(1)).copied();
+            let target = if capital { side.cap_primary.or(squad) } else { squad.or(side.cap_primary) };
+            let Some(target) = target else { continue };
+            if let Some(brain) = park.ships.get_mut(&ship).and_then(|s| s.npc.as_mut()) {
+                if brain.focus(target) {
+                    switched += 1;
+                }
+            }
+        }
+    }
+    f.tally.switched += switched;
 }
 
 /// Every few seconds, where players see it: dreadnoughts go into siege and
@@ -1028,11 +1176,22 @@ fn capital_orders(f: &mut Fight, system: i32, world: &World, presence: &Presence
                     } else if let Some(at) = park.ships.get(&ship).map(|s| s.pos) {
                         // No tower to bombard: the nearest enemy capital, else
                         // the nearest enemy ship.
-                        let target = enemies
-                            .iter()
-                            .filter(|(_, pos, _)| (*pos - at).len() <= VOLLEY_RANGE)
-                            .min_by(|x, y| (!x.2).cmp(&!y.2).then((x.1 - at).len().total_cmp(&(y.1 - at).len())));
-                        if let Some(&(target, ..)) = target {
+                        // The side's capital primary first (they focus
+                        // fire), then its squads' primary, then the nearest
+                        // enemy capital, else the nearest enemy ship.
+                        let primary = side
+                            .cap_primary
+                            .into_iter()
+                            .chain(side.primaries.iter().copied())
+                            .find_map(|t| enemies.iter().find(|(id, pos, _)| *id == t && (*pos - at).len() <= VOLLEY_RANGE).map(|e| e.0));
+                        let target = primary.or_else(|| {
+                            enemies
+                                .iter()
+                                .filter(|(_, pos, _)| (*pos - at).len() <= VOLLEY_RANGE)
+                                .min_by(|x, y| (!x.2).cmp(&!y.2).then((x.1 - at).len().total_cmp(&(y.1 - at).len())))
+                                .map(|e| e.0)
+                        });
+                        if let Some(target) = target {
                             orders.push(BattleOrder::Volley { ship, target, damage: VOLLEY });
                             tally.volleys += 1;
                         }
@@ -1089,7 +1248,7 @@ fn capital_orders(f: &mut Fight, system: i32, world: &World, presence: &Presence
         let on_grid = |side: &Side, class: Class| side.caps.iter().filter(|a| a.class == class && side.on_grid.contains(&a.bot)).count();
         let dreads_attacking = on_grid(&f.attack, Class::Dreadnought);
         info!(
-            "bots: battle in {system}: on grid {} v {} (titans {}/{}, dreads {}/{}, carriers {}/{}, logistics {}/{}); in {}s: {} bombard volley(s), {} dreadnought volley(s) at ships, {} repair cycle(s), {} doomsday(s), {} into siege; {}",
+            "bots: battle in {system}: on grid {} v {} (titans {}/{}, dreads {}/{}, carriers {}/{}, logistics {}/{}); in {}s: {} bombard volley(s), {} dreadnought volley(s) at ships, {} repair cycle(s), {} doomsday(s), {} into siege, {} switch(es) to a primary; primaries {} v {} squad(s), capital primary {:?} v {:?}; {}",
             f.attack.on_grid.len(),
             f.defend.on_grid.len(),
             on_grid(&f.attack, Class::Titan),
@@ -1106,6 +1265,11 @@ fn capital_orders(f: &mut Fight, system: i32, world: &World, presence: &Presence
             t.repairs,
             t.doomsdays,
             t.sieged,
+            t.switched,
+            f.attack.primaries.len(),
+            f.defend.primaries.len(),
+            f.attack.cap_primary,
+            f.defend.cap_primary,
             tower_state.unwrap_or_else(|| if f.beacon.is_some() { "open space: the dreadnoughts fire on the enemy's ships".into() } else if dreads_attacking > 0 { "no enemy tower on the grid: the dreadnoughts fire on the enemy's ships".into() } else { "no tower in view".into() })
         );
     }
@@ -1206,10 +1370,13 @@ fn lose_one(side: &mut Side, killer: Option<u32>, system: i32, atlas: &Atlas, bo
 /// A side worn down to a fifth and outnumbered two to one withdraws.
 fn rout(f: &mut Fight) {
     let (a, d) = f.standing();
-    if !f.attack.withdrew && a as f64 <= f.attack.brought as f64 * ROUT && d >= 2 * a.max(1) {
+    // Capitals on the grid or waiting to drop fight it out: their side
+    // stays until they are dead.
+    let capitals_in = |s: &Side| s.caps.iter().any(|c| c.class.jumps() && (s.on_grid.contains(&c.bot) || s.waiting.contains(&c.bot)));
+    if !f.attack.withdrew && !capitals_in(&f.attack) && a as f64 <= f.attack.brought as f64 * ROUT && d >= 2 * a.max(1) {
         f.attack.withdrew = true;
     }
-    if !f.defend.withdrew && d as f64 <= f.defend.brought as f64 * ROUT && a >= 2 * d.max(1) {
+    if !f.defend.withdrew && !capitals_in(&f.defend) && d as f64 <= f.defend.brought as f64 * ROUT && a >= 2 * d.max(1) {
         f.defend.withdrew = true;
     }
 }

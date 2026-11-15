@@ -3842,6 +3842,7 @@ def _rmr_install_battle_graphics():
         original_assemble = ship_cls.Assemble
         original_damage = ship_cls.OnDamageState
         original_explode = base.Explode
+        original_fit = ship_cls.FitHardpoints
         original_shake = base.ShakeCamera
         original_flash = base.FlashLight
         original_added = space_cls.DoBallsAdded
@@ -3877,8 +3878,11 @@ def _rmr_install_battle_graphics():
                 for node in locators:
                     rig.children.append(node.CopyTo())
                 model = trinity.TriTransform()
-                model.children.append(rig)
+                # The hull first: effects size themselves from the model's
+                # first child (a capital's jump-in flash, explosions, trails),
+                # and a bare set of locators made them nothing.
                 model.children.append(hull)
+                model.children.append(rig)
                 self.model = model
                 self._rmr_rig = rig
                 model.translationCurve = self
@@ -3933,6 +3937,23 @@ def _rmr_install_battle_graphics():
                     self.AddTrails()
             self.SetDefaultLOD()
             _rmr_capital_guns(self)
+
+        def FitHardpoints(self):
+            # A shared hull's turret locators are everyone's: this ship's
+            # guns go on its own copies, which FitHardpoints finds first in
+            # a stand-in model.
+            rig = getattr(self, '_rmr_rig', None)
+            if rig is None:
+                return original_fit(self)
+            held = self.model
+            stand = trinity.TriTransform()
+            stand.children.append(rig)
+            self.model = stand
+            try:
+                result = original_fit(self)
+            finally:
+                self.model = held
+            return result
 
         def OnDamageState(self, damageState):
             if getattr(self, '_rmr_rig', None) is not None and _rmr_battle_strip(self):
@@ -4016,6 +4037,7 @@ def _rmr_install_battle_graphics():
 
         base.LoadModel = LoadModel
         ship_cls.Assemble = Assemble
+        ship_cls.FitHardpoints = FitHardpoints
         ship_cls.OnDamageState = OnDamageState
         base.Explode = Explode
         base.ShakeCamera = ShakeCamera
