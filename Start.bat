@@ -236,10 +236,21 @@ namespace RmrUi {
     }
     return $false
 }
+function Read-StopRequest {
+    # The launcher window may be writing the request at this very moment
+    # (Stop or Restart server): wait for it to finish rather than fail. A
+    # file still being written after a second is a stop being asked for.
+    for ($try = 0; $try -lt 20; $try++) {
+        if (-not (Test-Path -LiteralPath $StopPath)) { return '' }
+        try { return [IO.File]::ReadAllText($StopPath).Trim() }
+        catch [IO.IOException] { Start-Sleep -Milliseconds 50 }
+    }
+    return 'stop'
+}
 function Assert-Running {
     if ($script:Stopping) { return }
     if (Test-Path -LiteralPath $StopPath) {
-        $request = [IO.File]::ReadAllText($StopPath).Trim()
+        $request = Read-StopRequest
         if ($request -eq $env:RMR_RUN_ID -or $request -eq 'stop') { throw [OperationCanceledException]::new('Stop requested.') }
     }
     if ($env:RMR_UI_PID -and -not (Get-Process -Id ([int]$env:RMR_UI_PID) -ErrorAction SilentlyContinue)) {
@@ -957,7 +968,8 @@ function Start-RmrWorker {
         $pgBin = Join-Path $Runtime 'postgres-16.15\pgsql\bin'
         $data = Join-Path $Runtime 'data'
         if (Test-Path -LiteralPath $StopPath) {
-            $request = [IO.File]::ReadAllText($StopPath).Trim()
+            # Being written by the launcher window just now: a fresh request, kept.
+            try { $request = [IO.File]::ReadAllText($StopPath).Trim() } catch [IO.IOException] { $request = $env:RMR_RUN_ID }
             $started = [Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime()
             if ($request -ne $env:RMR_RUN_ID -and (Get-Item -LiteralPath $StopPath).LastWriteTimeUtc -lt $started) { Remove-Item -LiteralPath $StopPath }
         }
@@ -1947,7 +1959,12 @@ namespace Rmr {
         param([bool]$Restart = $false)
         if ($state.StopRequested -or $state.Exited) { return }
         try {
-            [System.IO.File]::WriteAllText($state.StopPath, $state.RunId, [System.Text.Encoding]::ASCII)
+            # The server's launcher may be reading the file this instant: try
+            # again for up to a second.
+            for ($try = 0; ; $try++) {
+                try { [System.IO.File]::WriteAllText($state.StopPath, $state.RunId, [System.Text.Encoding]::ASCII); break }
+                catch [System.IO.IOException] { if ($try -ge 20) { throw }; Start-Sleep -Milliseconds 50 }
+            }
             $state.StopRequested = $true
             & $setReadyState $false 'Stopping...'
             $stageLabel.Text = 'Stopping Red Moon Rising'
