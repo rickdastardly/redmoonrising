@@ -3669,6 +3669,7 @@ _rmr_battle = {
     'ships': 0, 'shared': 0, 'own_copies': 0, 'stripped': 0, 'fx_skipped': 0,
     'booms': [], 'booms_skipped': 0, 'batches': 0, 'batch_ms': 0.0, 'batch_max': 0.0,
     'balls_added': 0, 'load_ms': 0.0, 'failed': 0,
+    'late': 0, 'resets': 0, 'brackets_skipped': 0,
 }
 _RMR_BATTLE_MODES = ['full', 'lite', 'extreme']
 # Ships in the grid beyond which "lite" strips.
@@ -3997,23 +3998,24 @@ uthread.new(_rmr_install_battle_graphics)
 
 def _rmr_battle_reporter():
     # What the battle graphics did, every 20 seconds while there is something to say.
-    keys = ['ships', 'shared', 'stripped', 'fx_skipped', 'booms_skipped', 'batches', 'balls_added', 'batch_ms', 'batch_max', 'load_ms', 'failed']
+    keys = ['ships', 'shared', 'stripped', 'fx_skipped', 'booms_skipped', 'batches', 'balls_added', 'batch_ms', 'batch_max', 'load_ms', 'failed', 'late', 'resets', 'brackets_skipped']
     while 1:
         blue.pyos.synchro.Sleep(20000)
         try:
-            if not _rmr_battle['ships'] and not _rmr_battle['batches']:
+            if not _rmr_battle['ships'] and not _rmr_battle['batches'] and not _rmr_battle['late'] and not _rmr_battle['resets']:
                 continue
-            if _rmr_battle['balls_added'] < 50 and not _rmr_battle['fx_skipped'] and not _rmr_battle['booms_skipped']:
+            if _rmr_battle['balls_added'] < 50 and not _rmr_battle['fx_skipped'] and not _rmr_battle['booms_skipped'] and not _rmr_battle['late'] and not _rmr_battle['resets']:
                 for key in keys:
                     _rmr_battle[key] = 0
                 continue
             avg_load = _rmr_battle['ships'] and _rmr_battle['load_ms'] / _rmr_battle['ships'] or 0.0
             avg_batch = _rmr_battle['batches'] and _rmr_battle['batch_ms'] / _rmr_battle['batches'] or 0.0
-            _rmr_report('battle graphics (%s, %d ships on grid): %d ships built, %d on %d shared hulls (%.2fms each); %d stripped; %d effects and %d explosions skipped; %d balls arrived in %d batches (avg %dms, max %dms); %d failed' % (
+            _rmr_report('battle graphics (%s, %d ships on grid): %d ships built, %d on %d shared hulls (%.2fms each); %d stripped; %d effects and %d explosions skipped; %d balls arrived in %d batches (avg %dms, max %dms); %d failed; %d late updates applied now, %d whole-grid reloads asked for; %d brackets skipped' % (
                 _rmr_battle_mode(), _rmr_battle['crowded'], _rmr_battle['ships'], _rmr_battle['shared'],
                 len(_rmr_battle['hulls']), avg_load, _rmr_battle['stripped'], _rmr_battle['fx_skipped'],
                 _rmr_battle['booms_skipped'], _rmr_battle['balls_added'], _rmr_battle['batches'],
-                avg_batch, _rmr_battle['batch_max'], _rmr_battle['failed']))
+                avg_batch, _rmr_battle['batch_max'], _rmr_battle['failed'], _rmr_battle['late'],
+                _rmr_battle['resets'], _rmr_battle['brackets_skipped']))
             for key in keys:
                 _rmr_battle[key] = 0
         except:
@@ -4033,7 +4035,7 @@ def _rmr_set_battle_mode(mode):
         text = {
             'full': 'Battle graphics: full. Every ship is built as the game always did. Ships already here keep how they were built.',
             'lite': 'Battle graphics: lite. Other ships share their hulls; past %d ships, their boosters, trails, smoke and minor effects go.' % _RMR_BATTLE_CROWD,
-            'extreme': 'Battle graphics: extreme. Other ships share their hulls and lose boosters, trails, smoke, repair and ewar beams; few explosions.',
+            'extreme': 'Battle graphics: extreme. Other ships share their hulls and lose boosters, trails, smoke, repair and ewar beams and their brackets in space (the overview still lists them); few explosions.',
         }[mode]
         _rmr_report('battle graphics: switched to ' + mode)
     try:
@@ -4064,6 +4066,106 @@ def _rmr_install_battle_command():
         sys.exc_clear()
 
 uthread.new(_rmr_install_battle_command)
+# ---- desync guard: late updates applied now, not a whole new grid ----------
+#
+# Every destiny update carries the tick it happened on. One that reaches the
+# game after it has simulated past that tick is applied by rewinding to a
+# saved snapshot from before it and replaying (Park.FindState). The game
+# keeps few snapshots, and after a whole-grid reload only one, taken then;
+# so after any stall (a big grid arriving, a busy frame) the updates already
+# in flight find no snapshot, and the game asks for the whole grid again
+# (RequestReset, UpdateStateRequest), stalls rebuilding it, and asks again.
+# Here an update up to _RMR_LATE_MOST ticks late with no snapshot for it is
+# applied at the current tick instead: ships start their new orders a tick
+# or two late, which the server's next updates put right, and the grid
+# stays. Anything later still asks for the grid, as before.
+_RMR_LATE_MOST = 30
+
+
+def _rmr_install_desync_guard():
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    park = None
+    while park is None:
+        try:
+            park = eve.LocalSvc('michelle').GetBallpark()
+        except:
+            sys.exc_clear()
+        if park is None:
+            blue.pyos.synchro.Sleep(2000)
+    try:
+        cls = park.__class__
+        if getattr(cls, '_rmr_desync_guard', None):
+            return
+        original_find = cls.FindState
+        original_reset = cls.RequestReset
+
+        # Named as the methods they replace (see the battle graphics).
+        def FindState(self, stamp):
+            try:
+                now = self.currentTime
+                if stamp < now and now - stamp <= _RMR_LATE_MOST and _rmr_battle_mode() != 'full':
+                    found = 0
+                    for item in self.states:
+                        if item[1] <= stamp:
+                            found = 1
+                            break
+                    if not found:
+                        _rmr_battle['late'] = _rmr_battle['late'] + 1
+                        return 1
+            except:
+                sys.exc_clear()
+            return original_find(self, stamp)
+
+        def RequestReset(self):
+            _rmr_battle['resets'] = _rmr_battle['resets'] + 1
+            return original_reset(self)
+
+        cls.FindState = FindState
+        cls.RequestReset = RequestReset
+        cls._rmr_desync_guard = 1
+        _rmr_report('desync guard: installed on %s (late updates up to %d ticks applied now)' % (cls.__name__, _RMR_LATE_MOST))
+    except:
+        _rmr_report('desync guard: setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+    _rmr_install_bracket_strip()
+
+uthread.new(_rmr_install_desync_guard)
+
+
+def _rmr_install_bracket_strip():
+    # In "extreme", other ships get no bracket in space (the overview still
+    # lists them, and they can be targeted from it): what pilots of big
+    # fleet fights did by hand to keep their game going.
+    try:
+        svc = sm.StartService('bracket')
+        cls = svc.__class__
+        if getattr(cls, '_rmr_bracket_strip', None):
+            return
+        original_added = cls.DoBallsAdded
+
+        def DoBallsAdded(self, lst, *args, **kwargs):
+            if _rmr_battle_mode() == 'extreme':
+                mine = getattr(eve.session, 'shipid', None)
+                kept = []
+                for entry in lst:
+                    try:
+                        item = entry[1]
+                        if item is not None and getattr(item, 'categoryID', None) == const.categoryShip and item.itemID != mine:
+                            _rmr_battle['brackets_skipped'] = _rmr_battle['brackets_skipped'] + 1
+                            continue
+                    except:
+                        sys.exc_clear()
+                    kept.append(entry)
+                lst = kept
+            return original_added(self, lst, *args, **kwargs)
+
+        cls.DoBallsAdded = DoBallsAdded
+        cls._rmr_bracket_strip = 1
+        _rmr_report('battle graphics: bracket stripping installed on %s' % cls.__name__)
+    except:
+        _rmr_report('battle graphics: bracket stripping failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
 '@
 
 

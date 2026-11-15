@@ -2,6 +2,18 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Late updates no longer reload the whole grid
+
+*2026-11-15 17:41 UTC*
+
+**Far fewer resyncs.** Every movement update from the server says which moment it is for. If your game has already drawn past that moment, it rewinds to a snapshot and replays. It keeps very few snapshots, and after a whole-grid reload only one. So after any stutter, updates already on their way found nothing to rewind to, and the game asked for the whole grid again. Rebuilding it caused the next stutter, and so on. That's the ship snapping about and the overview rebuilding again and again.
+
+- Now an update up to 30 seconds late with nothing to rewind to is applied straight away. Ships start their new orders a moment late, the server's next updates put that right, and the grid stays put. Anything later still reloads the grid as before.
+- **/battlegfx extreme** now also leaves out brackets in space for other ships, as fleet pilots used to turn them off by hand. The overview still lists every ship, and you can target from it.
+- Every 20 seconds of a busy grid, the server log's "battle graphics" line now also says how many late updates were caught and how many whole-grid reloads the game still asked for.
+
+Restart the game to get it. The server doesn't need restarting.
+
 ## Battles build up instead of arriving all at once
 
 *2026-11-15 17:34 UTC*
