@@ -8,10 +8,11 @@ Every update, as published on the server dashboard and the character selection s
 
 **Doomsdays are back as they were:** every enemy subcapital on the grid dies at once.
 
-**Warping out of a battle in a big ship.** A titan (or any big ship) in the middle of a fight could warp off on your screen, keep the whole battle on its overview, land at the station 20 AU away and then be dragged back. The server never let it warp: dozens of small ships orbiting through its hull each stopped it dead as they touched it, so it never got up to warp speed. Your game didn't see those bumps the same way and warped you anyway.
+**Warping out of a battle.** A carrier (or any ship) in the middle of a fight could warp off on your screen, keep the whole battle on its overview, land at the station with everything 20+ AU away, and then be dragged back. The server never let it warp: the ships orbiting through its hull each stopped it dead as they touched it, so it never got up to warp speed. Your game didn't see those bumps the same way, warped you anyway, and kept showing the battle because the server still had you on the grid.
 
+- A ship aligning to warp no longer bumps into other ships on the server, as it doesn't in your game. Your ship reaches warp when your game says it does. On landing, the ships you left behind leave your overview within a second.
 - A ship 50 times heavier than another is no longer stopped by bumping into it. The smaller ship still bounces off.
-- Should your ship still be aligning well past the time its agility allows, the server sends it into warp anyway, as your game already has. That's three-quarters again of the time to reach three-quarters speed, plus eight seconds to turn. The server log notes when it does this.
+- Should your ship still be aligning well past the time its agility allows, the server sends it into warp anyway. That's three-quarters again of the time to reach three-quarters speed, plus eight seconds to turn. The server log notes when it does this.
 
 Restart the server to get it.
 

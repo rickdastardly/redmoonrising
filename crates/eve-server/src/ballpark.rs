@@ -57,7 +57,7 @@ pub const LOCAL_GRID_RANGE: f64 = 1_000_000.0;
 const WARP_ALIGN: f64 = 0.01;
 const WARP_ENTRY_SPEED_SQ: f64 = 0.5625;
 /// A ship this many times heavier than another is not stopped by bumping
-/// it: a titan in the middle of a battle has dozens of small ships
+/// it: a carrier in the middle of a battle has dozens of small ships
 /// orbiting through it, and each overlap took its whole velocity away, so it
 /// never aligned to warp here while the player's game, which did not see
 /// those overlaps the same way, warped it off.
@@ -753,11 +753,16 @@ impl Park {
         let mut out = BTreeMap::new();
         for a in &bodies[..movers] {
             let prev_vel = self.ships[&a.id].prev_vel;
+            // A player's ship aligning to warp goes through other ships: the
+            // player's game aligns it without them, and a bump here that the
+            // game did not have kept it on the grid while the game warped it
+            // off (the overview full of ships 20 AU away, then dragged back).
+            let aligning = self.ships[&a.id].is_player() && matches!(self.ships[&a.id].warp, Some(WarpState::Aligning { .. }));
             let mut best: Option<(f64, Vec3)> = None;
             for b in bodies
                 .iter()
                 .filter(|b| b.id != a.id && !b.field.is_some_and(|f| passes(f, a.key)))
-                .filter(|b| !(b.free && b.mass * SHRUG_OFF_MASS < a.mass))
+                .filter(|b| !(b.free && (aligning || b.mass * SHRUG_OFF_MASS < a.mass)))
             {
                 let Some((toi, push)) = bounce(a, prev_vel, b) else { continue };
                 let push = push * BOUNCE;
