@@ -3815,7 +3815,10 @@ def _rmr_install_battle_graphics():
         fx_cls = fx.__class__
         original_fx = fx_cls.OnSpecialFX
 
-        def load_model(self, fileName=None, useInstance=0):
+        # Each stand-in has the name of the method it replaces: the service
+        # manager finds a service's methods by function name (FavourMe), and
+        # Python 2.3 cannot rename a function once made.
+        def LoadModel(self, fileName=None, useInstance=0):
             if not _rmr_battle_lite(self):
                 return original_load(self, fileName, useInstance)
             started = time.clock()
@@ -3865,7 +3868,7 @@ def _rmr_install_battle_graphics():
             _rmr_battle['load_ms'] = _rmr_battle['load_ms'] + (time.clock() - started) * 1000.0
             return None
 
-        def assemble(self):
+        def Assemble(self):
             rig = getattr(self, '_rmr_rig', None)
             if rig is None:
                 return original_assemble(self)
@@ -3894,12 +3897,12 @@ def _rmr_install_battle_graphics():
                     self.AddTrails()
             self.SetDefaultLOD()
 
-        def on_damage_state(self, damageState):
+        def OnDamageState(self, damageState):
             if getattr(self, '_rmr_rig', None) is not None and _rmr_battle_strip(self):
                 return None
             return original_damage(self, damageState)
 
-        def explode(self, *args, **kwargs):
+        def Explode(self, *args, **kwargs):
             if _rmr_battle_lite(self) and _rmr_battle_strip(self):
                 now = time.clock()
                 booms = [t for t in _rmr_battle['booms'] if now - t < 1.0]
@@ -3913,19 +3916,19 @@ def _rmr_install_battle_graphics():
                 _rmr_battle['booms'] = booms
             return original_explode(self, *args, **kwargs)
 
-        def shake_camera(self, *args, **kwargs):
+        def ShakeCamera(self, *args, **kwargs):
             if _rmr_battle_lite(self) and _rmr_battle_strip(self):
                 return None
             return original_shake(self, *args, **kwargs)
 
-        def flash_light(self, *args, **kwargs):
+        def FlashLight(self, *args, **kwargs):
             if _rmr_battle_lite(self) and _rmr_battle_strip(self):
                 return None
             return original_flash(self, *args, **kwargs)
 
         skipped = {}
 
-        def special_fx(self, *args, **kwargs):
+        def OnSpecialFX(self, *args, **kwargs):
             # (shipID, moduleID, moduleTypeID, targetID, otherTypeID, area,
             # guid, isOffensive, start, active, ...)
             try:
@@ -3949,7 +3952,7 @@ def _rmr_install_battle_graphics():
                     return None
             return original_fx(self, *args, **kwargs)
 
-        def balls_added(self, ballsToAdd):
+        def DoBallsAdded(self, ballsToAdd):
             # Built a frame's worth at a time: a big grid fills in over a
             # second or two instead of freezing the game.
             started = time.clock()
@@ -3974,14 +3977,14 @@ def _rmr_install_battle_graphics():
                 if spent > _rmr_battle['batch_max']:
                     _rmr_battle['batch_max'] = spent
 
-        base.LoadModel = load_model
-        ship_cls.Assemble = assemble
-        ship_cls.OnDamageState = on_damage_state
-        base.Explode = explode
-        base.ShakeCamera = shake_camera
-        base.FlashLight = flash_light
-        fx_cls.OnSpecialFX = special_fx
-        space_cls.DoBallsAdded = balls_added
+        base.LoadModel = LoadModel
+        ship_cls.Assemble = Assemble
+        ship_cls.OnDamageState = OnDamageState
+        base.Explode = Explode
+        base.ShakeCamera = ShakeCamera
+        base.FlashLight = FlashLight
+        fx_cls.OnSpecialFX = OnSpecialFX
+        space_cls.DoBallsAdded = DoBallsAdded
         base._rmr_battle_graphics = 1
         _rmr_report('battle graphics: installed, mode %s (shared hulls, stripping past %d ships)' % (_rmr_battle_mode(), _RMR_BATTLE_CROWD))
         uthread.new(_rmr_battle_reporter)
