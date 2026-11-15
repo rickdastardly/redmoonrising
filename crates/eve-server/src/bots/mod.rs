@@ -33,6 +33,7 @@ mod politics;
 mod population;
 mod presence;
 mod relations;
+mod salvage;
 mod schema;
 mod officers;
 mod ships;
@@ -73,6 +74,10 @@ const SYNC: Duration = Duration::from_secs(1);
 const REPORT: Duration = Duration::from_secs(60);
 /// Corporations at or above this ID are players' or bots', not NPCs'.
 const FIRST_OWNED_CORP: i32 = 2_000_000;
+/// While an alliance raises ISK for a tower or outpost, each of its pilots'
+/// steps gives its corporation this share of its savings beyond what it keeps.
+const DONATE_KEEP: f64 = 25_000_000.0;
+const DONATE_SHARE: f64 = 0.05;
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
 static CONTROLS: AtomicBool = AtomicBool::new(false);
@@ -806,6 +811,8 @@ struct Sim {
     speed: f64,
     by_char: HashMap<i64, u32>,
     sieges: Vec<sov::Siege>,
+    /// Battlefields haulers are looting.
+    salvage: salvage::Salvage,
     defenses: Vec<defense::Defense>,
     changes: Vec<presence::Change>,
     rng: Rng,
@@ -876,6 +883,7 @@ impl Sim {
             speed,
             by_char,
             sieges: Vec::new(),
+            salvage: salvage::Salvage::default(),
             defenses: Vec::new(),
             changes: Vec::new(),
             rng: Rng::seeded(crate::bulkdata::filetime_now() as u64),
@@ -1109,6 +1117,13 @@ impl Sim {
                 }
                 bot.earned = 0.0;
             }
+            // While its alliance raises ISK for its claims, a pilot gives
+            // its corporation a share of its savings beyond what it keeps.
+            if ctx.rat && bot.isk > DONATE_KEEP && self.politics.corps.contains_key(&self.ids[i as usize].corp) {
+                let gift = (bot.isk - DONATE_KEEP) * DONATE_SHARE;
+                bot.isk -= gift;
+                ctx.econ.donate(self.ids[i as usize].corp, gift);
+            }
             if bot.hull as i64 != self.ids[i as usize].hull && bot.hull != 0 {
                 self.ids[i as usize].hull = bot.hull as i64;
                 self.hulls_changed.push(i);
@@ -1307,8 +1322,11 @@ impl Sim {
             Ok(rows) => self.politics.treasury = rows.iter().map(|r| (r.get::<_, i32>(0), r.get::<_, f64>(1))).collect(),
             Err(e) => error!("bots: reading the alliances' wallets: {}", crate::logging::chain(&e)),
         }
+        // Only where the executor is a bot corporation itself: a player
+        // alliance's bot corporations keep all their tax, for its claims.
         let sql = r#"SELECT co."corporationID", a."executorCorpID" FROM "corporation" co JOIN alliances a ON a."allianceID" = co."allianceID"
-                      JOIN "botGroups" g ON g."ownerID" = co."corporationID""#;
+                      JOIN "botGroups" g ON g."ownerID" = co."corporationID"
+                      JOIN "botGroups" ge ON ge."ownerID" = a."executorCorpID""#;
         match self.db.query(sql, &[]).await {
             Ok(rows) => self.econ.executor_of = rows.iter().map(|r| (r.get::<_, i32>(0), r.get::<_, i32>(1))).collect(),
             Err(e) => error!("bots: reading the alliances' executors: {}", crate::logging::chain(&e)),
@@ -1356,6 +1374,17 @@ impl Sim {
             for (side, player) in report.aggressors {
                 self.relations.tower_attacked(side, player as i32, now);
             }
+            for system in std::mem::take(&mut report.looted) {
+                salvage::after_battle(&mut self.salvage, system);
+            }
+            let (looting, looted_home) = salvage::run(&mut self.salvage, &mut self.db, &self.server.world, &self.atlas, &mut self.bots, &self.ids, &mut self.presence, &mut self.rng).await;
+            for &i in &looting {
+                self.reschedule(i, 60);
+                self.changes.push(presence::Change::Busy { bot: i });
+            }
+            report.touched.extend(looting);
+            report.released.extend(looted_home);
+            report.touched.extend(claim::settle(&self.db, &mut self.atlas, &self.politics, &mut self.bots, &self.ids, &mut self.rng).await);
             for i in report.touched {
                 self.touch(i);
             }

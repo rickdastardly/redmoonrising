@@ -2,6 +2,34 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Ship models back, your space for your pilots, battlefield looters
+
+*2026-11-15 22:44 UTC*
+
+**Ship models and Look At are back.** Last update's battle graphics broke them outside big fights: ships built from a shared hull tried to grow engine trails, failed, and stopped the rest of the grid being built. Now every ship is built the normal way unless the grid is crowded (80+ ships, or `/battlegfx extreme`). In a crowd, shared hulls are arranged so Look At and the gate jump-in effect work too.
+
+**Your alliance works your space:**
+
+- Every ten minutes, the miners and ratters of a player alliance move their work to its systems: those where it holds sovereignty, has an outpost or has a tower up. They live at its outposts, or the nearest stations.
+- Neutral miners and ratters living there move out.
+- A few hundred move each time, so it fills in over a few passes.
+
+**Sovereignty from outposts.** An alliance's outpost now counts as two claiming towers in its system, so a system with your outpost shows your alliance as its sovereign. A system with only claiming towers waits for the claim delay as before.
+
+**Battlefield looters.** When a battle you watched ends:
+
+- Within a minute, six of the nearest haulers warp in to the wrecks' cans.
+- They work through them, a can each every twelve seconds, and sell what they find.
+- They leave when the field is clean, or after 25 minutes.
+
+**ISK for your alliance's claims:**
+
+- Your alliance's bot corporations now keep all of their tax. Before, a fifth of it went to the alliance's executor, which is your corporation, so it never paid for towers or outposts.
+- While they're short of ISK, besides ratting at 30% tax and pooling every corporation's wallet, each pilot gives its corporation 5% of its savings above 25M ISK.
+- Four in ten new recruits still join player alliances.
+
+Restart the server and the game to get it all.
+
 ## Player alliances grow fastest
 
 *2026-11-15 20:11 UTC*

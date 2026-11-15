@@ -61,6 +61,139 @@ pub const RAISING_TAX: f64 = 0.3;
 /// their corporations take more of the bounties, until it is paid for.
 static RAISING: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
 
+/// How often pilots are moved into (and neutrals out of) player
+/// alliances' space, and the most moved each way at a time.
+const SETTLE_EVERY: Duration = Duration::from_secs(10 * 60);
+const SETTLE_MOST: usize = 600;
+static SETTLED: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+
+/// A player alliance's miners and ratters make its space their own: they
+/// work its systems (where it holds sovereignty, has an outpost or a tower
+/// up) and live at its outposts, or the nearest stations. Neutral miners
+/// and ratters living there move out. Every ten minutes; returns the bots
+/// moved.
+pub async fn settle(db: &Client, atlas: &mut Atlas, p: &Politics, bots: &mut [super::behaviour::Bot], ids: &[super::presence::Identity], rng: &mut Rng) -> Vec<u32> {
+    use super::behaviour::Role;
+    {
+        let Ok(mut at) = SETTLED.lock() else { return Vec::new() };
+        if at.is_some_and(|t| t.elapsed() < SETTLE_EVERY) {
+            return Vec::new();
+        }
+        *at = Some(Instant::now());
+    }
+    let players: Vec<i32> = {
+        let mut v: Vec<i32> = ids.iter().filter_map(|id| id.alliance).filter(|a| !p.alliances.contains_key(a)).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    if players.is_empty() {
+        return Vec::new();
+    }
+    let rows = match db
+        .query(
+            r#"SELECT "solarSystemID"::int, "allianceID"::int, NULL::int FROM "mapSolarSystems" WHERE "allianceID" = ANY($1)
+               UNION
+               SELECT st."solarSystemID"::int, co."allianceID"::int, st."stationID"::int FROM "staStations" st
+                 JOIN "corporation" co ON co."corporationID" = st."corporationID"
+                WHERE st."stationID" >= 61000000 AND co."allianceID" = ANY($1)
+               UNION
+               SELECT e."locationID"::int, co."allianceID"::int, NULL::int FROM "posStructures" ps
+                 JOIN entity e ON e."itemID" = ps."itemID"
+                 JOIN "corporation" co ON co."corporationID" = e."ownerID"
+                WHERE co."allianceID" = ANY($1) AND ps.state IN (3, 4, 5)"#,
+            &[&players],
+        )
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!("bots: reading player alliances' space: {}", crate::logging::chain(&e));
+            return Vec::new();
+        }
+    };
+    let mut space: HashMap<i32, Vec<i32>> = HashMap::new();
+    let mut outposts: HashMap<i32, Vec<i32>> = HashMap::new();
+    for r in &rows {
+        let (system, alliance, station): (i32, i32, Option<i32>) = (r.get(0), r.get(1), r.get(2));
+        space.entry(alliance).or_default().push(system);
+        if let Some(st) = station {
+            outposts.entry(alliance).or_default().push(st);
+            // An outpost built since the map was read.
+            if !atlas.station_system.contains_key(&st) {
+                atlas.station_system.insert(st, system);
+                if let Some(sys) = atlas.systems.get_mut(&system) {
+                    sys.stations.push(st);
+                }
+            }
+        }
+    }
+    for v in space.values_mut() {
+        v.sort_unstable();
+        v.dedup();
+    }
+    let held: HashSet<i32> = space.values().flatten().copied().collect();
+    let (mut moved_in, mut moved_out, mut moved) = (0, 0, Vec::new());
+    for i in 0..bots.len() {
+        if !matches!(bots[i].role, Role::Miner | Role::Ratter) || matches!(bots[i].activity, super::behaviour::Activity::Sieging | super::behaviour::Activity::Escorting) {
+            continue;
+        }
+        let ours = ids[i].alliance.and_then(|a| space.get(&a).map(|s| (a, s)));
+        if let Some((alliance, systems)) = ours {
+            if moved_in >= SETTLE_MOST || systems.contains(&bots[i].turf) {
+                continue;
+            }
+            // Its kind of work where there is some: belts for a miner.
+            let working: Vec<i32> = systems.iter().copied().filter(|s| atlas.systems.get(s).is_some_and(|sys| sys.belts > 0)).collect();
+            let pool = if working.is_empty() { systems } else { &working };
+            let turf = pool[rng.below(pool.len())];
+            let home = outposts
+                .get(&alliance)
+                .filter(|o| !o.is_empty())
+                .map(|o| o[rng.below(o.len())])
+                .or_else(|| atlas.station_near(turf, 6, rng, |_| true));
+            let b = &mut bots[i];
+            b.turf = turf;
+            if let Some(h) = home {
+                b.home = h;
+            }
+            moved_in += 1;
+            moved.push(i as u32);
+        } else {
+            if moved_out >= SETTLE_MOST {
+                continue;
+            }
+            let lives = atlas.system_of(bots[i].home);
+            if !held.contains(&lives) && !held.contains(&bots[i].turf) {
+                continue;
+            }
+            let Some(home) = atlas.station_near(lives, 10, rng, |s| !held.contains(&s)) else { continue };
+            let b = &mut bots[i];
+            b.home = home;
+            b.turf = 0;
+            moved_out += 1;
+            moved.push(i as u32);
+        }
+    }
+    if !moved.is_empty() {
+        let who: Vec<i32> = moved.iter().map(|i| bots[*i as usize].id).collect();
+        let homes: Vec<i32> = moved.iter().map(|i| bots[*i as usize].home).collect();
+        let turfs: Vec<i32> = moved.iter().map(|i| bots[*i as usize].turf).collect();
+        if let Err(e) = db
+            .execute(
+                r#"UPDATE "bots" b SET "homeStationID" = u.home, "turf" = u.turf FROM unnest($1::int[], $2::int[], $3::int[]) AS u(id, home, turf)
+                    WHERE b."characterID" = u.id"#,
+                &[&who, &homes, &turfs],
+            )
+            .await
+        {
+            tracing::error!("bots: moving pilots into their alliance's space: {}", crate::logging::chain(&e));
+        }
+        tracing::info!("bots: {moved_in} alliance pilot(s) moved to work their player alliance's space, {moved_out} neutral(s) moved out of it");
+    }
+    moved
+}
+
 pub fn fundraising() -> Vec<i32> {
     RAISING.lock().map(|r| r.clone()).unwrap_or_default()
 }

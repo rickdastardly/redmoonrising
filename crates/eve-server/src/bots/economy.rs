@@ -395,6 +395,14 @@ impl Economy {
         self.tax_at(corp, earned, rate)
     }
 
+    /// ISK a pilot gives its corporation.
+    pub fn donate(&mut self, corp: i32, isk: f64) {
+        if isk >= 1.0 {
+            *self.corp_income.entry(corp).or_default() += isk;
+            self.stats.corp_tax += isk;
+        }
+    }
+
     /// Tax at `rate` on what a bot earned, for its corporation (and its
     /// alliance's executor's share); returns the tax.
     pub fn tax_at(&mut self, corp: i32, earned: f64, rate: f64) -> f64 {

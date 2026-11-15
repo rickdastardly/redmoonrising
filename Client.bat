@@ -3931,7 +3931,9 @@ def _rmr_install_battle_graphics():
         # manager finds a service's methods by function name (FavourMe), and
         # Python 2.3 cannot rename a function once made.
         def LoadModel(self, fileName=None, useInstance=0):
-            if not _rmr_battle_lite(self):
+            # Shared hulls only in a crowd (or in extreme): anywhere else every
+            # ship is built as the game always did, trails, look-at and all.
+            if not _rmr_battle_lite(self) or not _rmr_battle_strip(self):
                 return original_load(self, fileName, useInstance)
             started = time.clock()
             try:
@@ -3955,10 +3957,18 @@ def _rmr_install_battle_graphics():
                 for node in locators:
                     rig.children.append(node.CopyTo())
                 model = trinity.TriTransform()
-                # The hull first: effects size themselves from the model's
-                # first child (a capital's jump-in flash, explosions, trails),
-                # and a bare set of locators made them nothing.
-                model.children.append(hull)
+                # The hull's mesh first, as in a ship built the usual way:
+                # Look At, jump-in effects and explosions measure the
+                # model's first child, which must be the mesh itself.
+                mesh = hull
+                try:
+                    if len(hull.children):
+                        mesh = hull.children[0]
+                        mesh.GetBoundingSphereRadius
+                except:
+                    sys.exc_clear()
+                    mesh = hull
+                model.children.append(mesh)
                 model.children.append(rig)
                 self.model = model
                 self._rmr_rig = rig
@@ -4005,14 +4015,23 @@ def _rmr_install_battle_graphics():
             self.runningupdate = 0
             self.boosterType = 'booster_blue'
             self.boosterSound = None
-            if _rmr_battle_strip(self):
+            # No engine trails on a shared hull (they would hang on every
+            # ship of that hull), and nothing here may stop the rest of the
+            # grid being built.
+            try:
+                if _rmr_battle_strip(self):
+                    self.boosters = []
+                    _rmr_battle['stripped'] = _rmr_battle['stripped'] + 1
+                else:
+                    self.FitBoosters()
+            except:
                 self.boosters = []
-                _rmr_battle['stripped'] = _rmr_battle['stripped'] + 1
-            else:
-                self.FitBoosters()
-                if settings.user.ui.Get('trails', 1):
-                    self.AddTrails()
-            self.SetDefaultLOD()
+                _rmr_battle['failed'] = _rmr_battle['failed'] + 1
+                sys.exc_clear()
+            try:
+                self.SetDefaultLOD()
+            except:
+                sys.exc_clear()
             _rmr_capital_guns(self)
 
         def FitHardpoints(self):

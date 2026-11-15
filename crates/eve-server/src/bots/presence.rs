@@ -123,6 +123,9 @@ pub struct Presence {
     pub roamers: HashSet<u32>,
     /// Bots answering a fight call in Local: where they meet (`talk`).
     meets: HashMap<u32, Meet>,
+    /// Haulers looting a battlefield: where, and the can they go round
+    /// (`salvage`). Never hostile.
+    salvage: HashMap<u32, Meet>,
     /// What bots fly and fit.
     pub yard: Option<Arc<super::ships::Shipyard>>,
     /// Shown bots destroyed by players since the runtime last looked.
@@ -140,6 +143,8 @@ pub struct Meet {
 
 /// How far from the meeting point bots orbit.
 const MEET_ORBIT: f64 = 8_000.0;
+/// How close a looting hauler goes round its can.
+const SALVAGE_ORBIT: f64 = 1_500.0;
 /// How far off a carrier picks its fighters' targets, and how far it keeps
 /// from them.
 const CARRIER_REACH: f64 = 100_000.0;
@@ -175,6 +180,7 @@ impl Presence {
             raiders: HashSet::new(),
             roamers: HashSet::new(),
             meets: HashMap::new(),
+            salvage: HashMap::new(),
             yard: None,
             kills: Vec::new(),
         }
@@ -247,6 +253,25 @@ impl Presence {
         steer(w, system, ship, course);
     }
 
+    /// Sends a hauler to loot a battlefield, or on to the next can there:
+    /// in by warp to `m.point`, then round the can `m.anchor`.
+    pub fn salvage(&mut self, w: &mut WorldState, i: u32, bot: &Bot, m: Meet) {
+        self.salvage.insert(i, m);
+        let Some(&(system, ship)) = self.shown.get(&i) else { return };
+        let system = system as i64;
+        let from = w.parks.get(&system).and_then(|p| p.ships.get(&ship)).map(|s| s.pos);
+        let course = match (from, w.parks.get(&system)) {
+            (Some(from), Some(park)) => self.course(i, bot, park, from),
+            _ => return,
+        };
+        steer(w, system, ship, course);
+    }
+
+    /// The battlefield is looted: the hauler goes home.
+    pub fn end_salvage(&mut self, i: u32) {
+        self.salvage.remove(&i);
+    }
+
     /// The fight call is over for a bot: back to its errands.
     pub fn end_meet(&mut self, i: u32) {
         if self.meets.remove(&i).is_some() {
@@ -289,6 +314,13 @@ impl Presence {
                 Some(s) if (s.pos - from).len() > RALLY_WARP => Command::Warp { target: s.pos, range: 0.0 },
                 Some(s) => Command::Orbit { target: s.id, range: super::hire::ESCORT_RANGE },
                 None => Command::Stop,
+            };
+        }
+        if let Some(m) = self.salvage.get(&i).filter(|m| m.system == bot.system && bot.pod.is_none()) {
+            return if (m.point - from).len() > RALLY_WARP {
+                Command::Warp { target: m.point, range: 0.0 }
+            } else {
+                Command::Orbit { target: m.anchor, range: SALVAGE_ORBIT }
             };
         }
         if let Some(m) = self.meets.get(&i).filter(|m| m.system == bot.system && bot.pod.is_none()) {

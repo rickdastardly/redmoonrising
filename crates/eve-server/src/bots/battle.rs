@@ -401,6 +401,8 @@ pub struct Report {
     pub released: Vec<u32>,
     /// Players who fired on a bot side's tower: (side, character).
     pub aggressors: Vec<(i32, i64)>,
+    /// Systems where a battle players saw has ended: haulers come to loot.
+    pub looted: Vec<i32>,
 }
 
 impl Report {
@@ -409,6 +411,7 @@ impl Report {
         self.touched.extend(other.touched);
         self.released.extend(other.released);
         self.aggressors.extend(other.aggressors);
+        self.looted.extend(other.looted);
     }
 }
 
@@ -531,6 +534,9 @@ pub async fn run(
         let mut f = s.fight.take().expect("a fight under way");
         let lost = (f.attack.lost, f.defend.lost);
         take_down_beacon(&mut f, s.system, world);
+        if f.seen {
+            report.looted.push(s.system);
+        }
         // An open-space battle holds no space: it ends with the battle.
         let mut news = if s.field {
             let (winner, loser) = if won { (&s.names.attacker, &s.names.defender) } else { (&s.names.defender, &s.names.attacker) };

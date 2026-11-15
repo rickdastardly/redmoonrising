@@ -156,6 +156,18 @@ impl Atlas {
         Some(path)
     }
 
+    /// A random station within `jumps` of `from`, in a system `keep` allows.
+    pub fn station_near(&self, from: i32, jumps: i64, rng: &mut Rng, keep: impl Fn(i32) -> bool) -> Option<i32> {
+        let near: Vec<i32> = crate::gates::reach_on(self.graph, from as i64, jumps)
+            .into_iter()
+            .map(|(s, _)| s as i32)
+            .filter(|s| keep(*s) && self.systems.get(s).is_some_and(|sys| !sys.stations.is_empty()))
+            .collect();
+        let system = *near.get(rng.below(near.len().max(1)))?;
+        let stations = &self.systems[&system].stations;
+        stations.get(rng.below(stations.len())).copied()
+    }
+
     fn random_station_within(&self, from: i32, jumps: i64, rng: &mut Rng, keep: impl Fn(&System) -> bool) -> Option<i32> {
         let near: Vec<i32> = crate::gates::reach_on(self.graph, from as i64, jumps)
             .into_iter()
