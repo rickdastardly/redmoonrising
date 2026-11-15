@@ -2,6 +2,20 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Every ship in the battle, drawn cheaply
+
+*2026-11-15 02:31 UTC*
+
+**Big battles are now your game's to draw, in full.** The server no longer sends your game fewer ships when a battle gets big: it sends every ship there is, 200 new ones a second, and never cuts that back. Instead, your game draws them far more cheaply.
+
+- **Shared hulls:** each kind of hull is loaded once, and every ship of that kind draws that one copy. Before, every ship was a full copy of its model at every level of detail. Each ship keeps only its own turret, engine, damage and missile points, so turrets, beams and missiles still come from the right ship.
+- **Stripped effects:** with more than 80 ships on grid, other ships lose their engine boosters, trails and damage smoke. Their warp tunnels, shield and armour repair glows, scans, speed boosts and mining beams are not drawn, there is no screen shake or light flash from their deaths, and at most a dozen explosions show each second. Weapons, missiles, cynos, jumps, siege and doomsdays always show.
+- **No more freezes on arrival:** a grid of thousands is built 120 ships a frame, so it fills in over a second or two instead of freezing the game.
+
+**/battlegfx lite** is the default. **/battlegfx extreme** strips all the time, including remote repair and electronic warfare beams, with four explosions a second. **/battlegfx full** draws every ship as the game always did. Every 20 seconds of a busy grid, the server log has a "battle graphics" line saying how many ships were built, how fast, and what was left out.
+
+Restart the game to get it. The server needs a restart too, to send every ship.
+
 ## Bot corporations run themselves, and recruiting in Local
 
 *2026-11-14 17:55 UTC*

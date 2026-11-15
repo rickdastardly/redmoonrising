@@ -3636,6 +3636,431 @@ def _rmr_install_outpost_gm_menu():
 uthread.new(_rmr_install_outpost_gm_menu)
 
 
+# ---- big battles: shared hulls and stripped effects -------------------------
+#
+# A big bot battle puts thousands of ships on one grid. This client builds
+# every ship as a full deep copy of its model (eve.rot.GetCopy), every level
+# of detail, with engine boosters, trails and damage smoke, all at once as the
+# ships arrive: the game freezes for seconds, falls behind the server and asks
+# for the grid again. Instead, for every ship but your own:
+#
+# - Shared hulls: each hull model is loaded once (eve.rot.GetInstance, the
+#   shared path SpaceObject.LoadModel already has) and every ship of that
+#   hull draws the one copy inside a small transform of its own. A ship's
+#   own parts are only its locators (turret, booster, damage and missile
+#   points), copied into that transform, so turrets fitted when it fires and
+#   damage effects stay on that ship.
+# - Stripping, where a grid is crowded ("lite") or always ("extreme"): no
+#   engine boosters, trails or damage smoke on other ships; no warp tunnels,
+#   shield or armour repair glows, scans, speed boosts or mining beams of
+#   other ships (and in "extreme" no remote repair or electronic warfare
+#   beams either); no screen shake or explosion lights from other ships'
+#   deaths, and only a dozen explosions a second (four in "extreme").
+#   Weapons, missiles, cynos, jump flashes, siege and doomsday effects stay.
+# - Arriving ships are built 120 to a frame, so a grid of thousands fills
+#   in over a second or two instead of freezing the game.
+#
+# /battlegfx full|lite|extreme switches (saved); full is the game as it was.
+# Every 20 seconds in a busy grid the hook reports what it did to the
+# server log ("client hook: battle graphics: ...").
+
+_rmr_battle = {
+    'mode': None, 'hulls': {}, 'crowded': 0, 'checked': 0.0,
+    'ships': 0, 'shared': 0, 'own_copies': 0, 'stripped': 0, 'fx_skipped': 0,
+    'booms': [], 'booms_skipped': 0, 'batches': 0, 'batch_ms': 0.0, 'batch_max': 0.0,
+    'balls_added': 0, 'load_ms': 0.0, 'failed': 0,
+}
+_RMR_BATTLE_MODES = ['full', 'lite', 'extreme']
+# Ships in the grid beyond which "lite" strips.
+_RMR_BATTLE_CROWD = 80
+_RMR_BATTLE_CHUNK = 120
+_RMR_LITE_FX = ['effects.Warping', 'effects.ShieldBoosting', 'effects.ArmorRepair',
+                'effects.BoosterShort', 'effects.BoosterStop', 'effects.Mining',
+                'effects.ShipScan', 'effects.TargetScan', 'effects.SurveyScan', 'effects.CargoScan',
+                'effects.ScanStrengthBonusActivate', 'effects.ScanStrengthBonusTarget',
+                'effects.TurretWeaponRangeTrackingSpeedMultiplyActivate',
+                'effects.TurretWeaponRangeTrackingSpeedMultiplyTarget',
+                'effects.ModifyShieldResonance', 'effects.ElectronicAttributeModifyActivate']
+_RMR_EXTREME_FX = _RMR_LITE_FX + ['effects.ShieldTransfer', 'effects.RemoteArmourRepair',
+                'effects.EnergyTransfer', 'effects.TargetPaint', 'effects.ModifyTargetSpeed',
+                'effects.WarpScramble', 'effects.EnergyVampire', 'effects.EnergyDestabilization',
+                'effects.ElectronicAttributeModifyTarget', 'effects.TractorBeam', 'effects.StretchEffect']
+
+
+def _rmr_battle_mode():
+    mode = _rmr_battle['mode']
+    if mode is None:
+        try:
+            mode = settings.user.ui.Get('rmrBattleGfx', 'lite')
+        except:
+            sys.exc_clear()
+            mode = 'lite'
+        if mode not in _RMR_BATTLE_MODES:
+            mode = 'lite'
+        _rmr_battle['mode'] = mode
+    return mode
+
+
+def _rmr_battle_crowded():
+    # Ships in the grid, counted at most once a second.
+    import time
+    now = time.clock()
+    if now - _rmr_battle['checked'] >= 1.0:
+        _rmr_battle['checked'] = now
+        count = 0
+        try:
+            park = eve.LocalSvc('michelle').GetBallpark()
+            if park is not None:
+                for item in park.slimItems.values():
+                    if getattr(item, 'categoryID', None) == const.categoryShip:
+                        count = count + 1
+        except:
+            sys.exc_clear()
+        _rmr_battle['crowded'] = count
+    return _rmr_battle['crowded']
+
+
+def _rmr_battle_strip(ball=None):
+    # Whether other ships' frills go: always in "extreme", in a crowd in "lite".
+    mode = _rmr_battle_mode()
+    if mode == 'full':
+        return 0
+    if ball is not None and getattr(ball, 'id', None) == getattr(eve.session, 'shipid', None):
+        return 0
+    if mode == 'extreme':
+        return 1
+    return _rmr_battle_crowded() >= _RMR_BATTLE_CROWD
+
+
+def _rmr_battle_hull(ball, fileName):
+    # The shared hull for a model file and its locators, loaded once.
+    entry = _rmr_battle['hulls'].get(fileName)
+    if entry is not None:
+        return entry
+    import trinity
+    import nodemanager
+    hull = eve.rot.GetInstance(fileName)
+    if hull is None:
+        return None
+    # Its level of detail set once, as SpaceObject.LoadModel's shared path
+    # does, through a ball of that hull.
+    held = ball.model
+    ball.model = hull
+    try:
+        ball.SetDefaultLOD()
+    finally:
+        ball.model = held
+    locators = []
+    names = []
+    for typename in ('trinity.TriSplTransform', 'trinity.TriTransform'):
+        try:
+            found = nodemanager.FindNodes(hull, 'locator_', typename)
+        except:
+            sys.exc_clear()
+            found = []
+        for node in found:
+            name = getattr(node, 'name', '')
+            if name in names:
+                continue
+            names.append(name)
+            locators.append(node)
+    entry = (hull, locators)
+    _rmr_battle['hulls'][fileName] = entry
+    return entry
+
+
+def _rmr_battle_lite(ball):
+    # Ships but your own are built from shared hulls, unless "full".
+    if _rmr_battle_mode() == 'full':
+        return 0
+    if getattr(ball, 'id', None) == getattr(eve.session, 'shipid', None):
+        return 0
+    return isinstance(ball, _rmr_battle['ship_class'])
+
+
+def _rmr_install_battle_graphics():
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        import trinity
+        import time
+        space = sm.StartService('space')
+        space_cls = space.__class__
+        ship_cls = space.categoryClasses.get(const.categoryShip)
+        if ship_cls is None:
+            _rmr_report('battle graphics: no ship class found; not installed')
+            return
+        base = None
+        stack = [ship_cls]
+        while stack:
+            klass = stack.pop()
+            if klass.__name__ == 'SpaceObject':
+                base = klass
+                break
+            stack.extend(list(klass.__bases__))
+        if base is None:
+            _rmr_report('battle graphics: no SpaceObject class found; not installed')
+            return
+        if getattr(base, '_rmr_battle_graphics', None):
+            return
+        _rmr_battle['ship_class'] = ship_cls
+        original_load = base.LoadModel
+        original_assemble = ship_cls.Assemble
+        original_damage = ship_cls.OnDamageState
+        original_explode = base.Explode
+        original_shake = base.ShakeCamera
+        original_flash = base.FlashLight
+        original_added = space_cls.DoBallsAdded
+        fx = sm.StartService('FxSequencer')
+        fx_cls = fx.__class__
+        original_fx = fx_cls.OnSpecialFX
+
+        def load_model(self, fileName=None, useInstance=0):
+            if not _rmr_battle_lite(self):
+                return original_load(self, fileName, useInstance)
+            started = time.clock()
+            try:
+                name = fileName
+                if name is None:
+                    item = eve.LocalSvc('michelle').GetBallpark().GetInvItem(self.id)
+                    if item is None:
+                        return None
+                    kind = cfg.invtypes.Get(item.typeID)
+                    if kind.graphicID is None:
+                        return original_load(self, fileName, useInstance)
+                    name = kind.Graphic().url3D.split(' ')[0]
+                if not name:
+                    return original_load(self, fileName, useInstance)
+                entry = _rmr_battle_hull(self, name)
+                if entry is None:
+                    return original_load(self, fileName, useInstance)
+                hull, locators = entry
+                rig = trinity.TriTransform()
+                rig.name = 'rmr_locators'
+                for node in locators:
+                    rig.children.append(node.CopyTo())
+                model = trinity.TriTransform()
+                model.children.append(rig)
+                model.children.append(hull)
+                self.model = model
+                self._rmr_rig = rig
+                model.translationCurve = self
+                model.rotationCurve = self
+                model.name = '%d' % self.id
+                model.useCurves = 1
+                model.display = 0
+                eve.triapp.tridev.scene.models.append(model)
+                eve.LocalSvc('FxSequencer').NotifyModelLoaded(self.id)
+                _rmr_battle['shared'] = _rmr_battle['shared'] + 1
+            except:
+                _rmr_battle['failed'] = _rmr_battle['failed'] + 1
+                if _rmr_battle['failed'] <= 3:
+                    _rmr_report('battle graphics: shared hull failed, built as usual: ' +
+                                ''.join(traceback.format_exception(*sys.exc_info())))
+                sys.exc_clear()
+                self._rmr_rig = None
+                if getattr(self, 'model', None) is None:
+                    return original_load(self, fileName, useInstance)
+            _rmr_battle['ships'] = _rmr_battle['ships'] + 1
+            _rmr_battle['load_ms'] = _rmr_battle['load_ms'] + (time.clock() - started) * 1000.0
+            return None
+
+        def assemble(self):
+            rig = getattr(self, '_rmr_rig', None)
+            if rig is None:
+                return original_assemble(self)
+            item = eve.LocalSvc('michelle').GetBallpark().GetInvItem(self.id)
+            self.typeID = item.typeID
+            if item.charID is not None:
+                char_name = cfg.eveowners.GetIfExists(item.charID)
+                if char_name is None:
+                    char_name = 'NOT-CACHED-LOCALLY'
+                self.model.name = '%d - %s' % (self.id, char_name)
+            self.UnSync()
+            # Only this ship's own locators: the shared hull's are everyone's.
+            points = rig.Find('trinity.TriSplTransform')
+            self.boosters = [n for n in points if n.name.startswith('locator_booster')]
+            self.targets = [n for n in points if n.name.startswith('locator_damage')]
+            self.missiles = [n for n in points if n.name.startswith('locator_missile')]
+            self.runningupdate = 0
+            self.boosterType = 'booster_blue'
+            self.boosterSound = None
+            if _rmr_battle_strip(self):
+                self.boosters = []
+                _rmr_battle['stripped'] = _rmr_battle['stripped'] + 1
+            else:
+                self.FitBoosters()
+                if settings.user.ui.Get('trails', 1):
+                    self.AddTrails()
+            self.SetDefaultLOD()
+
+        def on_damage_state(self, damageState):
+            if getattr(self, '_rmr_rig', None) is not None and _rmr_battle_strip(self):
+                return None
+            return original_damage(self, damageState)
+
+        def explode(self, *args, **kwargs):
+            if _rmr_battle_lite(self) and _rmr_battle_strip(self):
+                now = time.clock()
+                booms = [t for t in _rmr_battle['booms'] if now - t < 1.0]
+                most = _rmr_battle_mode() == 'extreme' and 4 or 12
+                if len(booms) >= most:
+                    _rmr_battle['booms'] = booms
+                    _rmr_battle['booms_skipped'] = _rmr_battle['booms_skipped'] + 1
+                    self.exploded = True
+                    return None
+                booms.append(now)
+                _rmr_battle['booms'] = booms
+            return original_explode(self, *args, **kwargs)
+
+        def shake_camera(self, *args, **kwargs):
+            if _rmr_battle_lite(self) and _rmr_battle_strip(self):
+                return None
+            return original_shake(self, *args, **kwargs)
+
+        def flash_light(self, *args, **kwargs):
+            if _rmr_battle_lite(self) and _rmr_battle_strip(self):
+                return None
+            return original_flash(self, *args, **kwargs)
+
+        skipped = {}
+
+        def special_fx(self, *args, **kwargs):
+            # (shipID, moduleID, moduleTypeID, targetID, otherTypeID, area,
+            # guid, isOffensive, start, active, ...)
+            try:
+                shipID, moduleID, targetID, guid, start = args[0], args[1], args[3], args[6], args[8]
+            except:
+                sys.exc_clear()
+                return original_fx(self, *args, **kwargs)
+            key = (shipID, moduleID, guid)
+            if not start and skipped.has_key(key):
+                # The end of an effect never started here.
+                del skipped[key]
+                return None
+            mine = getattr(eve.session, 'shipid', None)
+            if start and shipID != mine and targetID != mine and _rmr_battle_strip():
+                skip = _rmr_battle_mode() == 'extreme' and _RMR_EXTREME_FX or _RMR_LITE_FX
+                if guid in skip:
+                    if len(skipped) > 20000:
+                        skipped.clear()
+                    skipped[key] = 1
+                    _rmr_battle['fx_skipped'] = _rmr_battle['fx_skipped'] + 1
+                    return None
+            return original_fx(self, *args, **kwargs)
+
+        def balls_added(self, ballsToAdd):
+            # Built a frame's worth at a time: a big grid fills in over a
+            # second or two instead of freezing the game.
+            started = time.clock()
+            balls = list(ballsToAdd)
+            try:
+                if _rmr_battle_mode() == 'full' or len(balls) <= _RMR_BATTLE_CHUNK:
+                    return original_added(self, balls)
+                done = 0
+                while done < len(balls):
+                    original_added(self, balls[done:done + _RMR_BATTLE_CHUNK])
+                    done = done + _RMR_BATTLE_CHUNK
+                    if done < len(balls):
+                        try:
+                            blue.pyos.synchro.Sleep(1)
+                        except:
+                            sys.exc_clear()
+            finally:
+                spent = (time.clock() - started) * 1000.0
+                _rmr_battle['batches'] = _rmr_battle['batches'] + 1
+                _rmr_battle['balls_added'] = _rmr_battle['balls_added'] + len(balls)
+                _rmr_battle['batch_ms'] = _rmr_battle['batch_ms'] + spent
+                if spent > _rmr_battle['batch_max']:
+                    _rmr_battle['batch_max'] = spent
+
+        base.LoadModel = load_model
+        ship_cls.Assemble = assemble
+        ship_cls.OnDamageState = on_damage_state
+        base.Explode = explode
+        base.ShakeCamera = shake_camera
+        base.FlashLight = flash_light
+        fx_cls.OnSpecialFX = special_fx
+        space_cls.DoBallsAdded = balls_added
+        base._rmr_battle_graphics = 1
+        _rmr_report('battle graphics: installed, mode %s (shared hulls, stripping past %d ships)' % (_rmr_battle_mode(), _RMR_BATTLE_CROWD))
+        uthread.new(_rmr_battle_reporter)
+    except:
+        _rmr_report('battle graphics: setup failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+uthread.new(_rmr_install_battle_graphics)
+
+
+def _rmr_battle_reporter():
+    # What the battle graphics did, every 20 seconds while there is something to say.
+    keys = ['ships', 'shared', 'stripped', 'fx_skipped', 'booms_skipped', 'batches', 'balls_added', 'batch_ms', 'batch_max', 'load_ms', 'failed']
+    while 1:
+        blue.pyos.synchro.Sleep(20000)
+        try:
+            if not _rmr_battle['ships'] and not _rmr_battle['batches']:
+                continue
+            if _rmr_battle['balls_added'] < 50 and not _rmr_battle['fx_skipped'] and not _rmr_battle['booms_skipped']:
+                for key in keys:
+                    _rmr_battle[key] = 0
+                continue
+            avg_load = _rmr_battle['ships'] and _rmr_battle['load_ms'] / _rmr_battle['ships'] or 0.0
+            avg_batch = _rmr_battle['batches'] and _rmr_battle['batch_ms'] / _rmr_battle['batches'] or 0.0
+            _rmr_report('battle graphics (%s, %d ships on grid): %d ships built, %d on %d shared hulls (%.2fms each); %d stripped; %d effects and %d explosions skipped; %d balls arrived in %d batches (avg %dms, max %dms); %d failed' % (
+                _rmr_battle_mode(), _rmr_battle['crowded'], _rmr_battle['ships'], _rmr_battle['shared'],
+                len(_rmr_battle['hulls']), avg_load, _rmr_battle['stripped'], _rmr_battle['fx_skipped'],
+                _rmr_battle['booms_skipped'], _rmr_battle['balls_added'], _rmr_battle['batches'],
+                avg_batch, _rmr_battle['batch_max'], _rmr_battle['failed']))
+            for key in keys:
+                _rmr_battle[key] = 0
+        except:
+            sys.exc_clear()
+
+
+def _rmr_set_battle_mode(mode):
+    if mode not in _RMR_BATTLE_MODES:
+        mode = _rmr_battle_mode()
+        text = 'Battle graphics: %s. /battlegfx full, lite or extreme to change.' % mode
+    else:
+        _rmr_battle['mode'] = mode
+        try:
+            settings.user.ui.Set('rmrBattleGfx', mode)
+        except:
+            sys.exc_clear()
+        text = {
+            'full': 'Battle graphics: full. Every ship is built as the game always did. Ships already here keep how they were built.',
+            'lite': 'Battle graphics: lite. Other ships share their hulls; past %d ships, their boosters, trails, smoke and minor effects go.' % _RMR_BATTLE_CROWD,
+            'extreme': 'Battle graphics: extreme. Other ships share their hulls and lose boosters, trails, smoke, repair and ewar beams; few explosions.',
+        }[mode]
+        _rmr_report('battle graphics: switched to ' + mode)
+    try:
+        eve.Message('CustomNotify', {'notify': text})
+    except:
+        sys.exc_clear()
+
+
+def _rmr_install_battle_command():
+    while not getattr(eve.session, 'charid', None):
+        blue.pyos.synchro.Sleep(1000)
+    try:
+        # /battlegfx on the server sends OnRemoteMessage('RmrBattleGfx', {'mode': ...}).
+        original = eve.Message
+        def message(key, *args, **kwargs):
+            if key == 'RmrBattleGfx':
+                mode = ''
+                try:
+                    mode = (args and args[0] or {}).get('mode', '')
+                except:
+                    sys.exc_clear()
+                uthread.new(_rmr_set_battle_mode, mode)
+                return None
+            return original(key, *args, **kwargs)
+        eve.Message = message
+    except:
+        _rmr_report('battle graphics: /battlegfx hook failed: ' + ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+uthread.new(_rmr_install_battle_command)
 '@
 
 

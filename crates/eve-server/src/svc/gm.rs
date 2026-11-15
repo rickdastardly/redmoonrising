@@ -26,6 +26,7 @@
 //! - /setsec <status>: your security status;
 //! - /sovdelay [hours]: how long a tower's claim takes to count, shown or set;
 //! - /botcorp <name or ticker>: a bot corporation's officers;
+//! - /battlegfx [full|lite|extreme]: how your client draws big battles;
 //! - /help.
 //! A type or a skill is its ID or its name.
 
@@ -55,7 +56,7 @@ const ATTR_SKILL_LEVEL: i32 = 280;
 const REF_GM: i32 = 25;
 const OWNER_SYSTEM: i64 = 1;
 
-const HELP: &str = "/create <type> [qty], /gmships, /giveisk <amount>, /givecorpisk <amount>, /giveskill <skill> [level], /giveallskills, /setstanding <ownerID> <standing>, /maxstandings, /setsec <status>, /clearspace, /spawn, /moveme [hub], /outpostmats [platformID], /rushanchor [structureID], /fueltower [towerID], /sovdelay [hours], /announce <text>, /online, /botcorp <name>, /tr me <place or pilot>, /bots on|off|status|event <kind>|war <a> | <b>|density <region> <x>|follow <name>|battle [here|system] [skirmish|battle|decisive]";
+const HELP: &str = "/create <type> [qty], /gmships, /giveisk <amount>, /givecorpisk <amount>, /giveskill <skill> [level], /giveallskills, /setstanding <ownerID> <standing>, /maxstandings, /setsec <status>, /clearspace, /spawn, /moveme [hub], /outpostmats [platformID], /rushanchor [structureID], /fueltower [towerID], /sovdelay [hours], /announce <text>, /online, /botcorp <name>, /battlegfx [full|lite|extreme], /tr me <place or pilot>, /bots on|off|status|event <kind>|war <a> | <b>|density <region> <x>|follow <name>|battle [here|system] [skirmish|battle|decisive]";
 
 const JOVE_RACE: i32 = 16;
 // Jove Frigate, Jove Cruiser, Jove Industrial, Jove Battleship and Polaris.
@@ -139,6 +140,7 @@ pub async fn slash(call: &Call, ctx: &Ctx<'_>) -> Option<Outcome> {
         "setsec" => set_security(ctx, &rest).await,
         "sovdelay" => sov_delay(&rest),
         "botcorp" => bot_corp(ctx, &rest).await,
+        "battlegfx" => battle_graphics(ctx, &rest),
         "bots" => match rest.first().copied() {
             Some("on") => {
                 crate::bots::set_running(true);
@@ -322,6 +324,21 @@ fn sov_delay(words: &[&str]) -> Result<String, String> {
         Ok(()) => format!("Claims now count {hours} hours after a tower comes online. Systems whose towers have stood that long change hands within a minute."),
         Err(e) => format!("Claims now count {hours} hours after a tower comes online, until the server restarts ({e})."),
     })
+}
+
+/// /battlegfx [full|lite|extreme]: tells your client (Client.bat's hook) how
+/// to draw big battles; with no word, it says which it uses.
+fn battle_graphics(ctx: &Ctx<'_>, words: &[&str]) -> Result<String, String> {
+    let mode = words.first().map(|w| w.to_ascii_lowercase()).unwrap_or_default();
+    if !mode.is_empty() && !["full", "lite", "extreme"].contains(&mode.as_str()) {
+        return Err("Usage: /battlegfx [full|lite|extreme]".into());
+    }
+    ctx.world.lock().notify(
+        &[ctx.client_id],
+        "OnRemoteMessage",
+        Value::Tuple(vec![Value::bytes("RmrBattleGfx"), Value::Dict(vec![(Value::bytes("mode"), Value::text(mode.as_str()))])]),
+    );
+    Ok(if mode.is_empty() { "Your client will say which battle graphics it uses.".into() } else { format!("Battle graphics: {mode} (your client confirms on screen).") })
 }
 
 /// /botcorp <name or ticker>: who holds a bot corporation's offices.

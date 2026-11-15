@@ -495,18 +495,16 @@ pub fn set_state_entries(park: &Park, ego: i64, station_owners: &[(i64, i64)], c
 }
 
 /// The most ships one player's client is sent at once: the dashboard's
-/// "Ships your client is sent". A 2007 client given hundreds of armed ships
-/// stalls for seconds at a time, falls behind the server's updates, and
-/// asks for the whole grid again (UpdateStateRequest), which stalls it
-/// longer: its ship snaps about and its overview is rebuilt, again and
-/// again. The battle itself is not limited; the client is sent the ships
-/// that matter most to it, and the rest fight on without being drawn.
+/// "Ships your client is sent", every ship there is by default. The client
+/// copes with thousands through its battle graphics (Client.bat: shared
+/// hulls, stripped effects, ships built a frame's worth at a time) rather
+/// than by being sent fewer; lower this only to spare a weak machine.
 static CLIENT_SHIPS: AtomicUsize = AtomicUsize::new(CLIENT_SHIPS_DEFAULT);
-pub const CLIENT_SHIPS_DEFAULT: usize = 250;
+pub const CLIENT_SHIPS_DEFAULT: usize = 20_000;
 pub const CLIENT_SHIPS_RANGE: (usize, usize) = (50, 20_000);
 /// Ships newly sent to a client in one second, past the ones that matter
-/// most: a client takes a grid in a little at a time.
-const NEW_SHIPS_A_SECOND: usize = 30;
+/// most: a grid of thousands arrives over a few seconds, not in one go.
+const NEW_SHIPS_A_SECOND: usize = 200;
 /// Titan, dreadnought, freighter, carrier and mothership groups.
 const CAPITAL_GROUPS: [i64; 5] = [30, 485, 513, 547, 659];
 
@@ -514,51 +512,24 @@ pub fn client_ships() -> usize {
     CLIENT_SHIPS.load(Ordering::Relaxed)
 }
 
-/// Each client's own share of the setting, cut when it keeps losing sync
-/// and grown back while it keeps up: (ships, when it last asked for the
-/// whole grid again, when the share last changed).
-static CLIENT_SHARE: std::sync::Mutex<BTreeMap<i64, (usize, std::time::Instant, std::time::Instant)>> = std::sync::Mutex::new(BTreeMap::new());
-/// A client asking for the grid again this soon after the last time is
-/// falling behind: it gets this share of the ships it had ...
-const RESYNC_SOON: std::time::Duration = std::time::Duration::from_secs(30);
-const RESYNC_CUT: f64 = 0.6;
-/// ... and never fewer than this.
-const CLIENT_SHIPS_FLOOR: usize = 60;
-/// Keeping up this long, it gets a quarter more again, up to the setting.
-const CLIENT_GROW_EVERY: std::time::Duration = std::time::Duration::from_secs(45);
-
-/// The most ships `client` is sent now: the setting, or less while its game
-/// has been falling behind.
-fn ships_for(client: i64) -> usize {
-    let most = client_ships();
-    let Ok(mut shares) = CLIENT_SHARE.lock() else { return most };
-    let Some((share, last_resync, changed)) = shares.get_mut(&client) else { return most };
-    let now = std::time::Instant::now();
-    while *share < most && now.duration_since(*last_resync) >= CLIENT_GROW_EVERY && now.duration_since(*changed) >= CLIENT_GROW_EVERY {
-        *share = (*share + (most / 4).max(10)).min(most);
-        *changed += CLIENT_GROW_EVERY;
-        tracing::info!("client {client} keeps up: sent up to {share} ships");
-    }
-    (*share).min(most)
+/// The most ships `client` is sent: the setting, whatever its game does.
+fn ships_for(_client: i64) -> usize {
+    client_ships()
 }
 
-/// `client` asked for the whole grid again (UpdateStateRequest). Asked again
-/// soon after the last time, its game cannot keep up with what it is sent:
-/// it is sent fewer ships, so it stops stalling, losing sync and asking
-/// again, each time with the grid's every ship rebuilt.
+/// When each client last asked for the whole grid again, for the log.
+static LAST_RESYNC: std::sync::Mutex<BTreeMap<i64, std::time::Instant>> = std::sync::Mutex::new(BTreeMap::new());
+
+/// `client` asked for the whole grid again (UpdateStateRequest). It is sent
+/// the same ships as before; asking again within half a minute is logged,
+/// as the sign of a client falling behind.
 pub fn client_resynced(client: i64) {
-    let most = client_ships();
-    let Ok(mut shares) = CLIENT_SHARE.lock() else { return };
+    let Ok(mut last) = LAST_RESYNC.lock() else { return };
     let now = std::time::Instant::now();
-    let entry = shares.entry(client).or_insert((most, now - RESYNC_SOON * 2, now));
-    let soon = now.duration_since(entry.1) < RESYNC_SOON;
-    entry.1 = now;
-    if soon {
-        let before = entry.0.min(most);
-        entry.0 = ((before as f64 * RESYNC_CUT) as usize).max(CLIENT_SHIPS_FLOOR).min(most);
-        entry.2 = now;
-        if entry.0 < before {
-            tracing::info!("client {client} keeps losing sync (asked for the grid again within {}s): sent up to {} ships for now, from {before}", RESYNC_SOON.as_secs(), entry.0);
+    if let Some(before) = last.insert(client, now) {
+        let gap = now.duration_since(before);
+        if gap < std::time::Duration::from_secs(30) {
+            tracing::info!("client {client} asked for the grid again after {:.1}s: it is falling behind", gap.as_secs_f64());
         }
     }
 }
