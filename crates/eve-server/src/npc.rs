@@ -306,6 +306,10 @@ pub struct Brain {
     /// What it goes back to when the fight is over, instead of its belt (a
     /// bot's errand).
     pub resume: Option<Command>,
+    /// Shooting its fleet's called primary: it holds where it is while the
+    /// target is in range instead of turning to orbit each new primary, so a
+    /// fleet switching targets does not send a new course for every ship.
+    anchored: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -349,6 +353,7 @@ impl Brain {
         }
         self.target = Some(target);
         self.next_think_ms = 0;
+        self.anchored = true;
         true
     }
 
@@ -380,6 +385,7 @@ pub fn bot_brain(weapons: Vec<Active>, attack_range: f64, fly_range: f64, passiv
         police: None,
         passive,
         resume: Some(resume),
+        anchored: false,
     }
 }
 
@@ -939,6 +945,7 @@ fn make_rat(t: &NpcType, wildlife: &Wildlife, belt: i64, pos: Vec3, now: i64, rn
         police: None,
         passive: false,
         resume: None,
+        anchored: false,
     };
     let mut ship = Ship::new(id, 0, stats, pilot, pos, Vec3::ZERO);
     ship.fight = Some(fighter);
@@ -993,6 +1000,7 @@ pub fn police_ship(t: &NpcType, criminal: i64, pos: Vec3, now: i64) -> Ship {
         police: Some(Police { criminal, leave_ms: now + POLICE_LINGER_MS }),
         passive: false,
         resume: None,
+        anchored: false,
     };
     let mut ship = Ship::new(id, 0, stats, pilot, pos, Vec3::ZERO);
     ship.fight = Some(fighter);
@@ -1319,11 +1327,13 @@ fn think_one(park: &mut Park, id: i64, now: i64, seen: &[Seen], enemies: &HashSe
         debug!("rat {id} locking {target} ({lock_ms} ms)");
     }
 
-    // Close in at full speed, then orbit at its preferred range.
+    // Close in at full speed, then orbit at its preferred range; on its
+    // fleet's primary and in range, it keeps its course.
     let chase = distance > brain.attack_range;
     let orbit = Command::Orbit { target, range: brain.fly_range };
     let cruise = brain.cruise;
-    let course_changed = rat.command != orbit || brain.chasing != chase;
+    let holding = brain.anchored && !chase && !brain.chasing;
+    let course_changed = !holding && (rat.command != orbit || brain.chasing != chase);
     brain.chasing = chase;
     if course_changed {
         park.command(id, orbit);
@@ -1397,6 +1407,7 @@ fn disengage(park: &mut Park, id: i64, now: i64, out: &mut Out) {
     let dropped: Vec<(i64, Lock)> = std::mem::take(&mut fight.locks).into_iter().collect();
     brain.target = None;
     brain.chasing = false;
+    brain.anchored = false;
     let home = brain.resume.clone().unwrap_or(Command::Orbit { target: brain.belt, range: brain.fly_range.max(5_000.0) });
     let cruise = if matches!(home, Command::Warp { .. }) { 1.0 } else { brain.cruise };
     for (t, lock) in dropped {

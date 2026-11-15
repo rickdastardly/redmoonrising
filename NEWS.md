@@ -2,6 +2,19 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Steadier capital fights: doomsday waves, fleets that hold position
+
+*2026-11-15 19:08 UTC*
+
+The last capital brawl never asked for the whole grid again, but the game froze for up to two and a half seconds at its busiest moments: the hot drop, the counter drop, and when the titans' doomsdays went off. These changes spread that work out.
+
+- **A doomsday is a wave.** It still kills every enemy subcapital on the grid, but as a wave going out from the titan: the nearest four first, then four more every 0.4 seconds. Before, dozens of ships blew up, left wrecks and dropped loot in the same instant.
+- **Fleets hold position on their primaries.** When a squad switches to a new primary that's already in range, its ships keep their course and shoot rather than all turning to orbit it. That's how a fleet anchors. Ships still close in when the primary is out of range. This cuts the course updates sent to your game every time a primary dies.
+- **Capitals' guns load a few at a time.** A drop of a dozen capitals no longer loads all their turrets in the same frame.
+- **The jump drive flash loads once**, before the first drop, rather than mid-fight.
+
+Restart the server and the game to get it all.
+
 ## The jump drive flash, drawn by the game itself
 
 *2026-11-15 19:04 UTC*

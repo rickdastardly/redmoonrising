@@ -390,6 +390,9 @@ pub enum BattleOrder {
     Volley { ship: i64, target: i64, damage: f64 },
     /// A logistics ship's remote repair: shield (shield transfer) or armor.
     Repair { from: i64, to: i64, amount: f64, shield: bool },
+    /// A doomsday's wave going out: the ships still to be hit, nearest
+    /// first, a few each tick from `next_ms`.
+    DoomsdayWave { titan: i64, char_id: i64, ship_type: i64, targets: Vec<i64>, next_ms: i64 },
 }
 
 /// A bot ship or capsule destroyed in space.

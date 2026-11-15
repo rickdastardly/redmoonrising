@@ -3674,6 +3674,15 @@ _rmr_battle = {
 }
 
 
+def _rmr_preload_jump_flash():
+    # Loaded once ahead of the first drop, so the first flash does not stall
+    # the game while it reads the effect from disk.
+    try:
+        eve.rot.GetCopy('res:\\Model\\Effect\\JumpDrive_in.blue')
+    except:
+        sys.exc_clear()
+
+
 def _rmr_jump_flash(shipID):
     # A capital landing on a cyno, or a ship through a titan's bridge: the
     # jump drive's flash, drawn here once the ship's model is in, the size
@@ -3743,6 +3752,9 @@ _RMR_CAPITAL_GROUPS = (30, 485, 547, 659)
 
 def _rmr_fit_capital(ball):
     try:
+        # Spread out: a drop of a dozen capitals loading their guns in the
+        # same frame stalls the game.
+        blue.pyos.synchro.Sleep(300 + (ball.id % 25) * 120)
         if getattr(ball, 'fitted', 0) or getattr(ball, 'model', None) is None:
             return
         ball.FitHardpoints()
@@ -4113,6 +4125,7 @@ def _rmr_install_battle_graphics():
         fx_cls.OnSpecialFX = OnSpecialFX
         space_cls.DoBallsAdded = DoBallsAdded
         base._rmr_battle_graphics = 1
+        uthread.new(_rmr_preload_jump_flash)
         _rmr_report('battle graphics: installed, mode %s (shared hulls, stripping past %d ships)' % (_rmr_battle_mode(), _RMR_BATTLE_CROWD))
         uthread.new(_rmr_battle_reporter)
     except:
