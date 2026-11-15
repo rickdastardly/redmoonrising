@@ -191,10 +191,6 @@ fn battle_orders(park: &mut Park, now: i64, out: &mut Out) {
     const CAPITAL_GROUPS: [i64; 5] = [30, 485, 513, 547, 659];
     let (tick, system) = (park.tick, park.solar_system_id);
     let by = |ship: &Ship| Attacker { ship_id: ship.id, char_id: ship.pilot.char_id, client_id: None, ship_type: ship.pilot.type_id, weapon_type: 0 };
-    // A doomsday kills this many ships at most every this long.
-    const DOOMSDAY_WAVE_EACH: usize = 4;
-    const DOOMSDAY_WAVE_EVERY_MS: i64 = 400;
-    let mut waves = Vec::new();
     for order in std::mem::take(&mut park.battle_orders) {
         match order {
             crate::ballpark::BattleOrder::Doomsday { titan, hostile } => {
@@ -222,30 +218,8 @@ fn battle_orders(park: &mut Park, now: i64, out: &mut Out) {
                 };
                 out.destiny(system, crate::svc::space::module_type_fx(tick, titan, crate::npc::slot::mount(titan, 9), doomsday, None, "effects.EMPWaveGrid"));
                 info!("titan {titan} fires its doomsday on {} ship(s) in {system}", targets.len());
-                // The wave goes out from the titan: the nearest die first, the
-                // rest over the next seconds, so dozens of wrecks and
-                // explosions do not land in one tick.
-                let mut targets = targets;
-                targets.sort_by(|a, b| {
-                    let d = |id: &i64| park.ships.get(id).map_or(f64::MAX, |s| (s.pos - at).len());
-                    d(b).total_cmp(&d(a))
-                });
-                waves.push(crate::ballpark::BattleOrder::DoomsdayWave { titan, char_id: attacker.char_id, ship_type: attacker.ship_type, targets, next_ms: now });
-            }
-            crate::ballpark::BattleOrder::DoomsdayWave { titan, char_id, ship_type, mut targets, next_ms } => {
-                if now < next_ms {
-                    waves.push(crate::ballpark::BattleOrder::DoomsdayWave { titan, char_id, ship_type, targets, next_ms });
-                    continue;
-                }
-                let attacker = Attacker { ship_id: titan, char_id, client_id: None, ship_type, weapon_type: 0 };
-                for _ in 0..DOOMSDAY_WAVE_EACH {
-                    let Some(t) = targets.pop() else { break };
-                    if park.ships.get(&t).is_some_and(|s| s.fight.is_some() && !s.in_warp()) {
-                        hit(park, attacker, t, [1.0e9; 4], Shot::Hit { quality: 3, multiplier: 1.0 }, "Doomsday", now, out);
-                    }
-                }
-                if !targets.is_empty() {
-                    waves.push(crate::ballpark::BattleOrder::DoomsdayWave { titan, char_id, ship_type, targets, next_ms: now + DOOMSDAY_WAVE_EVERY_MS });
+                for t in targets {
+                    hit(park, attacker, t, [1.0e9; 4], Shot::Hit { quality: 3, multiplier: 1.0 }, "Doomsday", now, out);
                 }
             }
             crate::ballpark::BattleOrder::Bombard { ship, tower, damage } => {
@@ -284,7 +258,6 @@ fn battle_orders(park: &mut Park, now: i64, out: &mut Out) {
             }
         }
     }
-    park.battle_orders.extend(waves);
 }
 
 fn doomsday(park: &mut Park, ship_id: i64, weapon: &Active, now: i64, out: &mut Out) {

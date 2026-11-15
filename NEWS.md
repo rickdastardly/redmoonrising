@@ -2,13 +2,25 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
-## Steadier capital fights: doomsday waves, fleets that hold position
+## No more warping off and being dragged back
+
+*2026-11-15 19:16 UTC*
+
+**Doomsdays are back as they were:** every enemy subcapital on the grid dies at once.
+
+**Warping out of a battle in a big ship.** A titan (or any big ship) in the middle of a fight could warp off on your screen, keep the whole battle on its overview, land at the station 20 AU away and then be dragged back. The server never let it warp: dozens of small ships orbiting through its hull each stopped it dead as they touched it, so it never got up to warp speed. Your game didn't see those bumps the same way and warped you anyway.
+
+- A ship 50 times heavier than another is no longer stopped by bumping into it. The smaller ship still bounces off.
+- Should your ship still be aligning well past the time its agility allows, the server sends it into warp anyway, as your game already has. That's three-quarters again of the time to reach three-quarters speed, plus eight seconds to turn. The server log notes when it does this.
+
+Restart the server to get it.
+
+## Steadier capital fights: fleets that hold position
 
 *2026-11-15 19:08 UTC*
 
-The last capital brawl never asked for the whole grid again, but the game froze for up to two and a half seconds at its busiest moments: the hot drop, the counter drop, and when the titans' doomsdays went off. These changes spread that work out.
+The last capital brawl never asked for the whole grid again, but the game froze for up to two and a half seconds at its busiest moments: the hot drop, the counter drop, and when capitals were dying. These changes spread that work out.
 
-- **A doomsday is a wave.** It still kills every enemy subcapital on the grid, but as a wave going out from the titan: the nearest four first, then four more every 0.4 seconds. Before, dozens of ships blew up, left wrecks and dropped loot in the same instant.
 - **Fleets hold position on their primaries.** When a squad switches to a new primary that's already in range, its ships keep their course and shoot rather than all turning to orbit it. That's how a fleet anchors. Ships still close in when the primary is out of range. This cuts the course updates sent to your game every time a primary dies.
 - **Capitals' guns load a few at a time.** A drop of a dozen capitals no longer loads all their turrets in the same frame.
 - **The jump drive flash loads once**, before the first drop, rather than mid-fight.

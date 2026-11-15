@@ -56,6 +56,18 @@ pub const LOCAL_GRID_RANGE: f64 = 1_000_000.0;
 /// is over 0.75 of the maximum (squared: 0.5625).
 const WARP_ALIGN: f64 = 0.01;
 const WARP_ENTRY_SPEED_SQ: f64 = 0.5625;
+/// A ship this many times heavier than another is not stopped by bumping
+/// it: a titan in the middle of a battle has dozens of small ships
+/// orbiting through it, and each overlap took its whole velocity away, so it
+/// never aligned to warp here while the player's game, which did not see
+/// those overlaps the same way, warped it off.
+const SHRUG_OFF_MASS: f64 = 50.0;
+/// A player's ship still aligning this long after it should have been
+/// aligned (time to three-quarters speed, and three-quarters again, and a few
+/// seconds to turn) goes into warp anyway, as the player's game already
+/// has: no more warping off on screen and being dragged back.
+const ALIGN_GRACE: f64 = 1.75;
+const ALIGN_TURN_SECS: f64 = 8.0;
 /// Warp speed per point of warp factor: 0.1 AU/s (0x1005a598).
 const WARP_FACTOR_SPEED: f64 = 14_959_787_070.0;
 /// The warp's top speed is also limited to 1.5 times its distance per second.
@@ -221,8 +233,8 @@ pub enum Command {
 
 #[derive(Debug, Clone, Copy)]
 enum WarpState {
-    /// Turning and speeding up towards the warp point.
-    Aligning { intercepted: bool },
+    /// Turning and speeding up towards the warp point, since `since` (a tick).
+    Aligning { intercepted: bool, since: i64 },
     /// On the way: `start` is the tick the warp began, `distance` from where
     /// it began to `exit`.
     InWarp { exit: Vec3, back: Vec3, distance: f64, start: i64, intercepted: bool },
@@ -390,9 +402,6 @@ pub enum BattleOrder {
     Volley { ship: i64, target: i64, damage: f64 },
     /// A logistics ship's remote repair: shield (shield transfer) or armor.
     Repair { from: i64, to: i64, amount: f64, shield: bool },
-    /// A doomsday's wave going out: the ships still to be hit, nearest
-    /// first, a few each tick from `next_ms`.
-    DoomsdayWave { titan: i64, char_id: i64, ship_type: i64, targets: Vec<i64>, next_ms: i64 },
 }
 
 /// A bot ship or capsule destroyed in space.
@@ -543,6 +552,7 @@ impl Park {
             },
             other => (other, false),
         };
+        let tick = self.tick;
         let ship = self.ships.get_mut(&ship_id).expect("ship is still in the park");
         ship.warp = None;
         match &command {
@@ -550,7 +560,7 @@ impl Park {
             Command::Direction(d) => ship.goal = ship.pos + d.unit() * GOTO_DIRECTION_REACH,
             Command::Warp { target, .. } => {
                 ship.goal = *target;
-                ship.warp = Some(WarpState::Aligning { intercepted });
+                ship.warp = Some(WarpState::Aligning { intercepted, since: tick });
             }
             _ => {}
         }
@@ -623,6 +633,7 @@ impl Park {
         // destiny walks its balls in ID order, and a warp that starts changes
         // its followers on the spot, so later ones see it the same tick.
         let ids: Vec<i64> = self.ships.keys().copied().collect();
+        let tick = self.tick;
         for id in ids {
             let Some(ship) = self.ships.get_mut(&id) else { continue };
             let mut warped = false;
@@ -644,7 +655,16 @@ impl Park {
                     None => lose_target(ship),
                 },
                 Command::Warp { range, .. } => match ship.warp {
-                    Some(WarpState::Aligning { intercepted }) if aligned(ship) => {
+                    Some(WarpState::Aligning { intercepted, since }) if aligned(ship) || align_overdue(ship, since, tick) => {
+                        if !aligned(ship) {
+                            tracing::info!(
+                                "player warp: ship {} still aligning after {}s at {:.1}/{:.1} m/s: into warp anyway, as the player's game has",
+                                ship.id,
+                                tick - since,
+                                ship.vel.len(),
+                                ship.stats.max_velocity
+                            );
+                        }
                         enter_warp(ship, range, now, intercepted);
                         warped = true;
                         Vec3::ZERO
@@ -734,7 +754,11 @@ impl Park {
         for a in &bodies[..movers] {
             let prev_vel = self.ships[&a.id].prev_vel;
             let mut best: Option<(f64, Vec3)> = None;
-            for b in bodies.iter().filter(|b| b.id != a.id && !b.field.is_some_and(|f| passes(f, a.key))) {
+            for b in bodies
+                .iter()
+                .filter(|b| b.id != a.id && !b.field.is_some_and(|f| passes(f, a.key)))
+                .filter(|b| !(b.free && b.mass * SHRUG_OFF_MASS < a.mass))
+            {
                 let Some((toi, push)) = bounce(a, prev_vel, b) else { continue };
                 let push = push * BOUNCE;
                 // The latest contact of the tick wins; of two at the same
@@ -850,6 +874,17 @@ fn orbit(ship: &Ship, at: Vec3, reach: f64, now: i32) -> Vec3 {
 }
 
 /// Lined up and fast enough to warp (Evolve, case 3).
+/// A player's ship aligning far longer than its agility allows: something
+/// here held it back that the player's game did not see.
+fn align_overdue(ship: &Ship, since: i64, tick: i64) -> bool {
+    if !ship.is_player() {
+        return false;
+    }
+    let tau = ship.stats.inertia() / FRICTION;
+    let expected = tau * 4f64.ln() * ALIGN_GRACE + ALIGN_TURN_SECS;
+    (tick - since) as f64 * DT > expected
+}
+
 fn aligned(ship: &Ship) -> bool {
     let to = (ship.goal - ship.pos).unit();
     let off = (1.0 - to.dot(ship.vel.unit())).abs();
