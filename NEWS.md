@@ -2,6 +2,18 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Battles build up instead of arriving all at once
+
+*2026-11-15 17:34 UTC*
+
+**Battles you watch now build up instead of arriving all at once.** Hundreds of ships landing in the same few seconds stalled the game. It fell behind, asked for the whole grid again, stalled again rebuilding it, and kept going round that loop.
+
+- **Smallest ships first.** Each side's frigates and destroyers come first, then cruisers, battlecruisers and finally battleships.
+- **A slow build-up.** For the first minute and a half, three ships a side warp in every eight seconds. Then six a side every six seconds, ten every five from four minutes in, and fifteen every five from eight minutes. Every ship each side brought still comes in the end.
+- **Capitals once the fight is going.** About six minutes in, the first side lights its cyno, and its capitals jump in six at a time: dreadnoughts and carriers first, the titan last. A minute and a half after they land, the other side lights its own.
+
+This applies to every battle fought where a player can see it, whether you started it with **/bots battle** or a bot siege happens near you.
+
 ## Every ship in the battle, drawn cheaply
 
 *2026-11-15 02:31 UTC*

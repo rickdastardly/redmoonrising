@@ -53,24 +53,53 @@ const ATTRITION: f64 = 1.0 / 900.0;
 /// A side that falls to this share of what it brought, outnumbered two to
 /// one, withdraws.
 const ROUT: f64 = 0.2;
-/// Reinforcements warp in this often, in waves.
-const REINFORCE: Duration = Duration::from_secs(5);
-/// The most ships one side warps onto the grid in a wave: hundreds landing
-/// in the same second stall a watching client for half a minute (it loads
-/// every new ship at once), and its ship seems to jump about as it catches
-/// up. A wave every few seconds fills the grid smoothly, with no limit on
-/// how many come in the end.
-const WAVE_MOST: usize = 25;
+/// Reinforcements warp in this often, in waves (the build-up's first step).
+const REINFORCE: Duration = Duration::from_secs(8);
+/// How a battle builds up where players see it: from this many seconds
+/// into the fight, a wave every so many seconds of up to so many ships a
+/// side. Tackle and scouts first, then the line, then the main fleets:
+/// hundreds landing together stall a watching client for seconds, it falls
+/// behind and asks for the whole grid again, which stalls it again. Built
+/// up a few ships at a time it keeps up, and every ship still comes in the
+/// end. Each side's reserve comes smallest hulls first (`smallest_first`).
+const BUILD_UP: [(u64, u64, usize); 4] = [(0, 8, 3), (90, 6, 6), (240, 5, 10), (480, 5, 15)];
 /// Capitals jump through a cyno in waves of up to this many.
-const JUMP_WAVE_MOST: usize = 50;
-/// Fought where players see it: the subcapital fleets fight this long
-/// before the first side lights its cyno and its capitals jump in ...
-const CYNO_FIRST: Duration = Duration::from_secs(60);
+const JUMP_WAVE_MOST: usize = 6;
+/// Fought where players see it: the subcapital fleets build up and fight
+/// this long before the first side lights its cyno and its capitals jump
+/// in, dreadnoughts and carriers first, titans last ...
+const CYNO_FIRST: Duration = Duration::from_secs(360);
 /// ... and the other side lights its own this long after they land.
-const CYNO_ANSWER: Duration = Duration::from_secs(40);
+const CYNO_ANSWER: Duration = Duration::from_secs(90);
 /// Should the first side never get its capitals in, the other lights its
 /// cyno anyway this much later.
-const CYNO_LATE: Duration = Duration::from_secs(90);
+const CYNO_LATE: Duration = Duration::from_secs(120);
+
+/// The wave every so often, and its most ships a side, `fighting` into a
+/// battle players see.
+fn build_up(fighting: Duration) -> (Duration, usize) {
+    let secs = fighting.as_secs();
+    let &(_, every, most) = BUILD_UP.iter().rev().find(|(from, _, _)| secs >= *from).unwrap_or(&BUILD_UP[0]);
+    (Duration::from_secs(every), most)
+}
+
+/// Orders a side's reserve so its smallest hulls come first (the reserve is
+/// called up from its end), the nearest first within a class.
+fn smallest_first(reserve: &mut [u32], bots: &[Bot], yard: Option<&super::ships::Shipyard>) {
+    let class = |i: &u32| yard.map_or(0, |y| super::ships::weight_class(y.group_of(bots[*i as usize].hull)));
+    reserve.sort_by_key(|i| std::cmp::Reverse(class(i)));
+}
+
+/// Orders the capitals waiting for a cyno so dreadnoughts and carriers jump
+/// first and titans last (they are called from the end).
+fn titans_last(waiting: &mut [u32], side_caps: &[Assigned]) {
+    let rank = |i: &u32| match side_caps.iter().find(|a| a.bot == *i).map(|a| a.class) {
+        Some(Class::Titan) => 0,
+        Some(Class::Carrier) => 1,
+        _ => 2,
+    };
+    waiting.sort_by_key(rank);
+}
 /// Allies at war with the other side who may join each side.
 const ALLIES_MAX: usize = 3;
 const ALLY_CHANCE: f64 = 0.5;
@@ -413,6 +442,7 @@ pub async fn run(
                 let plan = capitals::plan(side.brought, f.stakes, side.quality, s.showcase.is_some(), rng);
                 let yard = presence.yard.clone();
                 side.caps = capitals::assign(&side.reserve, bots, &plan, |hull| yard.as_ref().map_or(4, |y| y.race_of(hull)));
+                smallest_first(&mut side.reserve, bots, yard.as_deref());
             }
             let allies = |side: &Side| if side.ally_names.is_empty() { String::new() } else { format!(" with {}", side.ally_names.join(", ")) };
             let now = crate::bulkdata::filetime_now();
@@ -695,7 +725,10 @@ fn take_down_beacon(f: &mut Fight, system: i32, world: &World) {
 /// grid, the rest of its fleet comes through the titan's bridge.
 #[allow(clippy::too_many_arguments)]
 fn reinforce(f: &mut Fight, system: i32, world: &World, bots: &mut [Bot], presence: &mut Presence, clock: u32, report: &mut Report) {
-    if f.last_wave.elapsed() < REINFORCE {
+    // The build-up: a few ships a side at first, more as the fight goes on.
+    let fighting = f.seen_since.map_or(Duration::ZERO, |t| t.elapsed());
+    let (every, wave_most) = build_up(fighting);
+    if f.last_wave.elapsed() < every {
         return;
     }
     f.last_wave = Instant::now();
@@ -705,7 +738,6 @@ fn reinforce(f: &mut Fight, system: i32, world: &World, bots: &mut [Bot], presen
     let room = if f.showcase { usize::MAX } else { (presence.cap().saturating_sub(ROOM_FOR_OTHERS) / 2).max(1) };
     // The cyno sequence: the subcapitals fight first; one side lights a
     // cyno and its capitals jump in; the other answers with its own.
-    let fighting = f.seen_since.map_or(Duration::ZERO, |t| t.elapsed());
     let landed = [f.attack.landed, f.defend.landed];
     let first = f.first_cyno;
     let may_cyno = |me: usize| {
@@ -722,7 +754,7 @@ fn reinforce(f: &mut Fight, system: i32, world: &World, bots: &mut [Bot], presen
         let bridge = titan_on_grid(side, system, world, presence);
         let mut bridged = 0;
         let mut arrived = 0;
-        while side.on_grid.len() < room && arrived < WAVE_MOST {
+        while side.on_grid.len() < room && arrived < wave_most {
             let Some(i) = side.reserve.pop() else { break };
             if bots[i as usize].pod.is_some() || bots[i as usize].activity == Activity::Sieging {
                 continue;
@@ -758,6 +790,9 @@ fn reinforce(f: &mut Fight, system: i32, world: &World, bots: &mut [Bot], presen
             }
         }
         let Some((beacon, at)) = side.cyno else { continue };
+        if side.landed.is_none() {
+            titans_last(&mut side.waiting, &side.caps);
+        }
         let mut jumped: Vec<&'static str> = Vec::new();
         while side.on_grid.len() < room && jumped.len() < JUMP_WAVE_MOST {
             let Some(i) = side.waiting.pop() else { break };
