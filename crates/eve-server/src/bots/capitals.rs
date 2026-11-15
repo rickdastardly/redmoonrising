@@ -181,6 +181,9 @@ pub fn fit(hull: i32) -> Option<Vec<(i32, i64)>> {
         // come from `fighters`.
         23757 | 23911 => vec![(CAPITAL_REMOTE_ARMOR, 2), tank(false), (DAMAGE_CONTROL, 1)],
         23915 | 24483 => vec![(CAPITAL_REMOTE_ARMOR, 2), tank(true), (DAMAGE_CONTROL, 1)],
+        // Motherships: Aeon, Nyx (armour), Wyvern, Hel (shields).
+        23919 | 23913 => vec![(CAPITAL_REMOTE_ARMOR, 3), tank(false), (DAMAGE_CONTROL, 1)],
+        23917 | 22852 => vec![(CAPITAL_REMOTE_ARMOR, 3), tank(true), (DAMAGE_CONTROL, 1)],
         // Titans: Avatar, Leviathan, Erebus, Ragnarok.
         11567 => vec![(JUDGEMENT, 1), (DUAL_GIGA_PULSE, 4), (MULTIFREQUENCY_XL, 4), tank(false), (DAMAGE_CONTROL, 1)],
         3764 => vec![(AURORA_OMINAE, 1), (CITADEL_LAUNCHER, 4), (DOOM_TORPEDO, 80), tank(true), (DAMAGE_CONTROL, 1)],
@@ -188,6 +191,76 @@ pub fn fit(hull: i32) -> Option<Vec<(i32, i64)>> {
         23773 => vec![(GJALLARHORN, 1), (QUAD_3500MM_ARTY, 4), (PHASED_PLASMA_XL, 400), tank(true), (DAMAGE_CONTROL, 1)],
         _ => return None,
     })
+}
+
+/// Every capital hull with a fitting here.
+const CAPITAL_HULLS: [i32; 16] = [19720, 19726, 19724, 19722, 23757, 23911, 23915, 24483, 23919, 23913, 23917, 22852, 11567, 3764, 671, 23773];
+
+/// Capital killmails written before capitals carried their fittings (or
+/// for a mothership, which had none) list nothing lost. Once, in the
+/// background at start: every bot's capital killmail with no items is given
+/// the fitting that hull flies with, and a carrier's fighters, about half
+/// of it dropped, in the slots `losses::bot_kill_items` puts them in.
+pub async fn refit_capital_kills(db_url: String) {
+    let mut db = match crate::db::connect(&db_url).await {
+        Ok(db) => db,
+        Err(e) => {
+            tracing::warn!("refitting capital killmails: {}", crate::logging::chain(&e));
+            return;
+        }
+    };
+    let hulls: Vec<i32> = CAPITAL_HULLS.to_vec();
+    let kills: Vec<(i64, i32)> = match db
+        .query(
+            r#"SELECT k."killID", k."victimShipTypeID" FROM "killLog" k
+                WHERE k."victimShipTypeID" = ANY($1)
+                  AND EXISTS (SELECT 1 FROM "bots" b WHERE b."characterID" = k."victimCharID")
+                  AND NOT EXISTS (SELECT 1 FROM "killLogItems" i WHERE i."killID" = k."killID")"#,
+            &[&hulls],
+        )
+        .await
+    {
+        Ok(rows) => rows.iter().map(|r| (r.get(0), r.get(1))).collect(),
+        Err(e) => {
+            tracing::warn!("finding capital killmails to refit: {}", crate::logging::chain(&e));
+            return;
+        }
+    };
+    let mut done = 0;
+    for (kill, hull) in &kills {
+        let Some(fitting) = fit(*hull) else { continue };
+        let mut rng = Rng::seeded(*kill as u64 ^ 0xcaf1_7ed0);
+        let mut items: Vec<crate::losses::BotItem> = fitting
+            .into_iter()
+            .map(|(type_id, quantity)| crate::losses::BotItem { type_id: i64::from(type_id), quantity, fitted: true, dropped: rng.unit() < 0.5 })
+            .collect();
+        if let Some((fighter, n)) = fighters(i64::from(*hull)) {
+            items.push(crate::losses::BotItem { type_id: fighter, quantity: n as i64, fitted: true, dropped: rng.unit() < 0.5 });
+        }
+        let result = async {
+            let tx = db.transaction().await?;
+            let slotted = crate::losses::bot_kill_items(&tx, &items).await;
+            for (kind, flag, quantity, dropped) in &slotted {
+                tx.execute(
+                    r#"INSERT INTO "killLogItems" ("killID","typeID","flag","quantity","dropped") VALUES ($1,$2,$3,$4,$5)"#,
+                    &[kill, kind, flag, quantity, dropped],
+                )
+                .await?;
+            }
+            tx.commit().await
+        }
+        .await;
+        match result {
+            Ok(()) => done += 1,
+            Err(e) => {
+                tracing::warn!("refitting capital killmail {kill}: {}", crate::logging::chain(&e));
+                return;
+            }
+        }
+    }
+    if done > 0 {
+        tracing::info!("killboard: gave {done} older capital killmails the fittings their ships flew with");
+    }
 }
 
 /// The recon hulls that carry a cynosural field generator into a battle.

@@ -683,8 +683,13 @@ pub async fn tick(p: &mut Politics, db: &Client, bots: &[Bot], ids: &mut [Identi
             let i = free[rng.below(free.len())];
             let want = if combat(bots[i].role) { KIND_COMBAT_CORP } else { KIND_INDUSTRIAL_CORP };
             let fitting: Vec<i32> = corps.iter().filter(|(_, k)| *k == want).map(|(id, _)| *id).collect();
-            // The more space a corporation's alliance holds, the more it draws.
-            let weight = |c: &i32| 1.0 + p.corps.get(c).and_then(|c| c.alliance).and_then(|a| p.held.get(&a)).copied().unwrap_or(0) as f64 / 2.0;
+            // The more space a corporation's alliance holds, the more it
+            // draws; a player alliance's corporations three times as much.
+            let weight = |c: &i32| {
+                let alliance = p.corps.get(c).and_then(|c| c.alliance);
+                let held = alliance.and_then(|a| p.held.get(&a)).copied().unwrap_or(0) as f64;
+                (1.0 + held / 2.0) * if alliance.is_some_and(|a| !p.alliances.contains_key(&a)) { 3.0 } else { 1.0 }
+            };
             let total: f64 = fitting.iter().map(weight).sum();
             let mut roll = rng.unit() * total;
             let Some(&corp) = fitting.iter().find(|c| {

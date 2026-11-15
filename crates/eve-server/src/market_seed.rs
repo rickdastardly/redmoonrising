@@ -360,3 +360,74 @@ pub async fn seeded_ids(db: &Client) -> Result<Vec<i32>, Error> {
 }
 
 pub const FIRST_PLAYER: i32 = FIRST_PLAYER_ID;
+
+/// Outposts the bots' traders have stocked (once each: the dashboard can
+/// stop seeding one and it stays stopped).
+const TRADER_TABLE: &str = r#"CREATE TABLE IF NOT EXISTS "rmrTraderOutposts" ("stationID" integer PRIMARY KEY)"#;
+
+/// The bots' traders keep null-sec's markets stocked with no dashboard
+/// needed: a new outpost's market is seeded within a few minutes of it
+/// going up (its alliance told in alliance chat), and every seeded
+/// station is topped up each hour.
+pub async fn traders_stock_outposts(db_url: String) {
+    let db = match crate::db::connect(&db_url).await {
+        Ok(db) => db,
+        Err(e) => {
+            tracing::warn!("market: the bots' traders cannot reach the database: {}", crate::logging::chain(&e));
+            return;
+        }
+    };
+    let mut topped = std::time::Instant::now();
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(3 * 60)).await;
+        if let Err(e) = stock_new_outposts(&db).await {
+            tracing::warn!("market: stocking new outposts: {}", crate::logging::chain(&e));
+        }
+        if topped.elapsed() >= std::time::Duration::from_secs(3_600) {
+            topped = std::time::Instant::now();
+            match seeded_ids(&db).await {
+                Ok(all) if !all.is_empty() => match stock_stations(&db, &all).await {
+                    Ok((added, restocked)) => info!(stations = all.len(), added, restocked, "market: the bots' traders topped up the seeded markets"),
+                    Err(e) => tracing::warn!("market: topping up seeded markets: {}", crate::logging::chain(&e)),
+                },
+                Ok(_) => {}
+                Err(e) => tracing::warn!("market: reading seeded markets: {}", crate::logging::chain(&e)),
+            }
+        }
+    }
+}
+
+async fn stock_new_outposts(db: &Client) -> Result<(), Error> {
+    db.batch_execute(SEEDED_TABLE).await?;
+    db.batch_execute(TRADER_TABLE).await?;
+    let rows = db
+        .query(
+            r#"SELECT s."stationID", COALESCE(s."stationName", ''), COALESCE(co."allianceID", 0)::int8, s."corporationID"::int8
+                 FROM "staStations" s LEFT JOIN "corporation" co ON co."corporationID" = s."corporationID"
+                WHERE s."corporationID" >= $1
+                  AND NOT EXISTS (SELECT 1 FROM "rmrTraderOutposts" t WHERE t."stationID" = s."stationID")"#,
+            &[&FIRST_PLAYER_ID],
+        )
+        .await?;
+    for r in rows {
+        let (station, name, alliance, corp): (i32, String, i64, i64) = (r.get(0), r.get(1), r.get(2), r.get(3));
+        let seeded: bool = db
+            .query_one(r#"SELECT EXISTS (SELECT 1 FROM "rmrSeededStations" WHERE "stationID" = $1)"#, &[&station])
+            .await?
+            .get(0);
+        if !seeded {
+            let (added, restocked) = seed_station(db, station).await?;
+            info!(station, added, restocked, "market: the bots' traders stocked a new outpost");
+            if alliance != 0 {
+                crate::bots::talk::alliance_report(
+                    alliance,
+                    Some(corp),
+                    None,
+                    format!("Our traders have stocked the market at {name}: ships, modules, ammo and fuel are on sale there now, and we'll keep it topped up."),
+                );
+            }
+        }
+        db.execute(r#"INSERT INTO "rmrTraderOutposts" ("stationID") VALUES ($1) ON CONFLICT DO NOTHING"#, &[&station]).await?;
+    }
+    Ok(())
+}

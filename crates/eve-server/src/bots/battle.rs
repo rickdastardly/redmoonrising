@@ -103,6 +103,9 @@ fn titans_last(waiting: &mut [u32], side_caps: &[Assigned]) {
 /// Allies at war with the other side who may join each side.
 const ALLIES_MAX: usize = 3;
 const ALLY_CHANCE: f64 = 0.5;
+/// A player alliance's side fights this much better (a bot alliance still
+/// wins its share).
+const PLAYER_EDGE: f64 = 1.25;
 /// How often, fought where players see it, the capitals act: sieged
 /// dreadnoughts fire on the tower, logistics repair, titans look to fire.
 const ORDERS_EVERY: Duration = Duration::from_secs(5);
@@ -570,18 +573,20 @@ fn capitalise(s: &str) -> String {
 fn assemble(s: &Siege, bots: &[Bot], ids: &[Identity], presence: &Presence, p: &Politics, rng: &mut Rng, report: &mut Report) -> Option<Fight> {
     let _ = report;
     let stakes = s.showcase.unwrap_or_else(|| Stakes::roll(rng));
-    let wealth = |side: i32| 1.0 + (p.treasury.get(&side).copied().unwrap_or(0.0) / 5_000_000_000.0).clamp(0.0, 1.0);
+    let wealth = |side: i32| (1.0 + (p.treasury.get(&side).copied().unwrap_or(0.0) / 5_000_000_000.0).clamp(0.0, 1.0)) * if p.alliances.contains_key(&side) { 1.0 } else { PLAYER_EDGE };
     // Allies: others at war with the enemy, some of whom come.
     let allies_of = |me: i32, enemy: i32, rng: &mut Rng| -> Vec<i32> {
         let mut out: Vec<i32> = p
             .wars
             .iter()
             .filter_map(|w| if w.a == enemy { Some(w.b) } else if w.b == enemy { Some(w.a) } else { None })
-            .filter(|a| *a != me && p.alliances.contains_key(a))
+            .filter(|a| *a != me && (p.alliances.contains_key(a) || p.player_sov.contains_key(a)))
             .collect();
         out.sort_unstable();
         out.dedup();
-        out.retain(|_| rng.unit() < ALLY_CHANCE);
+        // A player alliance at war with the enemy always comes, and first.
+        out.retain(|a| !p.alliances.contains_key(a) || rng.unit() < ALLY_CHANCE);
+        out.sort_by_key(|a| p.alliances.contains_key(a));
         out.truncate(ALLIES_MAX.min(super::sov_warfare().max_allies()));
         out
     };

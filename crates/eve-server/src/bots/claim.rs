@@ -54,6 +54,25 @@ const GROUP_PLANET: i32 = 7;
 const OFF_PLANET: f64 = 150_000.0;
 /// How often the alliance hears that its bots cannot pay.
 const BROKE_EVERY: Duration = Duration::from_secs(30 * 60);
+/// Corp tax on bounties while an alliance raises ISK for its claims.
+pub const RAISING_TAX: f64 = 0.3;
+
+/// Alliances short of ISK for a tower or outpost: their pilots rat, and
+/// their corporations take more of the bounties, until it is paid for.
+static RAISING: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
+
+pub fn fundraising() -> Vec<i32> {
+    RAISING.lock().map(|r| r.clone()).unwrap_or_default()
+}
+
+fn raising(alliance: i32, on: bool) {
+    if let Ok(mut r) = RAISING.lock() {
+        r.retain(|a| *a != alliance);
+        if on {
+            r.push(alliance);
+        }
+    }
+}
 
 /// The alliances whose bots are claiming space, and what they last said.
 #[derive(Default)]
@@ -167,6 +186,7 @@ pub async fn order(c: &mut Campaigns, db: &Client, p: &mut Politics, alliance: i
             alliance_report(alliance as i64, Some(executor as i64), ceo.map(|(id, ..)| id as i64), text);
         }
         SovOrder::Stop => {
+            raising(alliance, false);
             if let Err(e) = db.execute(r#"DELETE FROM "rmrSovCampaigns" WHERE "allianceID" = $1"#, &[&alliance]).await {
                 error!("bots: ending alliance {alliance}'s sovereignty order: {}", crate::logging::chain(&e));
             }
@@ -535,7 +555,9 @@ impl Campaign {
     }
 
     /// Takes `cost` from the richest bot corporation of the alliance that
-    /// can pay it; None (and the alliance told, now and then) if none can.
+    /// can pay it, or from all of them together; None (and the alliance
+    /// told, now and then, that its pilots are off ratting for it) if they
+    /// cannot. Returns the corporation that paid most.
     async fn pay(&self, c: &mut Campaigns, db: &Client, bot_corps: &[i32], cost: f64, what: &str) -> Result<Option<i32>, tokio_postgres::Error> {
         let paid = db
             .query_opt(
@@ -549,11 +571,45 @@ impl Campaign {
             .await?
             .and_then(|r| int(&r, 0))
             .map(|v| v as i32);
+        // No one corporation can: all of them together, the richest first.
+        let paid = match paid {
+            Some(corp) => Some(corp),
+            None => db
+                .query(
+                    r#"WITH c AS (SELECT "corporationID", "balance",
+                                         sum("balance") OVER (ORDER BY "balance" DESC, "corporationID") - "balance" AS before
+                                    FROM "corporation" WHERE "corporationID" = ANY($1) AND "balance" > 0),
+                            take AS (SELECT c."corporationID", LEAST(c."balance", $2 - c.before) AS amount FROM c
+                                      WHERE (SELECT sum("balance") FROM c) >= $2 AND c.before < $2)
+                       UPDATE "corporation" co SET "balance" = co."balance" - take.amount FROM take
+                        WHERE co."corporationID" = take."corporationID"
+                    RETURNING co."corporationID", take.amount"#,
+                    &[&bot_corps, &cost],
+                )
+                .await?
+                .iter()
+                .max_by(|a, b| a.get::<_, f64>(1).total_cmp(&b.get::<_, f64>(1)))
+                .and_then(|r| int(r, 0))
+                .map(|v| v as i32),
+        };
         if paid.is_some() {
             c.broke.remove(&self.alliance);
-        } else if c.broke.get(&self.alliance).is_none_or(|at| at.elapsed() >= BROKE_EVERY) {
-            c.broke.insert(self.alliance, Instant::now());
-            self.say(db, Office::Accountant, format!("We're short of ISK for {what} ({:.0}M ISK). We'll carry on when our wallets can stand it.", cost / 1.0e6)).await;
+            raising(self.alliance, false);
+        } else {
+            raising(self.alliance, true);
+            if c.broke.get(&self.alliance).is_none_or(|at| at.elapsed() >= BROKE_EVERY) {
+                c.broke.insert(self.alliance, Instant::now());
+                self.say(
+                    db,
+                    Office::Accountant,
+                    format!(
+                        "We're short of ISK for {what} ({:.0}M ISK). Everyone who can is heading out to rat for it: corp tax takes {:.0}% of bounties until we've got it, then we carry on.",
+                        cost / 1.0e6,
+                        RAISING_TAX * 100.0
+                    ),
+                )
+                .await;
+            }
         }
         Ok(paid)
     }

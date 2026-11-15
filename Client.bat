@@ -3669,8 +3669,41 @@ _rmr_battle = {
     'ships': 0, 'shared': 0, 'own_copies': 0, 'stripped': 0, 'fx_skipped': 0,
     'booms': [], 'booms_skipped': 0, 'batches': 0, 'batch_ms': 0.0, 'batch_max': 0.0,
     'balls_added': 0, 'load_ms': 0.0, 'failed': 0,
-    'late': 0, 'resets': 0, 'brackets_skipped': 0,
+    'late': 0, 'resets': 0, 'brackets_skipped': 0, 'capitals_fitted': 0,
 }
+
+# Titans, dreadnoughts, carriers and motherships.
+_RMR_CAPITAL_GROUPS = (30, 485, 547, 659)
+
+
+def _rmr_fit_capital(ball):
+    try:
+        if getattr(ball, 'fitted', 0) or getattr(ball, 'model', None) is None:
+            return
+        ball.FitHardpoints()
+        _rmr_battle['capitals_fitted'] = _rmr_battle['capitals_fitted'] + 1
+    except:
+        if _rmr_battle['capitals_fitted'] < 3:
+            _rmr_report('battle graphics: fitting a capital ship\'s guns failed: ' +
+                        ''.join(traceback.format_exception(*sys.exc_info())))
+        sys.exc_clear()
+
+
+def _rmr_capital_guns(ball):
+    # A capital ship shows its guns as it arrives, not only once it fires
+    # (other ships' turrets are mounted on their first shot), so a titan or
+    # dreadnought never looks or dies bare. Not in extreme mode.
+    try:
+        if _rmr_battle_mode() == 'extreme' and getattr(ball, 'id', None) != getattr(eve.session, 'shipid', None):
+            return
+        if getattr(ball, 'fitted', 0):
+            return
+        item = eve.LocalSvc('michelle').GetBallpark().GetInvItem(ball.id)
+        if item is None or cfg.invtypes.Get(item.typeID).groupID not in _RMR_CAPITAL_GROUPS:
+            return
+        uthread.new(_rmr_fit_capital, ball)
+    except:
+        sys.exc_clear()
 _RMR_BATTLE_MODES = ['full', 'lite', 'extreme']
 # Ships in the grid beyond which "lite" strips.
 _RMR_BATTLE_CROWD = 80
@@ -3872,7 +3905,9 @@ def _rmr_install_battle_graphics():
         def Assemble(self):
             rig = getattr(self, '_rmr_rig', None)
             if rig is None:
-                return original_assemble(self)
+                result = original_assemble(self)
+                _rmr_capital_guns(self)
+                return result
             item = eve.LocalSvc('michelle').GetBallpark().GetInvItem(self.id)
             self.typeID = item.typeID
             if item.charID is not None:
@@ -3897,6 +3932,7 @@ def _rmr_install_battle_graphics():
                 if settings.user.ui.Get('trails', 1):
                     self.AddTrails()
             self.SetDefaultLOD()
+            _rmr_capital_guns(self)
 
         def OnDamageState(self, damageState):
             if getattr(self, '_rmr_rig', None) is not None and _rmr_battle_strip(self):

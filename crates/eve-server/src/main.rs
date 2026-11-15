@@ -169,6 +169,8 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(web::run(Arc::clone(&server), config.web.clone()));
     tokio::spawn(bots::talk::run(server.world.clone(), server.db_url.clone()));
     tokio::spawn(losses::reslot_bot_kills(server.db_url.clone()));
+    tokio::spawn(bots::refit_capital_kills(server.db_url.clone()));
+    tokio::spawn(market_seed::traders_stock_outposts(server.db_url.clone()));
     tokio::spawn(losses::fix_drone_attackers(server.db_url.clone()));
     tokio::spawn(svc::missions::run_bot_escrows(Arc::clone(&server)));
     tokio::spawn(bot_market::run(Arc::clone(&server)));

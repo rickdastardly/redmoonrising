@@ -35,6 +35,19 @@ pub enum Request {
     /// A bot won over in Local by a player's invitation (`talk`): it comes
     /// over to the player's side a while later (`relations::won_over`).
     WinOver { bot: i64, player: i64, system: i32 },
+    /// A player's word in alliance chat about flying together (`talk`):
+    /// form a fleet on them, disband it, or guard the alliance's space
+    /// (`hire`).
+    Fleet { alliance: i32, by: i64, name: String, order: FleetOrder },
+}
+
+/// What a player told their alliance's bots about flying with them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FleetOrder {
+    Form,
+    Disband,
+    Defend,
+    StopDefending,
 }
 
 /// What a player told their alliance's bots about sovereignty.

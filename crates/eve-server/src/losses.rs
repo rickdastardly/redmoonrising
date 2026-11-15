@@ -170,7 +170,7 @@ const CATEGORY_DRONE: i32 = 18;
 /// A bot's items in the slots a player's would have: each fitted module in
 /// its own low (11-18), medium (19-26) or high (27-34) slot, drones in the
 /// drone bay, the rest (charges, cargo, modules past the racks) as cargo.
-async fn bot_kill_items(db: &impl GenericClient, items: &[BotItem]) -> Vec<KillItem> {
+pub(crate) async fn bot_kill_items(db: &impl GenericClient, items: &[BotItem]) -> Vec<KillItem> {
     let types: Vec<i32> = items.iter().map(|i| i.type_id as i32).collect();
     let mut kinds: HashMap<i32, (i32, Option<i32>)> = HashMap::new();
     match db.query(

@@ -177,6 +177,9 @@ pub struct Ctx<'a> {
     pub day0: u32,
     /// How much more (or less) than usual the bots of a region play.
     pub density: &'a HashMap<i32, f32>,
+    /// The bot's alliance is raising ISK for its claims: miners, haulers
+    /// and explorers rat too, half the time.
+    pub rat: bool,
 }
 
 /// A stretch of time in seconds, between `lo` and `hi`.
@@ -387,6 +390,9 @@ fn leave(bot: &mut Bot, ctx: &mut Ctx, rng: &mut Rng) -> u32 {
         let earned = ctx.econ.sell_ore(bot.station, &mut bot.hold);
         earn(bot, earned);
         return span(rng, 120, 900);
+    }
+    if ctx.rat && matches!(bot.role, Role::Miner | Role::Hauler | Role::Explorer) && rng.unit() < 0.5 {
+        return work_at(bot, atlas, bot.system, Activity::Ratting, rng);
     }
     match bot.role {
         Role::Miner => {
@@ -633,7 +639,7 @@ pub mod tests {
     /// Steps a bot with an economy and no shipyard.
     fn run(b: &mut Bot, atlas: &Atlas, econ: &mut Economy, now: u32, rng: &mut Rng) -> u32 {
         let density = HashMap::new();
-        let mut ctx = Ctx { atlas, econ, yard: None, day0: 0, density: &density };
+        let mut ctx = Ctx { atlas, econ, yard: None, day0: 0, density: &density, rat: false };
         step(b, now, &mut ctx, rng)
     }
 
@@ -743,7 +749,7 @@ pub mod tests {
         b.tier = 2;
         b.hull_lost = true;
         b.isk = 1_000_000.0;
-        let mut ctx = Ctx { atlas: &atlas, econ: &mut econ, yard: Some(&yard), day0: 0, density: &density };
+        let mut ctx = Ctx { atlas: &atlas, econ: &mut econ, yard: Some(&yard), day0: 0, density: &density, rat: false };
         refit(&mut b, &mut ctx, &mut rng);
         // A cruiser costs more than it has: a frigate.
         assert_eq!((b.hull, b.tier, b.hull_lost), (587, 0, false));

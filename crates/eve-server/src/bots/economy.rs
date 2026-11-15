@@ -62,6 +62,8 @@ const BUILDS_PER_TICK: usize = 4;
 /// Bot corporations' tax on members' earnings, and the share of it their
 /// alliance takes.
 pub const BOT_CORP_TAX: f64 = 0.1;
+/// A bot corporation's cut of its pilots' bounties.
+pub const RATTING_TAX: f64 = 0.15;
 const ALLIANCE_SHARE: f64 = 0.2;
 /// The most of its wallet a trader puts into buy orders.
 const ESCROW_SHARE: f64 = 0.3;
@@ -390,6 +392,12 @@ impl Economy {
     /// Tax on what a bot earned, for its corporation; returns the tax.
     pub fn tax(&mut self, corp: i32, earned: f64, bot_corp: bool) -> f64 {
         let rate = if bot_corp { BOT_CORP_TAX } else { self.tax_rates.get(&corp).copied().unwrap_or(0.0) };
+        self.tax_at(corp, earned, rate)
+    }
+
+    /// Tax at `rate` on what a bot earned, for its corporation (and its
+    /// alliance's executor's share); returns the tax.
+    pub fn tax_at(&mut self, corp: i32, earned: f64, rate: f64) -> f64 {
         let tax = earned * rate.clamp(0.0, 1.0);
         if tax >= 1.0 {
             match self.executor_of.get(&corp).filter(|e| **e != corp) {

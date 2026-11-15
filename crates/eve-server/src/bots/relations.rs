@@ -809,8 +809,9 @@ pub async fn answer_alliance_applications(r: &Relations, db: &Client, world: &cr
 /// then, as the dashboard's joinPlayerAlliances says. One accepted joins a
 /// day later, through the same path as a player corporation.
 pub async fn apply_to_alliances(db: &Client, world: &crate::world::World, p: &Politics, rng: &mut Rng) -> Result<(), tokio_postgres::Error> {
-    const CHANCE: f64 = 1.0 / 30.0;
-    const PENDING: i64 = 2;
+    // Player alliances are sought out twice as often as they used to be.
+    const CHANCE: f64 = 1.0 / 15.0;
+    const PENDING: i64 = 3;
     const PITCHES: [&str; 6] = [
         "Established corporation looking for a strong alliance to fight alongside.",
         "We bring pilots, ships and industry. Looking for a long-term home.",

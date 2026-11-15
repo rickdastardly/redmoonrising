@@ -479,6 +479,9 @@ struct Talk {
     rng: Rng,
     queue: Vec<Line>,
     group_queue: Vec<GroupLine>,
+    /// What corp mates said they would put in the corp hangar: (when they
+    /// say it, corporation, who, what: 0 a barge fitting, 1 spare modules).
+    gifts: Vec<(Instant, i64, i64, u8)>,
     reports: Vec<Report>,
     /// When each corporation or alliance channel next hears its members talk.
     group_next: HashMap<(bool, i64), Instant>,
@@ -511,6 +514,7 @@ fn with_talk<R>(f: impl FnOnce(&mut Talk) -> R) -> Option<R> {
         rng: Rng::seeded(crate::bulkdata::filetime_now() as u64 ^ 0x7a1c),
         queue: Vec::new(),
         group_queue: Vec::new(),
+        gifts: Vec::new(),
         reports: Vec::new(),
         group_next: HashMap::new(),
         group_answered: HashMap::new(),
@@ -995,6 +999,33 @@ pub(super) fn sov_order(text: &str) -> Option<super::control::SovOrder> {
     }
 }
 
+/// What a player's line in alliance chat tells the alliance's bots about
+/// flying together: "form fleet" (or "fleet up", "on me"), "disband fleet",
+/// "defend our space", "stop defending our space".
+pub(super) fn fleet_order(text: &str) -> Option<super::control::FleetOrder> {
+    use super::control::FleetOrder;
+    let t: String = text.to_lowercase().chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect();
+    let words: Vec<&str> = t.split_whitespace().collect();
+    let any = |ws: &[&str]| words.iter().any(|w| ws.contains(w));
+    if any(&["sov", "sovereignty"]) {
+        return None;
+    }
+    let fleet = any(&["fleet", "gang"]);
+    if any(&["defend", "protect", "guard", "defending", "protecting", "guarding"]) && any(&["space", "home", "systems", "territory", "turf", "us", "our"]) {
+        return Some(if any(&["stop", "don", "dont", "quit", "cancel", "no", "never"]) { FleetOrder::StopDefending } else { FleetOrder::Defend });
+    }
+    if (fleet && any(&["disband", "dismiss", "dismissed", "done", "over", "home", "end", "stand"])) || (t.contains("stand down") && !fleet) {
+        return Some(FleetOrder::Disband);
+    }
+    if fleet && any(&["form", "forming", "up", "need", "start", "make", "create", "assemble", "join", "x", "want", "anyone", "me"]) {
+        return Some(FleetOrder::Form);
+    }
+    if t.contains("form up") || t.contains("on me") || any(&["rally"]) {
+        return Some(FleetOrder::Form);
+    }
+    None
+}
+
 /// The bot who speaks for an alliance: an online pilot of `corp` (the one
 /// doing the work), else any online pilot of the alliance, else any of its
 /// pilots.
@@ -1036,6 +1067,16 @@ pub fn player_said_to_group(w: &WorldState, channel: &Value, char_id: i64, name:
                 super::control::ask(super::control::Request::ClaimSov { alliance: id as i32, by: char_id, order });
                 if !super::is_running() {
                     alliance_report(id, None, None, format!("o7 {}, will do, but we're all docked up just now (the bots are paused). We'll get on it as soon as we're back.", first_name(name)));
+                }
+                return;
+            }
+        }
+        if let Some(order) = fleet_order(text) {
+            if w.bot_roster.iter().any(|b| b.alliance_id == Some(id)) {
+                tracing::info!("bots: {name} told alliance {id}'s bots in alliance chat: fleet {order:?}");
+                super::control::ask(super::control::Request::Fleet { alliance: id as i32, by: char_id, name: name.to_string(), order });
+                if !super::is_running() {
+                    alliance_report(id, None, None, format!("o7 {}, will do, but we're all docked up just now (the bots are paused). We'll be with you as soon as we're back.", first_name(name)));
                 }
                 return;
             }
@@ -1148,6 +1189,11 @@ fn group_tick(w: &WorldState, now: Instant, chatter: Chatter) {
                 };
                 let text = line.to_string();
                 at += Duration::from_secs_f64(t.rng.range(2.0, 6.0)) + typing(&text, &mut t.rng);
+                // Said they'd put something in the corp hangar: they do.
+                if corp && text.contains("corp hangar") {
+                    let what = if text.contains("one going spare") { 0 } else { 1 };
+                    t.gifts.push((at, id, speaker.char_id, what));
+                }
                 t.group_queue.push(GroupLine { due: at, channel: channel.clone(), bot: speaker, text });
             }
         });
@@ -1155,7 +1201,7 @@ fn group_tick(w: &WorldState, now: Instant, chatter: Chatter) {
 }
 
 pub async fn run(world: World, db_url: String) {
-    match crate::db::connect(&db_url).await {
+    let db = match crate::db::connect(&db_url).await {
         Ok(db) => {
             let sql = r#"SELECT t."typeID", t."typeName" FROM "invTypes" t JOIN "invGroups" g ON g."groupID" = t."groupID" WHERE g."categoryID" = 6"#;
             match db.query(sql, &[]).await {
@@ -1165,15 +1211,85 @@ pub async fn run(world: World, db_url: String) {
                 }
                 Err(e) => warn!("bots: reading ship names for Local chat: {}", crate::logging::chain(&e)),
             }
+            Some(db)
         }
-        Err(e) => warn!("bots: Local chat cannot reach the database: {}", crate::logging::chain(&e)),
-    }
+        Err(e) => {
+            warn!("bots: Local chat cannot reach the database: {}", crate::logging::chain(&e));
+            None
+        }
+    };
     let mut interval = tokio::time::interval(Duration::from_millis(500));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         interval.tick().await;
         tick(&world);
+        let now = Instant::now();
+        let gifts = with_talk(|t| {
+            let (due, later): (Vec<_>, Vec<_>) = std::mem::take(&mut t.gifts).into_iter().partition(|g| g.0 <= now);
+            t.gifts = later;
+            due.into_iter().map(|(_, corp, bot, what)| (corp, bot, what, t.rng.below(1_000_000) as u64)).collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+        if let Some(db) = &db {
+            for (corp, bot, what, seed) in gifts {
+                if let Err(e) = hangar_gift(db, corp, bot, what, seed).await {
+                    warn!("bots: putting a corp mate's gift in corporation {corp}'s hangar: {}", crate::logging::chain(&e));
+                }
+            }
+        }
     }
+}
+
+/// What a corp mate said they'd put in the corp hangar, put there: in the
+/// corporation's first office, its first hangar division. A barge fitting,
+/// or three kinds of spare modules.
+async fn hangar_gift(db: &tokio_postgres::Client, corp: i64, bot: i64, what: u8, seed: u64) -> Result<(), tokio_postgres::Error> {
+    const BARGE: &[(&str, i64)] = &[("Strip Miner I", 2), ("Mining Laser Upgrade I", 1), ("Medium Shield Extender I", 1), ("Damage Control I", 1)];
+    const SPARES: &[(&str, i64)] = &[
+        ("Damage Control I", 1),
+        ("1MN Afterburner I", 1),
+        ("10MN Afterburner I", 1),
+        ("Medium Shield Extender I", 2),
+        ("Small Armor Repairer I", 2),
+        ("Medium Armor Repairer I", 1),
+        ("Warp Disruptor I", 1),
+        ("Stasis Webifier I", 1),
+        ("Cap Recharger I", 2),
+        ("Hobgoblin I", 5),
+        ("Hammerhead I", 3),
+    ];
+    let Some(office) = db
+        .query_opt(r#"SELECT "itemID"::int8 FROM "crpOffices" WHERE "corporationID" = $1::int8 ORDER BY "itemID" LIMIT 1"#, &[&corp])
+        .await?
+        .map(|r| r.get::<_, i64>(0))
+    else {
+        tracing::debug!("bots: corporation {corp} has no office for {bot}'s gift");
+        return Ok(());
+    };
+    let mut rng = crate::combat::Rng::seeded(seed ^ bot as u64);
+    let items: Vec<(&str, i64)> = if what == 0 {
+        BARGE.to_vec()
+    } else {
+        let mut pool = SPARES.to_vec();
+        let mut out = Vec::new();
+        for _ in 0..3 {
+            out.push(pool.remove(rng.below(pool.len())));
+        }
+        out
+    };
+    let mut put = 0;
+    for (name, quantity) in &items {
+        put += db
+            .execute(
+                r#"INSERT INTO entity ("itemID","itemName","typeID","ownerID","locationID","flag","contraband","singleton","quantity","x","y","z")
+                   SELECT nextval('dyn_id_seq'), '', t."typeID", $1::int8, $2::int8, 4, 0, 0, $4::int8, 0, 0, 0
+                     FROM "invTypes" t WHERE t."typeName" = $3 ORDER BY t."typeID" LIMIT 1"#,
+                &[&corp, &office, name, quantity],
+            )
+            .await?;
+    }
+    tracing::info!("bots: {bot} put {put} kind(s) of module in corporation {corp}'s hangar (office {office})");
+    Ok(())
 }
 
 fn tick(world: &World) {
@@ -1362,6 +1478,15 @@ mod tests {
         assert_eq!(sov_order("how's the sov going"), Some(SovOrder::Status));
         assert_eq!(sov_order("o7 alliance"), None);
         assert_eq!(sov_order("who holds sov in Delve"), None);
+        use super::super::control::FleetOrder;
+        assert_eq!(fleet_order("form fleet"), Some(FleetOrder::Form));
+        assert_eq!(fleet_order("fleet up, on me"), Some(FleetOrder::Form));
+        assert_eq!(fleet_order("disband fleet"), Some(FleetOrder::Disband));
+        assert_eq!(fleet_order("fleet's done, thanks all"), Some(FleetOrder::Disband));
+        assert_eq!(fleet_order("defend our space"), Some(FleetOrder::Defend));
+        assert_eq!(fleet_order("stop defending our space"), Some(FleetOrder::StopDefending));
+        assert_eq!(fleet_order("o7 alliance"), None);
+        assert_eq!(fleet_order("stop claiming sov"), None);
     }
 
     #[test]

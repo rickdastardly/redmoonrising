@@ -34,6 +34,113 @@ pub struct Hire {
     pub player: i64,
     pub rate: f64,
     paid_until: Instant,
+    /// Flying in its alliance's fleet for the player, unpaid: formed by
+    /// their word in alliance chat, or to answer an attack in the
+    /// alliance's space.
+    pub fleet: Option<i32>,
+    /// When a fleet answering an attack goes home (none: when told).
+    until: Option<Instant>,
+}
+
+/// How many of an alliance's bots form up on a player who calls a fleet,
+/// and how many come when one of its players is attacked in its space.
+pub const FLEET_SIZE: usize = 10;
+pub const DEFENCE_SIZE: usize = 6;
+/// How long a defence fleet stays after the last attack.
+pub const CALM: Duration = Duration::from_secs(3 * 60);
+
+/// Alliances whose players told their bots not to guard their space.
+static UNGUARDED: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
+
+/// Whether an alliance's bots guard its space (they do unless told not to).
+pub fn guarding(alliance: i32) -> bool {
+    !UNGUARDED.lock().map(|u| u.contains(&alliance)).unwrap_or(false)
+}
+
+pub fn guard(alliance: i32, on: bool) {
+    if let Ok(mut u) = UNGUARDED.lock() {
+        u.retain(|a| *a != alliance);
+        if !on {
+            u.push(alliance);
+        }
+    }
+}
+
+/// Up to `size` of an alliance's free, armed bots form up on `player`: the
+/// nearest first, those further off following them in. Returns those who
+/// came.
+#[allow(clippy::too_many_arguments)]
+pub fn form_fleet(hires: &mut Hires, world: &World, bots: &mut [Bot], ids: &[Identity], presence: &mut Presence, alliance: i32, player: i64, size: usize, until: Option<Instant>) -> Vec<u32> {
+    let Some(here) = world.lock().presence_of(player).map(|p| p.solar_system_id as i32) else { return Vec::new() };
+    let mut fit: Vec<u32> = (0..bots.len() as u32)
+        .filter(|i| {
+            let (b, id) = (&bots[*i as usize], &ids[*i as usize]);
+            id.alliance == Some(alliance)
+                && b.online
+                && b.pod.is_none()
+                && presence.armed(id.hull)
+                && !matches!(b.activity, Activity::Sieging | Activity::Escorting)
+                && !hires.by_bot.contains_key(i)
+        })
+        .collect();
+    fit.sort_by_key(|i| super::battle::nearness(&bots[*i as usize], here));
+    fit.truncate(size);
+    for &i in &fit {
+        let b = &mut bots[i as usize];
+        b.activity = Activity::Escorting;
+        b.route.clear();
+        b.dock_at = 0;
+        hires.by_bot.insert(i, Hire { player, rate: 0.0, paid_until: Instant::now() + HOUR, fleet: Some(alliance), until });
+        presence.escort(i, player);
+    }
+    if !fit.is_empty() {
+        info!("bots: {} of alliance {alliance}'s pilots fly in a fleet with {player}", fit.len());
+    }
+    fit
+}
+
+/// The fleet flying with `player` goes home at the next look. Returns how
+/// many were in it.
+pub fn disband(hires: &mut Hires, alliance: i32, player: i64) -> usize {
+    let now = Instant::now();
+    let mut n = 0;
+    for h in hires.by_bot.values_mut().filter(|h| h.fleet == Some(alliance) && h.player == player) {
+        h.until = Some(now);
+        n += 1;
+    }
+    n
+}
+
+/// A fleet already flying with `player` stays while they are attacked.
+/// False if there is none.
+pub fn keep_defending(hires: &mut Hires, alliance: i32, player: i64) -> bool {
+    let mut any = false;
+    let calm = Instant::now() + CALM;
+    for h in hires.by_bot.values_mut().filter(|h| h.fleet == Some(alliance) && h.player == player) {
+        any = true;
+        if let Some(u) = h.until.as_mut() {
+            *u = (*u).max(calm);
+        }
+    }
+    any
+}
+
+/// Players under attack by someone outside their alliance (rats aside),
+/// for the alliances `guarded` says: (alliance, player, system).
+pub fn attacked(w: &crate::world::WorldState, guarded: impl Fn(i32) -> bool) -> Vec<(i32, i64, i32)> {
+    let mut out = Vec::new();
+    for (system, park) in &w.parks {
+        for s in park.ships.values().filter(|s| s.is_player()) {
+            let Some(alliance) = s.pilot.alliance_id.map(|a| a as i32).filter(|a| guarded(*a)) else { continue };
+            let Some((_, ship)) = s.fight.as_ref().and_then(|f| f.last_attacker) else { continue };
+            let Some(a) = park.ships.get(&ship) else { continue };
+            if a.pilot.char_id == 0 || a.pilot.alliance_id.map(|x| x as i32) == Some(alliance) || (a.pos - s.pos).len() > ASSIST_RANGE {
+                continue;
+            }
+            out.push((alliance, s.pilot.char_id, *system as i32));
+        }
+    }
+    out
 }
 
 #[derive(Default)]
@@ -113,7 +220,7 @@ pub async fn run(
                 b.activity = Activity::Escorting;
                 b.route.clear();
                 b.dock_at = 0;
-                hires.by_bot.insert(i, Hire { player, rate: fee, paid_until: Instant::now() + HOUR });
+                hires.by_bot.insert(i, Hire { player, rate: fee, paid_until: Instant::now() + HOUR, fleet: None, until: None });
                 presence.escort(i, player);
                 touched.push((i, 60));
                 info!("bots: {} hired by {player} at {fee} ISK an hour", ids[i as usize].name);
@@ -140,6 +247,15 @@ pub async fn run(
     let mut ended = Vec::new();
     for (&i, hire) in hires.by_bot.iter_mut() {
         let bot_char = bots[i as usize].id as i64;
+        // An alliance fleet: unpaid, out of any gang; over when they log
+        // off, are told, or (answering an attack) all is calm.
+        if hire.fleet.is_some() {
+            let online = world.lock().is_online(hire.player);
+            if !online || hire.until.is_some_and(|u| Instant::now() >= u) {
+                ended.push((i, None));
+            }
+            continue;
+        }
         let (together, online) = {
             let w = world.lock();
             let gang = w.gangs.of(bot_char);

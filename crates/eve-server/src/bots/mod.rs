@@ -39,6 +39,7 @@ mod ships;
 mod sov;
 pub mod talk;
 
+pub use capitals::refit_capital_kills;
 pub use presence::eject;
 pub use relations::{stance, Stance};
 
@@ -611,6 +612,7 @@ pub fn request(words: &[&str]) -> Result<String, String> {
         control::Request::Meet { bots, .. } => format!("{} bots answering a fight call.", bots.len()),
         control::Request::ClaimSov { alliance, order, .. } => format!("Sovereignty order {order:?} for alliance {alliance}."),
         control::Request::WinOver { bot, .. } => format!("Pilot {bot} won over in Local."),
+        control::Request::Fleet { alliance, order, .. } => format!("Fleet order {order:?} for alliance {alliance}."),
         control::Request::Battle { place, stakes } => format!(
             "Asked for a {} with capital ships in {}. The server log and the dashboard say where it is and how it goes.",
             stakes.as_deref().unwrap_or("decisive"),
@@ -796,6 +798,8 @@ struct Sim {
     relations: relations::Relations,
     events: events::Events,
     hires: hire::Hires,
+    /// When home defence last looked for help for a player.
+    defence_tried: HashMap<i64, Instant>,
     following: control::Following,
     density: HashMap<i32, f32>,
     names: panels::Names,
@@ -865,6 +869,7 @@ impl Sim {
             relations,
             events: events::Events::default(),
             hires: hire::Hires::default(),
+            defence_tried: HashMap::new(),
             following: control::Following::default(),
             density,
             names,
@@ -926,7 +931,7 @@ impl Sim {
         let now = self.clock as u32;
         let mut changed = Vec::new();
         {
-            let ctx = Ctx { atlas: &self.atlas, econ: &mut self.econ, yard: Some(&*self.yard), day0: self.day0, density: &self.density };
+            let ctx = Ctx { atlas: &self.atlas, econ: &mut self.econ, yard: Some(&*self.yard), day0: self.day0, density: &self.density, rat: false };
             for (i, bot) in self.bots.iter_mut().enumerate() {
                 if let Some(wait) = behaviour::new_activity(bot, now, before, activity, &ctx, &mut self.rng) {
                     changed.push((i as u32, wait));
@@ -950,7 +955,7 @@ impl Sim {
 
     async fn run(mut self, mut shutdown: tokio::sync::watch::Receiver<bool>) {
         {
-            let ctx = Ctx { atlas: &self.atlas, econ: &mut self.econ, yard: Some(&*self.yard), day0: self.day0, density: &self.density };
+            let ctx = Ctx { atlas: &self.atlas, econ: &mut self.econ, yard: Some(&*self.yard), day0: self.day0, density: &self.density, rat: false };
             for (i, bot) in self.bots.iter_mut().enumerate() {
                 let wait = behaviour::wake_up(bot, 0, &ctx, &mut self.rng);
                 self.due.push(Reverse((wait, i as u32, 0)));
@@ -1072,7 +1077,8 @@ impl Sim {
     /// Steps every bot whose moment has come, and settles what the economy
     /// paid out meanwhile.
     fn step_due(&mut self, now: u32) {
-        let mut ctx = Ctx { atlas: &self.atlas, econ: &mut self.econ, yard: Some(&*self.yard), day0: self.day0, density: &self.density };
+        let raising = claim::fundraising();
+        let mut ctx = Ctx { atlas: &self.atlas, econ: &mut self.econ, yard: Some(&*self.yard), day0: self.day0, density: &self.density, rat: false };
         while let Some(&Reverse((at, i, gen))) = self.due.peek() {
             if at > now {
                 break;
@@ -1085,11 +1091,20 @@ impl Sim {
             self.presence.end_meet(i);
             let bot = &mut self.bots[i as usize];
             let before = (bot.system, bot.station, bot.activity);
+            // Its alliance short of ISK for its claims: those who can, rat.
+            ctx.rat = self.ids[i as usize].alliance.is_some_and(|a| raising.contains(&a));
             let wait = behaviour::step(bot, now, &mut ctx, &mut self.rng).max(1);
             if bot.earned > 0.0 {
                 let corp = self.ids[i as usize].corp;
                 if corp >= FIRST_OWNED_CORP {
-                    let tax = ctx.econ.tax(corp, bot.earned, self.politics.corps.contains_key(&corp));
+                    let bot_corp = self.politics.corps.contains_key(&corp);
+                    // Bounties pay the corporation its cut: more while the
+                    // alliance raises ISK for towers and outposts.
+                    let tax = if bot_corp && before.2 == behaviour::Activity::Ratting {
+                        ctx.econ.tax_at(corp, bot.earned, if ctx.rat { claim::RAISING_TAX } else { economy::RATTING_TAX })
+                    } else {
+                        ctx.econ.tax(corp, bot.earned, bot_corp)
+                    };
                     bot.isk -= tax;
                 }
                 bot.earned = 0.0;
@@ -1232,6 +1247,57 @@ impl Sim {
         }
     }
 
+    /// Their own space: a player of an alliance with bots of its own (not a
+    /// bot alliance), attacked in a system the alliance holds by someone
+    /// outside it, has some of the alliance's pilots come to help. Only the
+    /// player's own alliance answers.
+    async fn guard_space(&mut self) {
+        let guarded: std::collections::HashSet<i32> =
+            self.ids.iter().filter_map(|id| id.alliance).filter(|a| !self.politics.alliances.contains_key(a) && hire::guarding(*a)).collect();
+        if guarded.is_empty() {
+            return;
+        }
+        let attacked = hire::attacked(&self.server.world.lock(), |a| guarded.contains(&a));
+        for (alliance, player, system) in attacked {
+            if hire::keep_defending(&mut self.hires, alliance, player) {
+                continue;
+            }
+            if self.defence_tried.get(&player).is_some_and(|at| at.elapsed() < Duration::from_secs(60)) {
+                continue;
+            }
+            self.defence_tried.insert(player, Instant::now());
+            let ours = self
+                .db
+                .query_one(
+                    r#"SELECT EXISTS (SELECT 1 FROM "mapSolarSystems" WHERE "solarSystemID" = $1::int4 AND "allianceID" = $2::int4)
+                           OR EXISTS (SELECT 1 FROM "posStructures" p JOIN entity e ON e."itemID" = p."itemID"
+                                        JOIN "corporation" co ON co."corporationID" = e."ownerID"
+                                       WHERE e."locationID" = $1::int4 AND co."allianceID" = $2::int4)"#,
+                    &[&system, &alliance],
+                )
+                .await
+                .map(|r| r.get::<_, bool>(0));
+            match ours {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(e) => {
+                    error!("bots: is system {system} alliance {alliance}'s: {}", crate::logging::chain(&e));
+                    continue;
+                }
+            }
+            let came = hire::form_fleet(&mut self.hires, &self.server.world, &mut self.bots, &self.ids, &mut self.presence, alliance, player, hire::DEFENCE_SIZE, Some(Instant::now() + hire::CALM));
+            for &i in &came {
+                self.reschedule(i, 60);
+                self.changes.push(presence::Change::Busy { bot: i });
+            }
+            if !came.is_empty() {
+                info!("bots: {} of alliance {alliance}'s pilots answer an attack on {player} in system {system}", came.len());
+                talk::alliance_report(alliance as i64, None, None, format!("Someone's shooting at one of ours in our space! {} of us are on our way.", came.len()));
+            }
+        }
+        self.defence_tried.retain(|_, at| at.elapsed() < Duration::from_secs(600));
+    }
+
     /// Alliances' treasuries and prime times, the corporations' taxes, and
     /// each bot's prime time.
     async fn refresh_politics_figures(&mut self) {
@@ -1333,6 +1399,7 @@ impl Sim {
                 self.reschedule(i, wait);
                 self.changes.push(presence::Change::Busy { bot: i });
             }
+            self.guard_space().await;
         }
         let noted = if running { std::mem::take(&mut self.changes) } else { Vec::new() };
         let lost = self.presence.sync(&self.server.world, &self.atlas, &mut self.bots, &self.ids, &self.by_char, noted, &mut self.rng);
@@ -1482,6 +1549,39 @@ impl Sim {
                 }
                 control::Request::ClaimSov { alliance, by, order } => {
                     claim::order(&mut self.claims, &self.db, &mut self.politics, alliance, by, order).await;
+                }
+                control::Request::Fleet { alliance, by, name, order } => {
+                    let first = name.split_whitespace().next().unwrap_or("").to_string();
+                    let text = match order {
+                        control::FleetOrder::Form => {
+                            let came = hire::form_fleet(&mut self.hires, &self.server.world, &mut self.bots, &self.ids, &mut self.presence, alliance, by, hire::FLEET_SIZE, None);
+                            for &i in &came {
+                                self.reschedule(i, 60);
+                                self.changes.push(presence::Change::Busy { bot: i });
+                            }
+                            if came.is_empty() {
+                                format!("Sorry {first}, nobody's free to fly just now. Ask again in a bit.")
+                            } else {
+                                format!("o7 {first}, {} of us are forming up on you. We'll follow you through gates and shoot whatever shoots you or whatever you lock. Say \"disband fleet\" when you're done.", came.len())
+                            }
+                        }
+                        control::FleetOrder::Disband => {
+                            if hire::disband(&mut self.hires, alliance, by) == 0 {
+                                format!("We're not flying with you just now, {first}. Say \"form fleet\" if you want us.")
+                            } else {
+                                format!("Fleet's disbanded, heading home. Good flying, {first} o7")
+                            }
+                        }
+                        control::FleetOrder::Defend => {
+                            hire::guard(alliance, true);
+                            format!("Understood, {first}: anyone who shoots one of ours in our space has us to deal with.")
+                        }
+                        control::FleetOrder::StopDefending => {
+                            hire::guard(alliance, false);
+                            format!("Understood, {first}, we'll leave you to look after yourselves. Say \"defend our space\" when you want us back.")
+                        }
+                    };
+                    talk::alliance_report(alliance as i64, None, None, text);
                 }
             }
         }

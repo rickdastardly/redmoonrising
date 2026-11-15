@@ -2,6 +2,36 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Fleets on command, home defence, and capitals that die with their fits
+
+*2026-11-15 18:01 UTC*
+
+**Capital killmails list their fittings.** Dreadnoughts, carriers and titans lost before their fittings were tracked showed nothing on their killmails. Motherships (Aeon, Nyx, Wyvern, Hel) had no fitting at all. Now motherships fly with remote repairers, a tank and a damage control, plus their fighters. At startup, every bot capital killmail with no items is given the fitting its hull flies with, half of it dropped, in the right slots. The server log says how many it fixed.
+
+- In space, titans, dreadnoughts, carriers and motherships now mount their guns as they arrive, rather than on their first shot. This doesn't apply in **/battlegfx extreme**.
+
+**Your alliance's bots fly with you.** These orders work in alliance chat:
+
+- **form fleet** (or **fleet up**, **on me**): up to ten of the alliance's free, armed pilots form up on you, nearest first. They follow you through gates and dock with you. They shoot whatever shoots you or whatever you lock. There's no pay and no gang invites.
+- **disband fleet**: they go home. They also go home when you log off.
+- **defend our space** is on from the start. When one of your players is shot in a system the alliance holds, or where it has a tower, six of its pilots come to help. The attacker has to be from outside the alliance; rats don't count. The pilots stay until things have been calm for three minutes. Only your own alliance answers, never a bot alliance. **stop defending our space** turns it off.
+
+**Short of ISK, the alliance rats for it.** When your bots are claiming sov and can't afford the next tower or outpost:
+
+- Its bot corporations' wallets are pooled to pay. Before, one corporation had to have it all.
+- If that isn't enough, miners, haulers and explorers go ratting half the time. The corporations take 30% of bounties until the tower or outpost is paid for, and then the work carries on.
+- Ratting always pays the corporation a cut now: 15% of bounties in bot corporations.
+
+**Null-sec markets stock themselves.** Within a few minutes of an outpost going up, the bots' traders stock its market, and the alliance hears about it in alliance chat. Every seeded market is topped up hourly. Stopping a station's seeding on the dashboard still sticks.
+
+**Corp hangar gifts are real.** When a corp mate says they've put a barge fitting or spare modules in the corp hangar, the items are there: in your corporation's first office, first division.
+
+**Player alliances grow faster.** Pilots joining corporations pick a player alliance's corporations three times as often. Corporations apply to player alliances twice as often, with up to three applications waiting.
+
+In sov battles, a player alliance's side fights a quarter better. A player alliance at war with the enemy always comes as an ally, and first. Bot alliances still win their share.
+
+Restart the server and the game to get it all. The dashboard's GM commands page lists the new alliance chat orders.
+
 ## Late updates no longer reload the whole grid
 
 *2026-11-15 17:41 UTC*
