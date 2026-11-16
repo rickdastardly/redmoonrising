@@ -1246,23 +1246,11 @@ async fn resolve_sovereignty(db: &mut Client, claim_delay_secs: i64) -> Result<(
         &[&now],
     ).await?;
     let standing = now.saturating_sub(claim_delay_secs.max(0).saturating_mul(TICKS_PER_SECOND));
-    // An alliance's outpost counts as two claiming towers in its system:
-    // owning the station there, the alliance holds the system unless
-    // someone out-claims it.
     let claims = tx.query(
-        r#"SELECT loc, alliance, sum(n)::bigint FROM (
-               SELECT e."locationID"::bigint AS loc, p."claimAllianceID"::bigint AS alliance, count(*)::bigint AS n
-                 FROM "posStructures" p JOIN entity e USING ("itemID")
-                WHERE p."claimAllianceID" IS NOT NULL AND p."claimSince" <= $1
-                GROUP BY 1, 2
-               UNION ALL
-               SELECT st."solarSystemID"::bigint, co."allianceID"::bigint, 2::bigint
-                 FROM "staStations" st
-                 JOIN "corporation" co ON co."corporationID" = st."corporationID" AND co.deleted = 0
-                 JOIN "mapSolarSystems" m ON m."solarSystemID" = st."solarSystemID"
-                WHERE st."stationID" >= 61000000 AND COALESCE(co."allianceID", 0) <> 0
-                  AND m.security <= 0 AND COALESCE(m."factionID", 0) = 0
-           ) c GROUP BY 1, 2"#,
+        r#"SELECT e."locationID", p."claimAllianceID", count(*)
+             FROM "posStructures" p JOIN entity e USING ("itemID")
+            WHERE p."claimAllianceID" IS NOT NULL AND p."claimSince" <= $1
+            GROUP BY 1, 2"#,
         &[&standing],
     ).await?;
     let held = tx.query(

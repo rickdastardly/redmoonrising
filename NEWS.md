@@ -2,6 +2,20 @@
 
 Every update, as published on the server dashboard and the character selection screen. The server adds these to its news when it starts.
 
+## Sovereignty is towers again, and it takes a lot of them
+
+*2026-11-16 02:29 UTC*
+
+**Outposts no longer count towards sovereignty.** Last update counted an alliance's outpost as two towers. That's gone: whoever has the most claiming control towers in a system holds it once the claim delay is up.
+
+**Your alliance's bots claim the way an alliance would:**
+
+- Each system they claim gets four large control towers before they spread to the next, or as many as it has moons if fewer. One tower is easily out-claimed.
+- Outposts only go up once the system's sovereignty is yours, never before the claim has stood. Then they're built and handed to your corporation as before.
+- More towers cost more ISK. The bots fund them from ratting tax and pooled corporation wallets, and while they're short their pilots give 5% of their savings above 25M ISK.
+
+Restart the server to get it.
+
 ## Ship models back, your space for your pilots, battlefield looters
 
 *2026-11-15 22:44 UTC*

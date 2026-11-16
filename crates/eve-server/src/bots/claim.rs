@@ -3,16 +3,19 @@
 //! alliance's bot corporations go about it as players would, telling the
 //! alliance chat as they go:
 //!
-//! - Towers: a large control tower of their race is anchored at a moon in
-//!   the alliance's home region (`sov::player_claimants`), a few at a time,
-//!   spreading out from the space already held. Once anchored it is fuelled
-//!   and onlined; online, its claim counts towards sovereignty (the claim
-//!   delay, `sovClaimDelaySeconds`, scaled by the bots' clock).
-//! - Outposts: in a system where a tower of theirs is online and there is no
-//!   station, an outpost construction platform of their race is anchored by
-//!   a planet; anchored, the bots bring in its materials and build the
-//!   outpost (`outpost::build_for_bots`), then hand it to the alliance's
-//!   executor corporation, the alliance's holder.
+//! - Towers: large control towers of their race are anchored at the moons
+//!   of the alliance's home region (`sov::player_claimants`), a few at a
+//!   time. Sovereignty goes to whoever has the most claiming towers in a
+//!   system, so each system gets `TOWERS_PER_SYSTEM` of them (as many moons
+//!   as it has, if fewer) before the bots spread to the next, out from the
+//!   space already held. Once anchored a tower is fuelled and onlined;
+//!   online, its claim counts towards sovereignty (the claim delay,
+//!   `sovClaimDelaySeconds`, scaled by the bots' clock).
+//! - Outposts: only once the alliance holds a system's sovereignty, and
+//!   where there is no station, an outpost construction platform of their
+//!   race is anchored by a planet; anchored, the bots bring in its
+//!   materials and build the outpost (`outpost::build_for_bots`), then hand
+//!   it to the alliance's executor corporation, the alliance's holder.
 //! - Timers are the structures' own (anchoringDelay, onliningDelay), run at
 //!   the starbase speedup and the bots' speed; the client shows them.
 //! - It costs the bots: each tower and outpost is paid for from the richest
@@ -44,6 +47,9 @@ const STEP_EVERY: Duration = Duration::from_secs(15);
 const AT_ONCE: usize = 3;
 /// One outpost for every this many systems with an online tower.
 const SYSTEMS_PER_OUTPOST: usize = 2;
+/// Control towers the bots put up in each system they claim: the most
+/// towers in a system holds it, so one is easily out-claimed.
+const TOWERS_PER_SYSTEM: usize = 4;
 const SECOND_FT: i64 = 10_000_000;
 /// Outpost construction platforms by race (Caldari, Minmatar, Amarr, Gallente).
 const PLATFORMS: [(i64, i32); 4] = [(1, 19758), (2, 10258), (4, 10260), (8, 10257)];
@@ -223,6 +229,8 @@ pub struct Campaigns {
     full: HashSet<i32>,
     /// Alliances told their bots have no corporation to claim with.
     idle: HashSet<i32>,
+    /// Systems with no free moon left for another tower.
+    moonless: HashSet<i32>,
 }
 
 /// A tower or platform of the alliance's, as the database has it.
@@ -313,7 +321,7 @@ pub async fn order(c: &mut Campaigns, db: &Client, p: &mut Politics, alliance: i
                 let towers = name_of(super::officers::holder(db, executor, Office::Starbase).await);
                 let stations = name_of(super::officers::holder(db, executor, Office::Stations).await);
                 format!(
-                    "o7 {first}, on it. We'll take {region_name} for the alliance. {towers}, our Starbase Manager, will get control towers up at the moons, fuelled and online; {stations}, our Station Manager, will build outposts and hand them to {holder_name}. {pilots} of us are in."
+                    "o7 {first}, on it. We'll take {region_name} for the alliance. {towers}, our Starbase Manager, will get control towers up at the moons, fuelled and online, several in each system so nobody can out-claim us; once a system is ours, {stations}, our Station Manager, will build outposts and hand them to {holder_name}. {pilots} of us are in."
                 )
             };
             alliance_report(alliance as i64, Some(executor as i64), ceo.map(|(id, ..)| id as i64), text);
@@ -483,12 +491,35 @@ impl Campaign {
             return Ok(());
         }
 
-        // More towers, a few at a time, out from the space held.
+        // More towers, a few at a time: first the systems already claimed,
+        // up to `TOWERS_PER_SYSTEM` each, then out from the space held.
         let mine: HashSet<i32> = pieces.iter().filter(|x| x.group == GROUP_TOWER).map(|x| x.system).collect();
-        let busy = pieces.iter().filter(|x| x.group == GROUP_TOWER && matches!(x.state, state::ANCHORED | state::ONLINING)).count();
+        let mut busy = pieces.iter().filter(|x| x.group == GROUP_TOWER && matches!(x.state, state::ANCHORED | state::ONLINING)).count();
         let size = atlas.systems.values().filter(|s| s.region == self.region && s.security <= 0.0).count();
         let want = ((self.pilots / sov::PILOTS_PER_SYSTEM) as usize).max(sov::MIN_SYSTEMS).min(((size as f64 * sov::MAX_SHARE) as usize).max(1));
-        if mine.len() < want && busy < AT_ONCE {
+        let mut per_system: HashMap<i32, usize> = HashMap::new();
+        for x in pieces.iter().filter(|x| x.group == GROUP_TOWER) {
+            *per_system.entry(x.system).or_default() += 1;
+        }
+        let mut thin: Vec<(usize, i32)> = per_system.iter().filter(|(s, n)| **n < TOWERS_PER_SYSTEM && !c.moonless.contains(*s)).map(|(s, n)| (*n, *s)).collect();
+        thin.sort_unstable();
+        let thin_left = thin.len();
+        for (n, system) in thin {
+            if busy >= AT_ONCE {
+                break;
+            }
+            if self.anchor_tower(c, db, world, rng, &bot_corps, system).await? {
+                busy += 1;
+                info!("bots: alliance {} thickening its claim on {system}: tower {} of {TOWERS_PER_SYSTEM}", self.alliance, n + 1);
+            } else if c.broke.contains_key(&self.alliance) {
+                break;
+            } else {
+                c.moonless.insert(system);
+            }
+        }
+        // Spread to a new system only once those held are well claimed.
+        if thin_left > 0 {
+        } else if mine.len() < want && busy < AT_ONCE {
             let taken = taken_systems(db, self.alliance).await?;
             let mut order = self.expansion(atlas, &mine, &taken);
             let mut anchored = 0;
@@ -538,13 +569,23 @@ impl Campaign {
             }
         }
 
-        // A new platform where a tower is online and there is no station.
+        // A new platform where the alliance holds the sovereignty and there
+        // is no station: never before the claim has stood.
         let building = pieces.iter().any(|x| x.group == GROUP_PLATFORM);
         let online: Vec<i32> = {
             let mut v: Vec<i32> = pieces.iter().filter(|x| x.group == GROUP_TOWER && matches!(x.state, state::ONLINE | state::OPERATING | state::REINFORCED)).map(|x| x.system).collect();
             v.sort_unstable();
             v.dedup();
             v
+        };
+        let online: Vec<i32> = if online.is_empty() {
+            online
+        } else {
+            db.query(r#"SELECT "solarSystemID" FROM "mapSolarSystems" WHERE "solarSystemID" = ANY($1) AND "allianceID" = $2"#, &[&online, &self.alliance])
+                .await?
+                .iter()
+                .filter_map(|r| int(r, 0).map(|v| v as i32))
+                .collect()
         };
         if !building && !online.is_empty() {
             let rows = db
